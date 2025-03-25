@@ -12,21 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Disky is a Rust implementation of the Riegeli file format.
-//!
-//! Riegeli is a file format for storing records (arbitrary byte sequences, often serialized
-//! protocol buffers). It supports high compression ratios and efficient reading/writing.
+//! Hashing functionality for Riegeli files.
 
-pub mod constants;
-pub mod error;
-pub mod hash;
-pub mod reader;
-pub mod record_position;
-pub mod writer;
+use highway::{HighwayHasher, HighwayHash, Key};
+use crate::constants::HIGHWAY_HASH_KEY;
 
-#[cfg(test)]
-mod tests;
-
-// Re-exports for a cleaner API
-pub use reader::RecordReader;
-pub use writer::RecordWriter;
+/// Calculate the HighwayHash for a chunk of bytes.
+///
+/// Riegeli uses HighwayHash with a specific key.
+pub fn highway_hash(data: &[u8]) -> u64 {
+    let mut hasher = HighwayHasher::new(Key(HIGHWAY_HASH_KEY));
+    hasher.append(data);
+    hasher.finalize64()
+}

@@ -16,7 +16,7 @@
 mod tests {
 //! Tests for the Riegeli implementation.
 
-use std::io::{Cursor, Read};
+use std::io::Cursor;
 
 use crate::{
     constants::FILE_SIGNATURE,
@@ -70,8 +70,8 @@ fn test_file_signature() {
     writer.close().unwrap();
     
     // Get the written data and check the signature
-    let buffer = writer.get_data().unwrap();
-    assert!(buffer.starts_with(&FILE_SIGNATURE));
+    let buffer_data = writer.writer.get_ref();
+    assert!(buffer_data.starts_with(&FILE_SIGNATURE));
 }
 
 #[test]
@@ -87,9 +87,9 @@ fn test_write_read_simple_record() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read the record
     let read_record = reader.read_record().unwrap();
@@ -125,9 +125,9 @@ fn test_write_read_multiple_records() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read and verify all records
     for (i, expected) in records.iter().enumerate() {
@@ -172,9 +172,9 @@ fn test_large_records() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read and verify all records
     for (i, expected) in records.iter().enumerate() {
@@ -207,9 +207,9 @@ fn test_seeking() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Seek to record 3 and read
     reader.seek(positions[2]).unwrap();
@@ -257,11 +257,11 @@ fn test_recovery_from_corruption() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a corrupted buffer by modifying some bytes in the middle of the file
-    let mut buffer = writer.get_data().unwrap();
+    // Get the buffer data directly
+    let mut buffer_data = writer.writer.get_ref().clone();
     
     // Find a position to corrupt (after the first chunk but before the end)
-    let file_size = buffer.len();
+    let file_size = buffer_data.len();
     let corrupt_pos = file_size / 3; // Somewhere in the middle
     
     // Corrupt chunks by modifying bytes at strategic positions
@@ -269,7 +269,7 @@ fn test_recovery_from_corruption() {
     for i in 0..512 {
         if corrupt_pos + i < file_size {
             // Use random-like values to maximize corruption possibility
-            buffer[corrupt_pos + i] = ((i * 13) % 256) as u8;
+            buffer_data[corrupt_pos + i] = ((i * 13) % 256) as u8;
         }
     }
     
@@ -277,7 +277,7 @@ fn test_recovery_from_corruption() {
     let options = RecordReaderOptions {
         recover_corruption: true,
     };
-    let mut reader = RecordReader::with_options(Cursor::new(buffer), options).unwrap();
+    let mut reader = RecordReader::with_options(Cursor::new(buffer_data), options).unwrap();
     
     // Attempt to read records
     let mut count = 0;
@@ -328,9 +328,9 @@ fn test_empty_records() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read and verify all records
     let read1 = reader.read_record().unwrap();
@@ -375,9 +375,9 @@ fn test_invalid_seek() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Try to seek to an invalid position
     let invalid_pos = RecordPosition::new(pos.chunk_begin, pos.record_index + 10);
@@ -427,9 +427,9 @@ fn test_flush() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read and verify all records
     let read1 = reader.read_record().unwrap();
@@ -454,9 +454,9 @@ fn test_very_large_record() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read the record
     let read_record = reader.read_record().unwrap();
@@ -486,9 +486,9 @@ fn test_many_small_records() {
     // Close the writer
     writer.close().unwrap();
     
-    // Create a reader
-    let buffer = writer.get_data().unwrap();
-    let mut reader = RecordReader::new(Cursor::new(buffer)).unwrap();
+    // Create a reader using the buffer directly
+    let buffer_data = writer.writer.get_ref().clone();
+    let mut reader = RecordReader::new(Cursor::new(buffer_data)).unwrap();
     
     // Read and verify all records
     for (i, expected) in records.iter().enumerate() {

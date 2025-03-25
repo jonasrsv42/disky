@@ -56,13 +56,13 @@ impl Default for RecordWriterOptions {
 /// A writer for Riegeli format files.
 pub struct RecordWriter<W: Write + Seek> {
     /// The underlying writer.
-    pub(crate) writer: W,
+    pub writer: W,
     
     /// Options for the writer.
     options: RecordWriterOptions,
     
     /// Current chunk size accumulated so far.
-    pub(crate) chunk_size_so_far: u64,
+    pub chunk_size_so_far: u64,
     
     /// Buffer for records in the current chunk.
     records_buffer: BytesMut,
@@ -322,20 +322,7 @@ impl<W: Write + Seek> RecordWriter<W> {
         Ok(())
     }
     
-    /// Gets the inner writer. This is primarily used for testing.
-    #[cfg(test)]
-    pub fn get_data(&mut self) -> Result<Vec<u8>> 
-    where
-        W: std::io::Read,
-    {
-        self.flush()?;
-        let pos = self.writer.stream_position()?;
-        self.writer.seek(SeekFrom::Start(0))?;
-        let mut data = Vec::new();
-        self.writer.read_to_end(&mut data)?;
-        self.writer.seek(SeekFrom::Start(pos))?;
-        Ok(data)
-    }
+    // No longer need the get_data method as we can directly get the buffer via into_inner()
 }
 
 impl<W: Write + Seek> Drop for RecordWriter<W> {

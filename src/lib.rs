@@ -17,11 +17,14 @@
 //! Riegeli is a file format for storing records (arbitrary byte sequences, often serialized
 //! protocol buffers). It supports high compression ratios and efficient reading/writing.
 
+pub(crate) mod chunks;
+pub(crate) mod compression;
 pub mod constants;
 pub mod error;
 pub mod hash;
 pub mod reader;
 pub mod record_position;
+pub(crate) mod varint;
 pub mod writer;
 
 #[cfg(test)]
@@ -29,4 +32,4 @@ mod tests;
 
 // Re-exports for a cleaner API
 pub use reader::RecordReader;
-pub use writer::RecordWriter;
+//pub use writer::RecordWriter;

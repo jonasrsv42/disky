@@ -60,6 +60,10 @@ pub enum RiegeliError {
     #[error("Not a Riegeli file")]
     NotRiegeliFile,
 
+    /// The file is not a Riegeli file.
+    #[error("Writing a closed file")]
+    WritingClosedFile,
+
     /// A general error occurred.
     #[error("{0}")]
     Other(String),

@@ -17,7 +17,7 @@ pub struct BlockWriterConfig {
 
 impl Default for BlockWriterConfig {
     fn default() -> Self {
-        // Default is 64 KiB which is well above the 24-byte header size
+        // Default is 64 KiB which is well above the header size
         // This should never fail validation
         //
         // NOTE: It should ALWAYS be 64KiB for actual writing, it's only configurable 
@@ -35,12 +35,7 @@ impl BlockWriterConfig {
     /// which could cause cascading headers.
     pub fn with_block_size(block_size: u64) -> crate::error::Result<Self> {
         // Validate block size to prevent cascading headers
-        if block_size < BLOCK_HEADER_SIZE * 2 {
-            return Err(crate::error::RiegeliError::Other(
-                format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
-                        block_size, BLOCK_HEADER_SIZE)
-            ));
-        }
+        Self::validate_block_size(block_size)?;
         
         Ok(Self {
             block_size,
@@ -51,13 +46,60 @@ impl BlockWriterConfig {
     pub fn usable_block_size(&self) -> u64 {
         self.block_size - BLOCK_HEADER_SIZE
     }
+    
+    /// Validates that the block size is large enough to prevent cascading headers.
+    ///
+    /// The block size must be at least twice the header size to prevent cascading headers.
+    /// This is because a header spans across a block boundary, another header would be needed,
+    /// which could cause an infinite cascade of headers.
+    fn validate_block_size(block_size: u64) -> crate::error::Result<()> {
+        if block_size < BLOCK_HEADER_SIZE * 2 {
+            return Err(crate::error::RiegeliError::Other(
+                format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
+                        block_size, BLOCK_HEADER_SIZE)
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Writer for Riegeli blocks that handles block boundary interruptions.
 ///
-/// According to the Riegeli specification, a chunk can be interrupted by a block header
-/// at any point, including in the middle of the chunk header. This writer handles those
-/// interruptions by automatically inserting block headers at the appropriate positions.
+/// According to the Riegeli specification, a chunk of logical data can be interrupted by 
+/// a block header at any block boundary. This writer handles those interruptions by 
+/// automatically inserting block headers at the appropriate positions.
+///
+/// # Structure of Riegeli Files
+///
+/// Riegeli files consist of a sequence of blocks, each starting with a 24-byte block header 
+/// when it falls on a block boundary (by default every 64 KiB). Each block header contains:
+/// - `header_hash` (8 bytes): Hash of the rest of the header
+/// - `previous_chunk` (8 bytes): Distance from chunk beginning to block beginning
+/// - `next_chunk` (8 bytes): Distance from block beginning to chunk end
+///
+/// # Usage
+///
+/// The `BlockWriter` is typically used as part of a higher-level writer implementation,
+/// such as a `ChunkWriter` or `RecordWriter`. It handles the low-level details of ensuring 
+/// block headers are inserted at block boundaries, while higher-level components manage the 
+/// logical chunking of data.
+///
+/// ```no_run
+/// use disky::blocks::writer::{BlockWriter, BlockWriterConfig};
+/// use std::fs::File;
+/// use bytes::Bytes;
+///
+/// // Create a BlockWriter with a file as the underlying sink
+/// let file = File::create("example.riegeli").unwrap();
+/// let mut writer = BlockWriter::new(file).unwrap();
+///
+/// // Write a chunk of data
+/// let data = Bytes::from(b"Some data to write".to_vec());
+/// writer.write_chunk(data).unwrap();
+/// 
+/// // Always call flush when done
+/// writer.flush().unwrap();
+/// ```
 pub struct BlockWriter<Sink: Write + Seek> {
     /// The underlying writer.
     sink: Sink,
@@ -76,12 +118,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// Creates a new BlockWriter with custom configuration.
     pub fn with_config(mut sink: Sink, config: BlockWriterConfig) -> Result<Self> {
         // Validate the configuration - ensure block size is reasonable
-        if config.block_size < BLOCK_HEADER_SIZE * 2 {
-            return Err(crate::error::RiegeliError::Other(
-                format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
-                        config.block_size, BLOCK_HEADER_SIZE)
-            ));
-        }
+        BlockWriterConfig::validate_block_size(config.block_size)?;
         
         let pos = sink.stream_position()?;
         Ok(Self {
@@ -118,12 +155,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         config: BlockWriterConfig
     ) -> Result<Self> {
         // Validate the configuration - ensure block size is reasonable
-        if config.block_size < BLOCK_HEADER_SIZE * 2 {
-            return Err(crate::error::RiegeliError::Other(
-                format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
-                        config.block_size, BLOCK_HEADER_SIZE)
-            ));
-        }
+        BlockWriterConfig::validate_block_size(config.block_size)?;
         
         // Verify the sink position matches the expected position
         let actual_pos = sink.stream_position()?;
@@ -160,26 +192,23 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// - previous_chunk (8 bytes) - distance from beginning of chunk to beginning of block
     /// - next_chunk (8 bytes) - distance from beginning of block to end of chunk
     fn write_block_header(&mut self, previous_chunk: u64, next_chunk: u64) -> Result<()> {
-        // Build the header
+        // Use a single buffer for the entire header (24 bytes)
         let mut header = BytesMut::with_capacity(BLOCK_HEADER_SIZE as usize);
         
-        // Skip the header hash for now (will fill it in later)
-        header.put_u64_le(0); // Placeholder for header_hash
+        // Prepare the content portion of the header first (16 bytes)
+        let mut content = [0u8; 16];
+        (&mut content[0..8]).copy_from_slice(&previous_chunk.to_le_bytes());
+        (&mut content[8..16]).copy_from_slice(&next_chunk.to_le_bytes());
         
-        // Write the rest of the header
-        header.put_u64_le(previous_chunk);
-        header.put_u64_le(next_chunk);
+        // Calculate the header hash from the content
+        let header_hash = highway_hash(&content);
         
-        // Calculate the header hash (excluding the first 8 bytes)
-        let header_hash = highway_hash(&header[8..]);
-        
-        // Write the complete header with the hash
-        let mut final_header = BytesMut::with_capacity(BLOCK_HEADER_SIZE as usize);
-        final_header.put_u64_le(header_hash);
-        final_header.extend_from_slice(&header[8..]);
+        // Now build the complete header in one go
+        header.put_u64_le(header_hash);     // First 8 bytes: header_hash
+        header.put_slice(&content);         // Next 16 bytes: previous_chunk and next_chunk
         
         // Write the header
-        self.sink.write_all(&final_header)?;
+        self.sink.write_all(&header)?;
         
         // Update position
         self.pos += BLOCK_HEADER_SIZE;
@@ -200,18 +229,44 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         pos % self.config.block_size == 0
     }
 
-    /// Writes data to the sink, handling block boundaries by inserting block headers.
+    /// Writes a chunk of data, handling block boundaries by inserting block headers as needed.
     /// 
-    /// Each call to this method is considered to be writing a new logical chunk.
-    /// Block headers will be inserted at block boundaries as needed.
+    /// Each call to this method is considered to be writing a new logical chunk, and the
+    /// current position is treated as the beginning of that chunk. If a block boundary is
+    /// encountered while writing the chunk, a block header will be inserted automatically.
     ///
-    /// # How Chunks and Blocks Work
+    /// # Block Boundaries and Headers
     ///
-    /// In the Riegeli format, a chunk is a logical unit of data that may be interrupted by block 
-    /// headers if it crosses a block boundary. This method handles those interruptions automatically.
+    /// Block boundaries occur at multiples of the configured block_size. When a boundary is encountered:
+    /// 1. The writer pauses writing chunk data
+    /// 2. It inserts a 24-byte block header containing:
+    ///    - `header_hash`: Hash of the next 16 bytes
+    ///    - `previous_chunk`: Distance from chunk start to block boundary
+    ///    - `next_chunk`: Distance from block boundary to chunk end
+    /// 3. It then continues writing the remaining chunk data
     ///
-    /// Each time this method is called, the current position is treated as the beginning of a new chunk.
-    /// If this position happens to be at a block boundary, a block header is inserted first.
+    /// # Edge Cases
+    ///
+    /// - **Empty chunks**: No data or headers are written for empty chunks
+    /// - **Position 0**: The beginning of the file is always a block boundary
+    /// - **Exact block boundary**: If writing begins at a block boundary, a header is inserted first
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use disky::blocks::writer::BlockWriter;
+    /// # use bytes::Bytes;
+    /// # let file = std::fs::File::create("example.riegeli").unwrap();
+    /// # let mut writer = BlockWriter::new(file).unwrap();
+    /// // Write a single chunk
+    /// let data = Bytes::from(b"Some data".to_vec());
+    /// writer.write_chunk(data).unwrap();
+    ///
+    /// // Write multiple chunks (each gets its own logical boundary)
+    /// writer.write_chunk(Bytes::from(b"Chunk 1".to_vec())).unwrap();
+    /// writer.write_chunk(Bytes::from(b"Chunk 2".to_vec())).unwrap();
+    /// writer.write_chunk(Bytes::from(b"Chunk 3".to_vec())).unwrap();
+    /// ```
     ///
     /// # Arguments
     ///
@@ -259,6 +314,33 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         Ok(())
     }
 
+    /// Flushes any buffered data to the underlying sink.
+    ///
+    /// # Important
+    ///
+    /// This method MUST be called after all writing is complete and before the writer
+    /// is dropped to ensure all data is properly written to the underlying sink. Failing 
+    /// to call flush may result in data loss.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use disky::blocks::writer::BlockWriter;
+    /// # use bytes::Bytes;
+    /// # let file = std::fs::File::create("example.riegeli").unwrap();
+    /// # let mut writer = BlockWriter::new(file).unwrap();
+    /// // Write some chunks
+    /// writer.write_chunk(Bytes::from(b"Chunk 1".to_vec())).unwrap();
+    /// writer.write_chunk(Bytes::from(b"Chunk 2".to_vec())).unwrap();
+    ///
+    /// // Always flush when done
+    /// writer.flush().unwrap();
+    /// ```
+    pub fn flush(&mut self) -> Result<()> {
+        self.sink.flush()?;
+        Ok(())
+    }
+
     /// Returns the underlying sink, consuming self.
     pub fn into_inner(self) -> Sink {
         self.sink
@@ -279,6 +361,26 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    
+    // Helper function to safely get the inner buffer from a writer
+    fn get_buffer<S: Write + Seek>(writer: BlockWriter<S>) -> Vec<u8> 
+    where S: IntoInner<Output = Vec<u8>> {
+        writer.into_inner().into_inner()
+    }
+    
+    // Helper trait to make the above function work with different types
+    trait IntoInner {
+        type Output;
+        fn into_inner(self) -> Self::Output;
+    }
+    
+    // Implementation for Cursor<Vec<u8>>
+    impl IntoInner for Cursor<Vec<u8>> {
+        type Output = Vec<u8>;
+        fn into_inner(self) -> Vec<u8> {
+            self.into_inner()
+        }
+    }
     
     #[test]
     fn test_block_writer_creation() {
@@ -669,6 +771,294 @@ mod tests {
     }
     
     #[test]
+    fn test_exact_block_size_boundaries() {
+        // Test writing chunks exactly at block size boundaries
+        let block_size = 100u64;
+        let buffer = Cursor::new(Vec::new());
+        
+        let mut writer = BlockWriter::with_config(
+            buffer,
+            BlockWriterConfig {
+                block_size,
+            }
+        ).unwrap();
+        
+        // Calculate usable block size (what fits in a block after the header)
+        let usable_block_size = (block_size - BLOCK_HEADER_SIZE) as usize;
+        
+        // Create a chunk of exactly the usable block size
+        let data = vec![123u8; usable_block_size];
+        let chunk_data = Bytes::from(data.clone());
+        
+        // Write the chunk
+        writer.write_chunk(chunk_data.clone()).unwrap();
+        
+        // Get the buffer
+        let vec = get_buffer(writer);
+        
+        // Expected layout: header (24 bytes) + data (76 bytes) = 100 bytes total
+        // Which is exactly one block
+        assert_eq!(vec.len(), block_size as usize);
+        
+        // Verify the data after the header
+        assert_eq!(
+            &vec[BLOCK_HEADER_SIZE as usize..],
+            &data[..],
+            "Data should be written exactly after the header"
+        );
+        
+        // Now try with a chunk that's 1 byte larger than usable block size
+        // This should cause it to cross a block boundary, requiring a second header
+        let buffer = Cursor::new(Vec::new());
+        let mut writer = BlockWriter::with_config(
+            buffer,
+            BlockWriterConfig {
+                block_size,
+            }
+        ).unwrap();
+        
+        // Create data exactly 1 byte larger than usable block size
+        let overflow_data = vec![42u8; usable_block_size + 1];
+        let chunk_data = Bytes::from(overflow_data.clone());
+        
+        // Write the chunk
+        writer.write_chunk(chunk_data).unwrap();
+        
+        // Get the buffer
+        let vec = get_buffer(writer);
+        
+        // Expected:
+        // - Header at 0 (24 bytes)
+        // - First block data (76 bytes)
+        // - Header at block boundary (24 bytes) 
+        // - Last 1 byte of data
+        let expected_size = block_size as usize + BLOCK_HEADER_SIZE as usize + 1;
+        assert_eq!(vec.len(), expected_size);
+        
+        // Verify first part of data
+        assert_eq!(
+            &vec[BLOCK_HEADER_SIZE as usize..block_size as usize],
+            &overflow_data[..usable_block_size],
+            "First block data should match"
+        );
+        
+        // Verify the last byte after the second header
+        assert_eq!(
+            vec[block_size as usize + BLOCK_HEADER_SIZE as usize],
+            overflow_data[usable_block_size],
+            "Last byte after second header should match"
+        );
+    }
+    
+    // A custom writer that simulates I/O errors
+    struct FailingWriter {
+        fail_after: usize, // Fail after writing this many bytes
+        written: usize,    // Number of bytes written so far
+        data: Vec<u8>,     // Underlying data
+    }
+    
+    impl FailingWriter {
+        fn new(fail_after: usize) -> Self {
+            Self {
+                fail_after,
+                written: 0,
+                data: Vec::new(),
+            }
+        }
+    }
+    
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.written >= self.fail_after {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Simulated I/O error"
+                ));
+            }
+            
+            let bytes_to_write = std::cmp::min(buf.len(), self.fail_after - self.written);
+            self.data.extend_from_slice(&buf[..bytes_to_write]);
+            self.written += bytes_to_write;
+            
+            if bytes_to_write < buf.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Simulated I/O error"
+                ));
+            }
+            
+            Ok(bytes_to_write)
+        }
+        
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.written >= self.fail_after {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Simulated I/O error"
+                ));
+            }
+            Ok(())
+        }
+    }
+    
+    impl Seek for FailingWriter {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            match pos {
+                std::io::SeekFrom::Start(offset) => {
+                    self.written = offset as usize;
+                    Ok(offset)
+                }
+                _ => Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Only SeekFrom::Start is supported in this test"
+                )),
+            }
+        }
+        
+        fn stream_position(&mut self) -> std::io::Result<u64> {
+            Ok(self.written as u64)
+        }
+    }
+    
+    #[test]
+    fn test_error_propagation() {
+        // Test that I/O errors are properly propagated
+        let buffer = FailingWriter::new(50); // Fail after 50 bytes
+        
+        let mut writer = BlockWriter::with_config(
+            buffer,
+            BlockWriterConfig {
+                block_size: 100,
+            }
+        ).unwrap();
+        
+        // Create a chunk larger than the failure threshold
+        let data = vec![1u8; 100];
+        let chunk_data = Bytes::from(data);
+        
+        // This should fail with an I/O error
+        let result = writer.write_chunk(chunk_data);
+        assert!(result.is_err(), "Expected an error but got success");
+        
+        match result {
+            Err(crate::error::RiegeliError::Io(_)) => {
+                // This is the expected error type
+                // Now verify we can obtain the partial data
+                let sink = writer.get_ref();
+                assert_eq!(sink.written, 50, "Should have written 50 bytes before failing");
+                assert_eq!(sink.data.len(), 50, "Should have 50 bytes of data");
+            }
+            _ => panic!("Expected I/O error but got {:?}", result),
+        }
+    }
+    
+    #[test]
+    fn test_very_large_chunk_many_boundaries() {
+        // Test writing a large chunk that spans many block boundaries
+        // Use a small block size to ensure we cross many boundaries
+        let block_size = 64u64; // Small block size to trigger many boundaries
+        let buffer = Cursor::new(Vec::new());
+        
+        let mut writer = BlockWriter::with_config(
+            buffer,
+            BlockWriterConfig {
+                block_size,
+            }
+        ).unwrap();
+        
+        // Create a large chunk with a pattern that makes it easy to verify
+        // Size chosen to cross multiple block boundaries
+        let chunk_size = (block_size * 10) as usize; // 10 blocks worth of data
+        let mut pattern_data = Vec::with_capacity(chunk_size);
+        
+        // Fill with a pattern where each byte is its index % 256
+        for i in 0..chunk_size {
+            pattern_data.push((i % 256) as u8);
+        }
+        let chunk_data = Bytes::from(pattern_data.clone());
+        
+        // Write the chunk
+        writer.write_chunk(chunk_data.clone()).unwrap();
+        
+        // Get the buffer
+        let vec = get_buffer(writer);
+        
+        // For large chunks, we need to precisely calculate how many headers will be inserted
+        // This depends on both the original data size and where headers are inserted
+        
+        // When we write data with headers, each header takes up space in a block, reducing the
+        // amount of actual data we can fit in each block. This creates a cascading effect.
+        
+        // Step 1: Calculate how many bytes of actual data fit in each block
+        let data_per_block = block_size - BLOCK_HEADER_SIZE;
+        
+        // Step 2: Calculate how many blocks we'll need for all our data
+        // The first block starts with a header, and then each subsequent block also has a header
+        let mut total_headers = 1; // Start with initial header at position 0
+        let mut remaining_data = chunk_size;
+        let mut total_size = 0;
+        
+        // Calculate header and data distribution
+        while remaining_data > 0 {
+            let data_in_this_block = std::cmp::min(remaining_data, data_per_block as usize);
+            total_size += BLOCK_HEADER_SIZE as usize + data_in_this_block;
+            remaining_data -= data_in_this_block;
+            
+            // If we have more data, we'll need another header
+            if remaining_data > 0 {
+                total_headers += 1;
+            }
+        }
+        
+        println!("Block size: {}", block_size);
+        println!("Data per block: {}", data_per_block);
+        println!("Chunk size: {}", chunk_size);
+        println!("Calculated header count: {}", total_headers);
+        println!("Calculated total size: {}", total_size);
+        println!("Actual size: {}", vec.len());
+        
+        // Verify the total size matches our calculated size
+        assert_eq!(vec.len(), total_size, 
+            "Output size should match our calculated size including all necessary headers");
+        
+        // Now reconstruct and verify the original data
+        let mut reconstructed = Vec::with_capacity(chunk_size);
+        let mut output_pos = 0;
+        
+        // For each block that contains data
+        while output_pos < vec.len() {
+            // Skip the header
+            output_pos += BLOCK_HEADER_SIZE as usize;
+            
+            // Calculate how much data to read before the next header or end
+            let next_header_pos = output_pos + data_per_block as usize;
+            let data_end = std::cmp::min(next_header_pos, vec.len());
+            
+            // Add this block's data to our reconstruction
+            if output_pos < data_end {
+                reconstructed.extend_from_slice(&vec[output_pos..data_end]);
+            }
+            
+            // Move to the next block
+            output_pos = data_end;
+        }
+        
+        // Verify reconstructed data size
+        assert_eq!(reconstructed.len(), chunk_size,
+                  "Reconstructed data should be the same size as the original");
+        
+        // Verify reconstructed data matches the original byte-by-byte
+        for i in 0..chunk_size {
+            assert_eq!(reconstructed[i], pattern_data[i],
+                      "Mismatch at byte {}", i);
+        }
+        
+        // Full comparison
+        assert_eq!(reconstructed, pattern_data,
+                  "Reconstructed data should exactly match the original");
+    }
+    
+    #[test]
     fn test_write_empty_chunk() {
         // Test writing an empty chunk
         let buffer = Cursor::new(Vec::new());
@@ -730,6 +1120,86 @@ mod tests {
         let invalid_size = BLOCK_HEADER_SIZE * 2 - 1; // One byte too small
         let result = BlockWriterConfig::with_block_size(invalid_size);
         assert!(result.is_err(), "Should reject block size smaller than 2 * BLOCK_HEADER_SIZE");
+    }
+    
+    #[test]
+    fn test_writing_with_minimum_block_size() {
+        // Test writing data with the minimum allowed block size
+        let min_block_size = BLOCK_HEADER_SIZE * 2;
+        let buffer = Cursor::new(Vec::new());
+        
+        let mut writer = BlockWriter::with_config(
+            buffer,
+            BlockWriterConfig {
+                block_size: min_block_size,
+            }
+        ).unwrap();
+        
+        // Create test data that will fill exactly one block's worth of data
+        // At min_block_size, we should be able to write (min_block_size - BLOCK_HEADER_SIZE) bytes
+        // before hitting the next block boundary
+        let usable_block_size = (min_block_size - BLOCK_HEADER_SIZE) as usize;
+        let data = vec![42u8; usable_block_size]; // Fill with a constant value
+        
+        let chunk_data = Bytes::from(data.clone());
+        
+        // Write the chunk
+        writer.write_chunk(chunk_data.clone()).unwrap();
+        
+        // Get the buffer
+        let buffer = writer.into_inner();
+        let vec = buffer.into_inner();
+        
+        // Check the size
+        let expected_size = BLOCK_HEADER_SIZE as usize + usable_block_size;
+        assert_eq!(vec.len(), expected_size);
+        
+        // Verify the data after the header
+        assert_eq!(
+            &vec[BLOCK_HEADER_SIZE as usize..],
+            &data[..],
+            "Data should be written exactly after the header"
+        );
+        
+        // Now test with data that crosses a block boundary with minimum block size
+        // This is a critical test because with minimum block size, we're right at the edge
+        // of what could cause cascading headers
+        let buffer = Cursor::new(Vec::new());
+        let mut writer = BlockWriter::with_config(
+            buffer,
+            BlockWriterConfig {
+                block_size: min_block_size,
+            }
+        ).unwrap();
+        
+        // Create data slightly larger than one block's worth
+        let crossing_data = vec![42u8; usable_block_size + 10]; // 10 bytes more than one block
+        let chunk_data = Bytes::from(crossing_data.clone());
+        
+        // Write the chunk
+        writer.write_chunk(chunk_data.clone()).unwrap();
+        
+        // Get the buffer
+        let buffer = writer.into_inner();
+        let vec = buffer.into_inner();
+        
+        // Should have: initial header + first block data + second header + remaining data
+        let expected_size = 2 * BLOCK_HEADER_SIZE as usize + crossing_data.len();
+        assert_eq!(vec.len(), expected_size);
+        
+        // Verify the first block of data
+        assert_eq!(
+            &vec[BLOCK_HEADER_SIZE as usize..min_block_size as usize],
+            &crossing_data[..usable_block_size],
+            "First block data should match"
+        );
+        
+        // Verify the second block of data
+        assert_eq!(
+            &vec[(min_block_size + BLOCK_HEADER_SIZE) as usize..],
+            &crossing_data[usable_block_size..],
+            "Second block data should match"
+        );
     }
     
     #[test]

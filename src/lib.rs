@@ -17,7 +17,7 @@
 //! Riegeli is a file format for storing records (arbitrary byte sequences, often serialized
 //! protocol buffers). It supports high compression ratios and efficient reading/writing.
 
-pub(crate) mod blocks;
+pub mod blocks;
 pub(crate) mod chunks;
 pub mod compression;
 pub mod constants;

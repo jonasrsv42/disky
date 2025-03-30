@@ -181,4 +181,154 @@ mod tests {
         // No more data should remain as there are no records
         assert_eq!(data.len(), 0);
     }
+    
+    #[test]
+    fn test_multiple_chunk_serialization() {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        
+        // Create and serialize first chunk with records of known length
+        let record1_1 = b"First chunk special record 1";
+        let record1_2 = b"First chunk record 2";
+        
+        writer.write_record(record1_1).unwrap();
+        writer.write_record(record1_2).unwrap();
+        let first_chunk = writer.serialize_chunk();
+        
+        // Verify writer state was reset
+        assert_eq!(writer.num_records, 0);
+        assert_eq!(writer.records.len(), 0);
+        assert_eq!(writer.sizes.len(), 0);
+        
+        // Create and serialize second chunk with records of known length
+        let record2_1 = b"Second chunk record 1";
+        let record2_2 = b"Second chunk record 2";
+        let record2_3 = b"Second chunk record 3";
+        
+        writer.write_record(record2_1).unwrap();
+        writer.write_record(record2_2).unwrap();
+        writer.write_record(record2_3).unwrap();
+        let second_chunk = writer.serialize_chunk();
+        
+        // Verify writer state was reset again
+        assert_eq!(writer.num_records, 0);
+        assert_eq!(writer.records.len(), 0);
+        assert_eq!(writer.sizes.len(), 0);
+        
+        // Verify first chunk data
+        let mut data1 = first_chunk.clone();
+        assert_eq!(data1.get_u8(), CompressionType::None.as_byte());
+        let sizes_len1 = varint::read_vu64(&mut data1).unwrap();
+        
+        // Extract and verify the sizes part of first chunk
+        let sizes_data1 = data1.slice(0..sizes_len1 as usize);
+        let mut sizes_reader1 = sizes_data1.clone();
+        
+        assert_eq!(varint::read_vu64(&mut sizes_reader1).unwrap(), record1_1.len() as u64);
+        assert_eq!(varint::read_vu64(&mut sizes_reader1).unwrap(), record1_2.len() as u64);
+        
+        // Advance to records data of first chunk
+        data1.advance(sizes_len1 as usize);
+        
+        // Verify records data follows the sizes in first chunk
+        let offset1 = 0;
+        let offset2 = offset1 + record1_1.len();
+        let end = offset2 + record1_2.len();
+        
+        assert_eq!(&data1[offset1..offset2], record1_1);
+        assert_eq!(&data1[offset2..end], record1_2);
+        
+        // Verify second chunk data
+        let mut data2 = second_chunk.clone();
+        assert_eq!(data2.get_u8(), CompressionType::None.as_byte());
+        let sizes_len2 = varint::read_vu64(&mut data2).unwrap();
+        
+        // Extract and verify the sizes part of second chunk
+        let sizes_data2 = data2.slice(0..sizes_len2 as usize);
+        let mut sizes_reader2 = sizes_data2.clone();
+        
+        assert_eq!(varint::read_vu64(&mut sizes_reader2).unwrap(), record2_1.len() as u64);
+        assert_eq!(varint::read_vu64(&mut sizes_reader2).unwrap(), record2_2.len() as u64);
+        assert_eq!(varint::read_vu64(&mut sizes_reader2).unwrap(), record2_3.len() as u64);
+        
+        // Advance to records data of second chunk
+        data2.advance(sizes_len2 as usize);
+        
+        // Verify records data follows the sizes in second chunk
+        let offset1 = 0;
+        let offset2 = offset1 + record2_1.len();
+        let offset3 = offset2 + record2_2.len();
+        let end = offset3 + record2_3.len();
+        
+        assert_eq!(&data2[offset1..offset2], record2_1);
+        assert_eq!(&data2[offset2..offset3], record2_2);
+        assert_eq!(&data2[offset3..end], record2_3);
+    }
+    
+    #[test]
+    fn test_state_resets_after_serialization() {
+        // This test specifically checks that the writer's state is properly reset after serialization
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        
+        // Add records to the first chunk
+        writer.write_record(b"Record 1").unwrap();
+        writer.write_record(b"Record 2").unwrap();
+        
+        // Verify state before serialization
+        assert_eq!(writer.num_records, 2);
+        assert!(writer.records.len() > 0);
+        assert!(writer.sizes.len() > 0);
+        
+        // Serialize the chunk
+        let _ = writer.serialize_chunk();
+        
+        // Verify state was completely reset
+        assert_eq!(writer.num_records, 0);
+        assert_eq!(writer.records.len(), 0);
+        assert_eq!(writer.sizes.len(), 0);
+        
+        // Add a new record to the second chunk
+        writer.write_record(b"Record 3").unwrap();
+        
+        // Verify new state is as expected
+        assert_eq!(writer.num_records, 1);
+        assert_eq!(&writer.records[..], b"Record 3");
+        
+        // Make sure size was correctly stored
+        let mut sizes_copy = writer.sizes.clone().freeze();
+        assert_eq!(varint::read_vu64(&mut sizes_copy).unwrap(), 8); // "Record 3" length
+    }
+    
+    #[test]
+    fn test_isolation_between_chunks() {
+        // This test verifies that data from one chunk doesn't leak into another
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        
+        // Write and serialize first chunk
+        writer.write_record(b"First chunk record").unwrap();
+        let first_chunk = writer.serialize_chunk();
+        
+        // Write and serialize second chunk with different data
+        writer.write_record(b"Second chunk record").unwrap();
+        let second_chunk = writer.serialize_chunk();
+        
+        // Parse first chunk
+        let mut data1 = first_chunk.clone();
+        data1.get_u8(); // Skip compression type
+        let sizes_len1 = varint::read_vu64(&mut data1).unwrap();
+        data1.advance(sizes_len1 as usize); // Skip sizes
+        
+        // Parse second chunk
+        let mut data2 = second_chunk.clone();
+        data2.get_u8(); // Skip compression type
+        let sizes_len2 = varint::read_vu64(&mut data2).unwrap();
+        data2.advance(sizes_len2 as usize); // Skip sizes
+        
+        // The chunks should contain only their own data
+        assert_eq!(&data1[..], b"First chunk record");
+        assert_eq!(&data2[..], b"Second chunk record");
+        
+        // Ensure no cross-contamination
+        assert!(!data1.starts_with(b"Second"));
+        assert!(!data2.starts_with(b"First"));
+    }
 }

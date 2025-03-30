@@ -1,3 +1,3 @@
 pub(crate) mod core;
 
-pub(crate) use core::CompressionType;
+pub use core::CompressionType;

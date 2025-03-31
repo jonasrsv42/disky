@@ -1,7 +1,6 @@
 //! Tests for basic block writing functionality
 
 use super::super::writer::{BlockWriter, BlockWriterConfig, BLOCK_HEADER_SIZE};
-use super::helpers::{get_buffer, IntoInner};
 use bytes::Bytes;
 use std::io::Cursor;
 

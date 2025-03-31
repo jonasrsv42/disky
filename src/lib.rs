@@ -18,7 +18,7 @@
 //! protocol buffers). It supports high compression ratios and efficient reading/writing.
 
 pub mod blocks;
-pub(crate) mod chunks;
+pub mod chunks;
 pub mod compression;
 pub mod constants;
 pub mod error;

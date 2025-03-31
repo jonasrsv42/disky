@@ -1,5 +1,5 @@
 mod simple_chunk;
 mod writer;
 
-pub(crate) use simple_chunk::SimpleChunkWriter;
-pub(crate) use writer::{ChunkWriter, RecordsSize};
+pub use simple_chunk::SimpleChunkWriter;
+pub use writer::{ChunkWriter, RecordsSize};

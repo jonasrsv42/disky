@@ -191,6 +191,10 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// - header_hash (8 bytes) - hash of the rest of the header
     /// - previous_chunk (8 bytes) - distance from beginning of chunk to beginning of block
     /// - next_chunk (8 bytes) - distance from beginning of block to end of chunk
+    /// 
+    /// Note: The header writing is not atomic. If a write operation fails in the middle of
+    /// writing a header, it will leave a partial, invalid header in the file. The header hash
+    /// included in each block header can be used by readers to detect corrupted headers.
     fn write_block_header(&mut self, previous_chunk: u64, next_chunk: u64) -> Result<()> {
         // Use a single buffer for the entire header (24 bytes)
         let mut header = BytesMut::with_capacity(BLOCK_HEADER_SIZE as usize);
@@ -244,6 +248,17 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     ///    - `previous_chunk`: Distance from chunk start to block boundary
     ///    - `next_chunk`: Distance from block boundary to chunk end
     /// 3. It then continues writing the remaining chunk data
+    ///
+    /// # I/O Error Handling
+    ///
+    /// This method relies on the `write_all` method of the underlying sink to ensure all data
+    /// is written completely or an error is returned. Important considerations:
+    ///
+    /// - If an I/O error occurs during writing, the method will return an error immediately
+    /// - The writer has no way to track how many bytes were successfully written before the error
+    /// - There is no built-in mechanism to resume writing from the point of failure
+    /// - The implementation assumes `write_all` either writes all data or returns an error,
+    ///   which depends on the correctness of the underlying sink's implementation
     ///
     /// # Edge Cases
     ///

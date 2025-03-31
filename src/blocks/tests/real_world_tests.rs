@@ -1,7 +1,7 @@
 //! Tests for real-world use cases of BlockWriter
 
 use super::super::writer::{BlockWriter, BlockWriterConfig, BLOCK_HEADER_SIZE};
-use super::helpers::{get_buffer, IntoInner};
+use super::helpers::{get_buffer};
 use bytes::Bytes;
 use std::io::Cursor;
 

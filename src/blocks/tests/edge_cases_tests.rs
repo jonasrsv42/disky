@@ -26,16 +26,6 @@ impl FailingWriter {
         }
     }
     
-    fn with_fail_on_nth_write(n: usize) -> Self {
-        Self {
-            fail_after: usize::MAX, // Don't fail based on bytes
-            written: 0,
-            data: Vec::new(),
-            fail_on_nth_write: Some(n),
-            write_count: 0,
-            fail_on_flush: false,
-        }
-    }
     
     fn with_fail_on_flush() -> Self {
         Self {
@@ -48,26 +38,7 @@ impl FailingWriter {
         }
     }
     
-    // Helper method to retrieve written data at specific positions
-    fn get_data_at(&self, start: usize, end: usize) -> Option<&[u8]> {
-        if start >= self.data.len() {
-            return None;
-        }
-        
-        let end = std::cmp::min(end, self.data.len());
-        Some(&self.data[start..end])
-    }
     
-    // Helper method to check if we have a complete header at a position
-    fn has_complete_header_at(&self, pos: usize) -> bool {
-        if pos + BLOCK_HEADER_SIZE as usize > self.data.len() {
-            return false;
-        }
-        
-        // This just checks if we have enough bytes for a header, 
-        // not that the header is valid
-        true
-    }
 }
 
 impl Write for FailingWriter {

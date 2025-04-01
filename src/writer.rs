@@ -1,701 +1,674 @@
-//// Copyright 2024
-////
-//// Licensed under the Apache License, Version 2.0 (the "License");
-//// you may not use this file except in compliance with the License.
-//// You may obtain a copy of the License at
-////
-////      http://www.apache.org/licenses/LICENSE-2.0
-////
-//// Unless required by applicable law or agreed to in writing, software
-//// distributed under the License is distributed on an "AS IS" BASIS,
-//// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//// See the License for the specific language governing permissions and
-//// limitations under the License.
+// Copyright 2024
 //
-////! Writer for Riegeli format files.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//use byteorder::{LittleEndian, WriteBytesExt};
-//use bytes::{BufMut, BytesMut};
-//use std::io::{Seek, SeekFrom, Write};
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
-//use crate::chunks::{ChunkWriter, RecordsSize, SimpleChunkWriter};
-//use crate::compression::core::CompressionType;
-//use crate::constants::{
-//    BLOCK_HEADER_SIZE, BLOCK_SIZE, CHUNK_HEADER_SIZE, CHUNK_TYPE_SIMPLE_RECORDS, 
-//    USABLE_BLOCK_SIZE, FILE_SIGNATURE,
-//};
-//use crate::error::{Result, RiegeliError};
-//use crate::hash::highway_hash;
-//use crate::record_position::RecordPosition;
-//
-///// Options for record writer.
-//#[derive(Debug, Clone)]
-//pub struct RecordWriterOptions {
-//    /// Size of Riegeli block in bytes (default: 64 KiB)
-//    pub block_size: u64,
-//    
-//    /// Minimal size of chunk records before we flush it.
-//    pub desired_chunk_size: u64,
-//    
-//    /// Compression type to use.
-//    pub compression_type: CompressionType,
-//}
-//
-//impl Default for RecordWriterOptions {
-//    fn default() -> Self {
-//        Self {
-//            block_size: BLOCK_SIZE as u64,
-//            desired_chunk_size: 1 << 20, // 1 MiB
-//            compression_type: CompressionType::None,
-//        }
-//    }
-//}
-//
-///// A writer for Riegeli format files.
-//pub struct RecordWriter<W: Write + Seek> {
-//    /// The underlying writer.
-//    writer: W,
-//
-//    /// Options for the writer.
-//    options: RecordWriterOptions,
-//
-//    /// Writer for the current chunk.
-//    chunk_writer: SimpleChunkWriter,
-//
-//    /// Position of the beginning of the current chunk.
-//    chunk_begin: u64,
-//    
-//    /// Number of records in the current chunk.
-//    num_records: u64,
-//    
-//    /// Whether the file signature has been written.
-//    signature_written: bool,
-//
-//    /// Whether the writer has been closed.
-//    closed: bool,
-//}
-//
-//impl<W: Write + Seek> RecordWriter<W> {
-//    /// Creates a new RecordWriter with default options.
-//    pub fn new(writer: W) -> Result<Self> {
-//        Self::with_options(writer, RecordWriterOptions::default())
-//    }
-//
-//    /// Creates a new RecordWriter with the specified options.
-//    pub fn with_options(writer: W, options: RecordWriterOptions) -> Result<Self> {
-//        let mut record_writer = Self {
-//            writer,
-//            options,
-//            chunk_writer: SimpleChunkWriter::new(CompressionType::None),
-//            chunk_begin: 0,
-//            num_records: 0,
-//            signature_written: false,
-//            closed: false,
-//        };
-//
-//        // Write the file signature
-//        record_writer.write_file_signature()?;
-//
-//        Ok(record_writer)
-//    }
-//
-//    /// Writes the file signature (first chunk of a Riegeli file).
-//    fn write_file_signature(&mut self) -> Result<()> {
-//        if self.signature_written {
-//            return Ok(());
-//        }
-//
-//        // The file signature is always 64 bytes
-//        self.writer.write_all(&FILE_SIGNATURE)?;
-//        self.signature_written = true;
-//        self.chunk_begin = self.writer.stream_position()?;
-//
-//        Ok(())
-//    }
-//
-//    /// Writes a record to the file.
-//    pub fn write_record(&mut self, record: &[u8]) -> Result<RecordPosition> {
-//        if self.closed {
-//            return Err(RiegeliError::WritingClosedFile);
-//        }
-//
-//        // Keep track of the record position before writing
-//        let record_position = RecordPosition::new(self.chunk_begin, self.num_records);
-//        
-//        // Write the record to the chunk writer
-//        let RecordsSize(records_size) = self.chunk_writer.write_record(record)?;
-//        self.num_records += 1;
-//
-//        // If the chunk has grown large enough, flush it
-//        if records_size >= self.options.desired_chunk_size {
-//            self.flush_chunk()?;
-//        }
-//
-//        Ok(record_position)
-//    }
-//
-//    /// Calculates the number of overhead blocks required for a given position and size.
-//    /// This is used to calculate the total size including block headers.
-//    #[allow(dead_code)]
-//    fn num_overhead_blocks(&self, pos: u64, size: u64) -> u64 {
-//        (size + (pos + USABLE_BLOCK_SIZE as u64 - 1) % BLOCK_SIZE as u64) / USABLE_BLOCK_SIZE as u64
-//    }
-//
-//    /// Calculates the end position of a chunk, including block header overhead.
-//    #[allow(dead_code)]
-//    fn add_with_overhead(&self, pos: u64, size: u64) -> u64 {
-//        pos + size + self.num_overhead_blocks(pos, size) * BLOCK_HEADER_SIZE as u64
-//    }
-//
-//    /// Checks if a position falls on a block boundary.
-//    fn is_block_boundary(&self, pos: u64) -> bool {
-//        pos % BLOCK_SIZE as u64 == 0
-//    }
-//
-//    /// Remaining bytes in the current block from the given position.
-//    fn remaining_in_block(&self, pos: u64) -> u64 {
-//        BLOCK_SIZE as u64 - pos % BLOCK_SIZE as u64
-//    }
-//
-//    /// Flushes the current chunk to the writer.
-//    fn flush_chunk(&mut self) -> Result<()> {
-//        if self.num_records == 0 {
-//            return Ok(());
-//        }
-//
-//        // Serialize the chunk data using the chunk writer
-//        let chunk_data = self.chunk_writer.serialize_chunk();
-//        
-//        // Write the chunk with its proper header
-//        self.write_chunk(
-//            CHUNK_TYPE_SIMPLE_RECORDS,
-//            &chunk_data,
-//            self.num_records,
-//        )?;
-//        
-//        // Reset state for the next chunk
-//        self.num_records = 0;
-//        self.chunk_begin = self.writer.stream_position()?;
-//        
-//        Ok(())
-//    }
-//
-//    /// Writes a chunk with the specified type, data, and number of records.
-//    fn write_chunk(
-//        &mut self,
-//        chunk_type: u8,
-//        data: &[u8],
-//        num_records: u64,
-//    ) -> Result<()> {
-//        let data_size = data.len() as u64;
-//        let current_pos = self.writer.stream_position()?;
-//        
-//        // Calculate the position where the chunk header starts
-//        let chunk_header_pos = current_pos;
-//        
-//        // Check if we need to write a block header first
-//        if self.is_block_boundary(chunk_header_pos) {
-//            // We're at a block boundary - write block header first
-//            self.write_block_header(0, 0)?; // Dummy values for now, will update later
-//        } else if chunk_header_pos % BLOCK_SIZE as u64 + CHUNK_HEADER_SIZE as u64 > BLOCK_SIZE as u64 {
-//            // Chunk header would cross a block boundary
-//            // Seek to the next block boundary minus the block header size
-//            let next_block_pos = (chunk_header_pos / BLOCK_SIZE as u64 + 1) * BLOCK_SIZE as u64;
-//            self.writer.seek(SeekFrom::Start(next_block_pos - BLOCK_HEADER_SIZE as u64))?;
-//            
-//            // Write a block header
-//            let previous_chunk = self.writer.stream_position()? - self.chunk_begin;
-//            
-//            // We don't know next_chunk yet, it will be updated later
-//            self.write_block_header(previous_chunk, 0)?;
-//
-//            self.writer.wri
-//        }
-//        
-//        // Calculate the decoded data size (sum of record sizes)
-//        // For SimpleChunkWriter this is the size of the records
-//        let decoded_data_size = data_size; // Simplified, in real case we'd track actual decoded size
-//        
-//        // Build the chunk header
-//        let mut header = BytesMut::with_capacity(CHUNK_HEADER_SIZE);
-//        
-//        // Skip the header hash for now (will fill it in later)
-//        header.put_u64_le(0); // Placeholder for header_hash
-//        
-//        // Write the rest of the header
-//        header.put_u64_le(data_size);
-//        header.put_u64_le(highway_hash(data));  // data_hash
-//        header.put_u8(chunk_type);
-//        
-//        // Write num_records (7 bytes)
-//        let mut num_records_bytes = [0u8; 8];
-//        WriteBytesExt::write_u64::<LittleEndian>(&mut num_records_bytes.as_mut(), num_records)?;
-//        header.extend_from_slice(&num_records_bytes[0..7]);
-//        
-//        header.put_u64_le(decoded_data_size);
-//        
-//        // Calculate the header hash (excluding the first 8 bytes)
-//        let header_hash = highway_hash(&header[8..]);
-//        
-//        // Write the header hash
-//        let mut final_header = BytesMut::with_capacity(CHUNK_HEADER_SIZE);
-//        final_header.put_u64_le(header_hash);
-//        final_header.extend_from_slice(&header[8..]);
-//        
-//        // Write the header
-//        self.writer.write_all(&final_header)?;
-//        
-//        // Keep track of the chunk data start position
-//        let _chunk_data_start = self.writer.stream_position()?;
-//        
-//        // Write the data, splitting at block boundaries if needed
-//        let mut data_pos = 0;
-//        while data_pos < data.len() {
-//            let current_pos = self.writer.stream_position()?;
-//            let remaining = self.remaining_in_block(current_pos);
-//            
-//            if remaining == 0 {
-//                // We're at a block boundary - write a block header
-//                let prev_chunk = current_pos - self.chunk_begin;
-//                let next_chunk = (data.len() - data_pos) as u64; // Remaining data
-//                self.write_block_header(prev_chunk, next_chunk)?;
-//                continue;
-//            }
-//            
-//            // Write as much data as fits before the next block boundary
-//            let bytes_to_write = std::cmp::min(remaining, (data.len() - data_pos) as u64);
-//            self.writer.write_all(&data[data_pos..(data_pos + bytes_to_write as usize)])?;
-//            data_pos += bytes_to_write as usize;
-//        }
-//        
-//        // Calculate padding if needed:
-//        // 1. The chunk should have at least as many bytes as num_records
-//        // 2. The chunk should not end inside or right after a block header
-//        
-//        let current_pos = self.writer.stream_position()?;
-//        let chunk_size = current_pos - self.chunk_begin;
-//        
-//        // Ensure condition 1: chunk size >= num_records
-//        let min_size_for_records = num_records;
-//        let padding_for_records = if chunk_size < min_size_for_records {
-//            min_size_for_records - chunk_size
-//        } else {
-//            0
-//        };
-//        
-//        // Ensure condition 2: not ending inside or right after a block header
-//        let current_pos_in_block = current_pos % BLOCK_SIZE as u64;
-//        let padding_for_boundary = if current_pos_in_block > 0 && 
-//                                     current_pos_in_block <= BLOCK_HEADER_SIZE as u64 {
-//            BLOCK_HEADER_SIZE as u64 - current_pos_in_block + 1
-//        } else {
-//            0
-//        };
-//        
-//        let padding_size = std::cmp::max(padding_for_records, padding_for_boundary);
-//        
-//        // Write padding if needed
-//        if padding_size > 0 {
-//            let padding = vec![0u8; padding_size as usize];
-//            self.writer.write_all(&padding)?;
-//        }
-//        
-//        // Now go back and update any block headers with the correct next_chunk value
-//        // In a real implementation, we would keep track of block header positions and update them
-//        
-//        Ok(())
-//    }
-//
-//    /// Writes a block header.
-//    fn write_block_header(&mut self, previous_chunk: u64, next_chunk: u64) -> Result<()> {
-//        // Build the header
-//        let mut header = BytesMut::with_capacity(BLOCK_HEADER_SIZE);
-//        
-//        // Skip the header hash for now
-//        header.put_u64_le(0); // Placeholder for header_hash
-//        
-//        // Write the rest of the header
-//        header.put_u64_le(previous_chunk);
-//        header.put_u64_le(next_chunk);
-//        
-//        // Calculate the header hash (excluding the first 8 bytes)
-//        let header_hash = highway_hash(&header[8..]);
-//        
-//        // Write the header hash
-//        let mut final_header = BytesMut::with_capacity(BLOCK_HEADER_SIZE);
-//        final_header.put_u64_le(header_hash);
-//        final_header.extend_from_slice(&header[8..]);
-//        
-//        // Write the header
-//        self.writer.write_all(&final_header)?;
-//        
-//        Ok(())
-//    }
-//
-//    /// Returns the position of the next record.
-//    pub fn pos(&self) -> RecordPosition {
-//        RecordPosition::new(self.chunk_begin, self.num_records)
-//    }
-//
-//    /// Flushes any buffered records.
-//    pub fn flush(&mut self) -> Result<()> {
-//        self.flush_chunk()?;
-//        self.writer.flush()?;
-//        Ok(())
-//    }
-//
-//    /// Closes the writer.
-//    pub fn close(&mut self) -> Result<()> {
-//        if !self.closed {
-//            self.flush()?;
-//            self.closed = true;
-//        }
-//        Ok(())
-//    }
-//    
-//    /// Returns the underlying writer, consuming self.
-//    pub fn into_inner(mut self) -> Result<W> 
-//    where
-//        W: Clone,
-//    {
-//        self.close()?;
-//        Ok(self.writer.clone())
-//    }
-//}
-//
-//impl<W: Write + Seek> Drop for RecordWriter<W> {
-//    fn drop(&mut self) {
-//        let _ = self.close();
-//    }
-//}
-//
-//#[cfg(test)]
-//mod tests {
-//    use super::*;
-//    use std::io::Cursor;
-//    
-//    #[test]
-//    fn test_record_writer_creation() {
-//        let buffer = Cursor::new(Vec::new());
-//        let writer = RecordWriter::new(buffer).unwrap();
-//        
-//        assert_eq!(writer.num_records, 0);
-//        assert!(writer.signature_written);
-//        assert!(!writer.closed);
-//    }
-//    
-//    #[test]
-//    fn test_write_single_record() {
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        let record = b"Hello, world!";
-//        let pos = writer.write_record(record).unwrap();
-//        
-//        // The record position should be at the start of the first chunk (after the signature)
-//        // with index 0
-//        assert_eq!(pos.chunk_begin, FILE_SIGNATURE.len() as u64);
-//        assert_eq!(pos.record_index, 0);
-//        assert_eq!(writer.num_records, 1);
-//    }
-//    
-//    #[test]
-//    fn test_write_multiple_records() {
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        let first_record = b"First record";
-//        let second_record = b"Second record";
-//        let third_record = b"Third record";
-//        
-//        let pos1 = writer.write_record(first_record).unwrap();
-//        let pos2 = writer.write_record(second_record).unwrap();
-//        let pos3 = writer.write_record(third_record).unwrap();
-//        
-//        // All records should be in the same chunk (since we didn't flush)
-//        assert_eq!(pos1.chunk_begin, FILE_SIGNATURE.len() as u64);
-//        assert_eq!(pos1.record_index, 0);
-//        
-//        assert_eq!(pos2.chunk_begin, FILE_SIGNATURE.len() as u64);
-//        assert_eq!(pos2.record_index, 1);
-//        
-//        assert_eq!(pos3.chunk_begin, FILE_SIGNATURE.len() as u64);
-//        assert_eq!(pos3.record_index, 2);
-//        
-//        assert_eq!(writer.num_records, 3);
-//    }
-//    
-//    #[test]
-//    fn test_write_and_flush() {
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        // Write records to the first chunk
-//        let first_record = b"First chunk: record 1";
-//        let second_record = b"First chunk: record 2";
-//        
-//        let pos1 = writer.write_record(first_record).unwrap();
-//        let pos2 = writer.write_record(second_record).unwrap();
-//        
-//        // Manually flush the chunk
-//        writer.flush_chunk().unwrap();
-//        
-//        // Write records to the second chunk
-//        let third_record = b"Second chunk: record 1";
-//        let fourth_record = b"Second chunk: record 2";
-//        let fifth_record = b"Second chunk: record 3";
-//        
-//        let pos3 = writer.write_record(third_record).unwrap();
-//        let pos4 = writer.write_record(fourth_record).unwrap();
-//        let pos5 = writer.write_record(fifth_record).unwrap();
-//        
-//        // The first set of positions should be in the first chunk
-//        assert_eq!(pos1.chunk_begin, FILE_SIGNATURE.len() as u64);
-//        assert_eq!(pos1.record_index, 0);
-//        assert_eq!(pos2.chunk_begin, FILE_SIGNATURE.len() as u64);
-//        assert_eq!(pos2.record_index, 1);
-//        
-//        // The second set of positions should be in the second chunk
-//        let second_chunk_begin = writer.chunk_begin;
-//        assert_eq!(pos3.chunk_begin, second_chunk_begin);
-//        assert_eq!(pos3.record_index, 0);
-//        assert_eq!(pos4.chunk_begin, second_chunk_begin);
-//        assert_eq!(pos4.record_index, 1);
-//        assert_eq!(pos5.chunk_begin, second_chunk_begin);
-//        assert_eq!(pos5.record_index, 2);
-//        
-//        // Verify that records were properly separated between chunks
-//        assert_eq!(writer.num_records, 3);
-//    }
-//    
-//    #[test]
-//    fn test_auto_chunk_flushing() {
-//        // Create a writer with a very small desired chunk size to force flushing
-//        let buffer = Cursor::new(Vec::new());
-//        let options = RecordWriterOptions {
-//            desired_chunk_size: 10, // Very small to ensure we flush after a few records
-//            ..Default::default()
-//        };
-//        let mut writer = RecordWriter::with_options(buffer, options).unwrap();
-//        
-//        // Write records that will cause automatic flushing
-//        let first_record = b"This is a longer record that should trigger flushing";
-//        let second_record = b"Another record in next chunk";
-//        let third_record = b"One more record";
-//        
-//        let pos1 = writer.write_record(first_record).unwrap();
-//        let pos2 = writer.write_record(second_record).unwrap();
-//        let _pos3 = writer.write_record(third_record).unwrap();
-//        
-//        // Since we set a small chunk size, at least one flush should have happened
-//        // and the positions should span multiple chunks
-//        assert_ne!(pos1.chunk_begin, pos2.chunk_begin);
-//        
-//        // Close the writer to finalize
-//        writer.close().unwrap();
-//    }
-//    
-//    #[test]
-//    fn test_file_format_compliance() {
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        // Write a few records
-//        writer.write_record(b"Record 1").unwrap();
-//        writer.write_record(b"Record 2").unwrap();
-//        
-//        // Close to ensure everything is written
-//        writer.flush().unwrap();
-//        
-//        // With an in-memory cursor, we can't really use into_inner since Cursor doesn't implement Clone.
-//        // But we've verified the flush process works.
-//    }
-//    
-//    #[test]
-//    fn test_block_alignment() {
-//        // Create a writer with a larger desired chunk size
-//        let buffer = Cursor::new(Vec::new());
-//        let options = RecordWriterOptions {
-//            desired_chunk_size: BLOCK_SIZE as u64 * 2, // Force crossing block boundaries
-//            ..Default::default()
-//        };
-//        let mut writer = RecordWriter::with_options(buffer, options).unwrap();
-//        
-//        // Write enough data to span multiple blocks
-//        let record = vec![b'X'; BLOCK_SIZE]; // 64KB record
-//        
-//        // Write the record multiple times to span blocks
-//        for _ in 0..3 {
-//            writer.write_record(&record).unwrap();
-//        }
-//        
-//        // Flush and close
-//        writer.close().unwrap();
-//        
-//        // The file should contain:
-//        // 1. File signature (64 bytes)
-//        // 2. Chunk header
-//        // 3. Block headers at 64KB boundaries
-//        // 4. Chunk data spanning multiple blocks
-//        
-//        // With an in-memory cursor, we can't really use into_inner since Cursor doesn't implement Clone.
-//        // But we've verified the block alignment logic is in place.
-//    }
-//    
-//    #[test]
-//    fn test_writer_integration_with_simple_chunk_writer() {
-//        // This test verifies that the RecordWriter properly integrates with SimpleChunkWriter
-//        // Create a writer with a small chunk size to force multiple chunks
-//        let buffer = Cursor::new(Vec::new());
-//        let options = RecordWriterOptions {
-//            desired_chunk_size: 100, // Small size to trigger chunking
-//            ..Default::default()
-//        };
-//        let mut writer = RecordWriter::with_options(buffer, options).unwrap();
-//        
-//        // Write records that will span multiple chunks
-//        for i in 0..10 {
-//            let record = format!("Record {} with some padding data to make it larger", i).into_bytes();
-//            writer.write_record(&record).unwrap();
-//        }
-//        
-//        // Close the writer to finalize
-//        writer.close().unwrap();
-//        
-//        // State should be reset
-//        assert_eq!(writer.num_records, 0);
-//        assert!(writer.closed);
-//    }
-//    
-//    #[test]
-//    fn test_record_positions_consistent() {
-//        // Create a writer with small chunk size to force multiple chunks
-//        let buffer = Cursor::new(Vec::new());
-//        let options = RecordWriterOptions {
-//            desired_chunk_size: 50, // Very small to ensure we get multiple chunks
-//            ..Default::default()
-//        };
-//        let mut writer = RecordWriter::with_options(buffer, options).unwrap();
-//        
-//        // Write a series of records, some of which should be in different chunks
-//        let mut positions = Vec::new();
-//        
-//        // Add records of different sizes to trigger chunk boundaries
-//        for i in 0..8 {
-//            let size = 20 + (i * 10); // 20, 30, 40, 50, 60, 70, 80, 90
-//            let record = vec![b'A' + i as u8; size];
-//            let pos = writer.write_record(&record).unwrap();
-//            positions.push(pos);
-//        }
-//        
-//        // Verify that positions grow monotonically
-//        for i in 1..positions.len() {
-//            // Either we're in the same chunk with a higher index
-//            if positions[i].chunk_begin == positions[i-1].chunk_begin {
-//                assert_eq!(positions[i].record_index, positions[i-1].record_index + 1);
-//            } else {
-//                // Or we're in a new chunk with index 0
-//                assert!(positions[i].chunk_begin > positions[i-1].chunk_begin);
-//                assert_eq!(positions[i].record_index, 0);
-//            }
-//        }
-//    }
-//    
-//    #[test]
-//    fn test_writing_empty_records() {
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        // Write some empty records
-//        let empty = b"";
-//        let pos1 = writer.write_record(empty).unwrap();
-//        let pos2 = writer.write_record(empty).unwrap();
-//        
-//        // Empty records should still be tracked properly
-//        assert_eq!(pos1.record_index, 0);
-//        assert_eq!(pos2.record_index, 1);
-//        assert_eq!(writer.num_records, 2);
-//        
-//        // Flush to ensure they're written correctly
-//        writer.flush().unwrap();
-//    }
-//    
-//    #[test]
-//    fn test_closing_writer() {
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        // Write a record
-//        writer.write_record(b"Test record").unwrap();
-//        
-//        // Close the writer
-//        writer.close().unwrap();
-//        
-//        // Verify it's closed
-//        assert!(writer.closed);
-//        
-//        // Attempting to write after closing should fail
-//        let result = writer.write_record(b"Another record");
-//        assert!(result.is_err());
-//    }
-//    
-//    #[test]
-//    fn test_chunk_reset_between_flushes() {
-//        // This test verifies that the writer properly resets internal state between chunk flushes
-//        let buffer = Cursor::new(Vec::new());
-//        let mut writer = RecordWriter::new(buffer).unwrap();
-//        
-//        // Write a record and flush
-//        writer.write_record(b"First chunk record").unwrap();
-//        writer.flush_chunk().unwrap();
-//        
-//        // The chunk writer should be reset
-//        assert_eq!(writer.num_records, 0);
-//        
-//        // Write another record and verify record index starts from 0 again
-//        let pos = writer.write_record(b"Second chunk record").unwrap();
-//        assert_eq!(pos.record_index, 0);
-//    }
-//    
-//    #[test]
-//    fn test_chunk_reset_between_chunks() {
-//        // This test specifically checks that the SimpleChunkWriter is properly reset between chunks
-//        let buffer = Cursor::new(Vec::new());
-//        let options = RecordWriterOptions {
-//            desired_chunk_size: 32, // Small size to ensure we get exactly 2 records per chunk
-//            ..Default::default()
-//        };
-//        let mut writer = RecordWriter::with_options(buffer, options).unwrap();
-//        
-//        // Write pairs of records that should each go into their own chunk
-//        let record1 = vec![b'A'; 20];
-//        let record2 = vec![b'B'; 20];
-//        let pos1 = writer.write_record(&record1).unwrap();
-//        let pos2 = writer.write_record(&record2).unwrap();
-//        
-//        // These should be in the same chunk
-//        assert_eq!(pos1.chunk_begin, pos2.chunk_begin);
-//        assert_eq!(pos1.record_index, 0);
-//        assert_eq!(pos2.record_index, 1);
-//        
-//        // This should trigger a chunk flush because we'll exceed the desired chunk size
-//        let record3 = vec![b'C'; 20];
-//        let pos3 = writer.write_record(&record3).unwrap();
-//        
-//        // This should be in a new chunk
-//        assert_ne!(pos2.chunk_begin, pos3.chunk_begin);
-//        assert_eq!(pos3.record_index, 0);
-//        
-//        // Add one more record to the new chunk
-//        let record4 = vec![b'D'; 20];
-//        let pos4 = writer.write_record(&record4).unwrap();
-//        
-//        // These should be in the same chunk
-//        assert_eq!(pos3.chunk_begin, pos4.chunk_begin);
-//        assert_eq!(pos4.record_index, 1);
-//        
-//        // Manually flush and close
-//        writer.flush().unwrap();
-//        writer.close().unwrap();
-//    }
-//}
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Riegeli record writer implementation.
+//!
+//! This module provides functionality for writing records to Riegeli files,
+//! following the Riegeli specification.
+
+use std::io::{Seek, Write};
+
+use crate::blocks::writer::{BlockWriter, BlockWriterConfig};
+use crate::chunks::{ChunkWriter, SimpleChunkWriter};
+use crate::chunks::signature_writer::SignatureWriter;
+use crate::compression::CompressionType;
+use crate::error::{Result, RiegeliError};
+
+/// Configuration options for a RecordWriter.
+#[derive(Debug, Clone)]
+pub struct RecordWriterConfig {
+    /// Compression type to use for records.
+    pub compression_type: CompressionType,
+    
+    /// Maximum size of records in a chunk in bytes (uncompressed).
+    ///
+    /// When this size is reached, the chunk will be written and a new chunk started.
+    pub chunk_size_bytes: u64,
+    
+    /// Block configuration.
+    pub block_config: BlockWriterConfig,
+}
+
+impl Default for RecordWriterConfig {
+    fn default() -> Self {
+        Self {
+            compression_type: CompressionType::None,
+            chunk_size_bytes: 1024 * 1024,     // Default to 1 MB chunks
+            block_config: BlockWriterConfig::default(),
+        }
+    }
+}
+
+/// Enum to represent the state of a RecordWriter.
+#[derive(Debug, PartialEq)]
+enum WriterState {
+    /// The writer is new, no data has been written yet.
+    New,
+    
+    /// The writer has written the file signature.
+    SignatureWritten,
+    
+    /// The writer has written at least one record since the last flush.
+    RecordsWritten,
+    
+    /// The writer has flushed all records and has nothing pending.
+    Flushed,
+    
+    /// The writer has been closed.
+    Closed,
+}
+
+/// Writer for Riegeli records.
+///
+/// This implements the high-level writer for Riegeli files, handling:
+/// - File signature writing
+/// - Record chunking
+/// - Block boundary handling
+///
+/// The writer follows the Riegeli file format specification:
+/// 1. Every Riegeli file starts with a 64-byte signature (24-byte block header + 40-byte chunk header)
+/// 2. Records are grouped into chunks
+/// 3. Block headers are inserted at block boundaries (typically every 64 KiB)
+///
+/// # Example
+///
+/// ```no_run
+/// use std::fs::File;
+/// use disky::writer::{RecordWriter, RecordWriterConfig};
+/// use disky::compression::CompressionType;
+///
+/// // Create a new writer with default settings
+/// let file = File::create("example.riegeli").unwrap();
+/// let mut writer = RecordWriter::new(file).unwrap();
+///
+/// // Write some records
+/// writer.write_record(b"Record 1").unwrap();
+/// writer.write_record(b"Record 2").unwrap();
+/// writer.write_record(b"Record 3").unwrap();
+///
+/// // Ensure all data is written
+/// writer.close().unwrap();
+/// ```
+pub struct RecordWriter<Sink: Write + Seek> {
+    /// The block writer.
+    block_writer: BlockWriter<Sink>,
+    
+    /// The chunk writer for records.
+    chunk_writer: SimpleChunkWriter,
+    
+    /// Configuration for the writer.
+    config: RecordWriterConfig,
+    
+    /// Current state of the writer.
+    state: WriterState,
+}
+
+impl<Sink: Write + Seek> RecordWriter<Sink> {
+    /// Creates a new RecordWriter with default configuration.
+    pub fn new(sink: Sink) -> Result<Self> {
+        Self::with_config(sink, RecordWriterConfig::default())
+    }
+    
+    /// Creates a new RecordWriter with custom configuration.
+    pub fn with_config(sink: Sink, config: RecordWriterConfig) -> Result<Self> {
+        let block_writer = BlockWriter::with_config(sink, config.block_config.clone())?;
+        
+        let mut writer = Self {
+            block_writer,
+            chunk_writer: SimpleChunkWriter::new(config.compression_type),
+            config,
+            state: WriterState::New,
+        };
+        
+        // Write the file signature immediately
+        writer.write_file_signature()?;
+        
+        Ok(writer)
+    }
+    
+    /// Creates a new RecordWriter for appending to an existing file.
+    pub fn for_append(sink: Sink, position: u64) -> Result<Self> {
+        Self::for_append_with_config(sink, position, RecordWriterConfig::default())
+    }
+    
+    /// Creates a new RecordWriter for appending to an existing file with custom configuration.
+    ///
+    /// The position should be the size of the existing file.
+    pub fn for_append_with_config(sink: Sink, position: u64, config: RecordWriterConfig) -> Result<Self> {
+        let block_writer = BlockWriter::for_append_with_config(
+            sink, 
+            position, 
+            config.block_config.clone()
+        )?;
+        
+        Ok(Self {
+            block_writer,
+            chunk_writer: SimpleChunkWriter::new(config.compression_type),
+            config,
+            state: WriterState::SignatureWritten,
+        })
+    }
+    
+    /// Writes the Riegeli file signature.
+    fn write_file_signature(&mut self) -> Result<()> {
+        if self.state != WriterState::New {
+            return Err(RiegeliError::Other(
+                "File signature has already been written".to_string()
+            ));
+        }
+        
+        // Create a signature writer
+        let mut signature_writer = SignatureWriter::new();
+        
+        // Serialize the signature header
+        let signature = signature_writer.serialize_chunk()?;
+        
+        // Write the signature through the block writer
+        self.block_writer.write_chunk(signature)?;
+        
+        // Update state
+        self.state = WriterState::SignatureWritten;
+        
+        Ok(())
+    }
+    
+    /// Writes a record to the Riegeli file.
+    ///
+    /// The record will be added to the current chunk. If the chunk becomes too large
+    /// (either by number of records or size), it will be written out and a new chunk started.
+    ///
+    /// # Arguments
+    ///
+    /// * `record` - The record data to write
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - Success or an error if the write failed
+    pub fn write_record(&mut self, record: &[u8]) -> Result<()> {
+        if self.state == WriterState::Closed {
+            return Err(RiegeliError::WritingClosedFile);
+        }
+        
+        // Add the record to the chunk and get current records size
+        let record_size = self.chunk_writer.write_record(record)?;
+        
+        // Check if we need to write out the chunk based on size only
+        if record_size.0 >= self.config.chunk_size_bytes {
+            self.flush_chunk()?;
+        }
+        
+        // Update state based on current state
+        match self.state {
+            WriterState::SignatureWritten | WriterState::Flushed => {
+                // If we just wrote the signature or just flushed, we're now in RecordsWritten state
+                self.state = WriterState::RecordsWritten;
+            },
+            _ => {}
+        }
+        
+        Ok(())
+    }
+    
+    /// Flushes the current chunk to disk.
+    ///
+    /// This serializes the current chunk and writes it through the block writer.
+    /// After this, a new chunk will be started.
+    pub fn flush_chunk(&mut self) -> Result<()> {
+        // If we haven't written any records yet, or we're already flushed/closed, there's nothing to flush
+        if self.state == WriterState::New || self.state == WriterState::SignatureWritten 
+           || self.state == WriterState::Flushed || self.state == WriterState::Closed {
+            return Ok(());
+        }
+        
+        // Serialize the chunk - this will reset the chunk writer's internal state
+        let chunk = self.chunk_writer.serialize_chunk()?;
+        
+        // Write the chunk through the block writer
+        self.block_writer.write_chunk(chunk)?;
+        
+        // Update state to Flushed
+        self.state = WriterState::Flushed;
+        
+        Ok(())
+    }
+    
+    /// Flushes any remaining records to disk.
+    ///
+    /// This is equivalent to flush_chunk followed by a flush of the underlying writer.
+    pub fn flush(&mut self) -> Result<()> {
+        // If we're already closed, nothing to do
+        if self.state == WriterState::Closed {
+            return Ok(());
+        }
+        
+        // Only flush a chunk if we're in the RecordsWritten state
+        if self.state == WriterState::RecordsWritten {
+            self.flush_chunk()?;
+        }
+        
+        // Then flush the underlying writer
+        self.block_writer.flush()?;
+        
+        Ok(())
+    }
+    
+    /// Closes the writer, flushing any remaining data.
+    ///
+    /// After closing, no more records can be written.
+    pub fn close(&mut self) -> Result<()> {
+        if self.state == WriterState::Closed {
+            return Ok(());
+        }
+        
+        // Flush any remaining data
+        self.flush()?;
+        
+        // Update state
+        self.state = WriterState::Closed;
+        
+        Ok(())
+    }
+}
+
+impl<Sink: Write + Seek> Drop for RecordWriter<Sink> {
+    fn drop(&mut self) {
+        // Try to flush any remaining data on drop only if we're not in Closed or Flushed state
+        // We ignore errors since there's nothing we can do about them in drop
+        if self.state != WriterState::Closed && self.state != WriterState::Flushed {
+            let _ = self.flush();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    
+    // Test-only implementation for RecordWriter with Cursor<Vec<u8>>
+    impl RecordWriter<Cursor<Vec<u8>>> {
+        // Extract the written data for testing
+        fn get_data(mut self) -> Result<Vec<u8>> {
+            self.flush()?;
+            self.state = WriterState::Closed;
+            
+            // Prevent drop implementation from running on self
+            let writer = std::mem::ManuallyDrop::new(self);
+            
+            // Extract the Vec<u8> from the cursor (clone to avoid any ownership issues)
+            let cursor = writer.block_writer.get_ref();
+            let vec = cursor.get_ref().clone();
+            
+            Ok(vec)
+        }
+    }
+    
+    #[test]
+    fn test_writer_creation_and_signature() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer
+        let writer = RecordWriter::new(cursor).unwrap();
+        
+        // The writer should be in the SignatureWritten state
+        assert_eq!(writer.state, WriterState::SignatureWritten);
+    }
+    
+    #[test]
+    fn test_write_records() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer with a small chunk size to force multiple chunks
+        let config = RecordWriterConfig {
+            chunk_size_bytes: 20, // Small size to force multiple chunks
+            ..Default::default()
+        };
+        
+        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        
+        // Write 5 records - should create 3 chunks
+        for i in 0..5 {
+            let record = format!("Record {}", i);
+            writer.write_record(record.as_bytes()).unwrap();
+        }
+        
+        // Flush the writer
+        writer.flush().unwrap();
+        
+        // The writer should be in the Flushed state after flushing
+        assert_eq!(writer.state, WriterState::Flushed);
+        
+        // Write one more record to check state transition
+        let record = "Record 5";
+        writer.write_record(record.as_bytes()).unwrap();
+        
+        // After writing, state should be RecordsWritten
+        assert_eq!(writer.state, WriterState::RecordsWritten);
+        
+        // Get the written data directly
+        let data = writer.get_data().unwrap();
+        
+        // Check that data was written
+        assert!(!data.is_empty());
+    }
+    
+    #[test]
+    fn test_close_and_reopen() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Write some records
+        let mut writer = RecordWriter::new(cursor).unwrap();
+        writer.write_record(b"Record 1").unwrap();
+        writer.write_record(b"Record 2").unwrap();
+        
+        // Close the writer
+        writer.close().unwrap();
+        assert_eq!(writer.state, WriterState::Closed);
+        
+        // Writing after close should fail with WritingClosedFile error
+        let result = writer.write_record(b"Record 3");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RiegeliError::WritingClosedFile));
+        
+        // Get the written data directly
+        let data = writer.get_data().unwrap();
+        
+        // Create a new writer for appending
+        let cursor = Cursor::new(data);
+        let position = cursor.get_ref().len() as u64;
+        
+        let mut writer = RecordWriter::for_append(cursor, position).unwrap();
+        
+        // Write more records
+        writer.write_record(b"Record 3").unwrap();
+        writer.write_record(b"Record 4").unwrap();
+        
+        // Close the writer
+        writer.close().unwrap();
+    }
+    
+    /// Helper function to print bytes in a format that's easy to copy for assertions
+    fn format_bytes_for_assert(bytes: &[u8]) -> String {
+        let mut result = String::from("&[\n    ");
+        for (i, b) in bytes.iter().enumerate() {
+            if i > 0 && i % 8 == 0 {
+                result.push_str(",\n    ");
+            } else if i > 0 {
+                result.push_str(", ");
+            }
+            result.push_str(&format!("0x{:02x}", b));
+        }
+        result.push_str("\n]");
+        result
+    }
+    
+    /// Test a small, predictable file containing just the signature chunk
+    #[test]
+    fn test_empty_file_bytes() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer
+        let mut writer = RecordWriter::new(cursor).unwrap();
+        
+        // Close immediately without writing any records (just the signature)
+        writer.close().unwrap();
+        
+        // Get the written data
+        let data = writer.get_data().unwrap();
+        
+        // The expected bytes for an empty file with just the signature chunk
+        // Note: No empty chunk is written after our fix
+        #[rustfmt::skip]
+        const EXPECTED_EMPTY_FILE: &[u8] = &[
+            // Block header (24 bytes)
+            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
+            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            
+            // Signature chunk header (40 bytes)
+            0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size
+            0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, // data_hash
+            0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size
+            
+            // No extra empty chunk after our fix
+        ];
+        
+        // Verify the content
+        if data != EXPECTED_EMPTY_FILE {
+            panic!("Actual bytes:\n{}", format_bytes_for_assert(&data));
+        }
+        
+        assert_eq!(data.len(), EXPECTED_EMPTY_FILE.len(), "File sizes don't match");
+        assert_eq!(data, EXPECTED_EMPTY_FILE, "File content doesn't match expected");
+    }
+    
+    /// Test a file with exactly one known record
+    #[test]
+    fn test_single_record_file_bytes() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer with fixed compression type for consistent output
+        let config = RecordWriterConfig {
+            compression_type: CompressionType::None,
+            ..Default::default()
+        };
+        
+        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        
+        // Write a single record with predictable content
+        writer.write_record(b"test-record").unwrap();
+        
+        // Close to ensure all data is written
+        writer.close().unwrap();
+        
+        // Get the written data
+        let data = writer.get_data().unwrap();
+        
+        // The expected bytes for a file with a single record "test-record"
+        // This matches what our implementation should produce after the fix
+        #[rustfmt::skip]
+        const EXPECTED_SINGLE_RECORD_FILE: &[u8] = &[
+            // Block header (24 bytes)
+            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
+            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            
+            // Signature chunk header (40 bytes)
+            0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size
+            0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, // data_hash
+            0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size
+            
+            // Records chunk header (40 bytes)
+            0xbd, 0xb9, 0x1d, 0x4e, 0x15, 0xe0, 0x15, 0x9b, // header_hash
+            0x0e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (14 bytes)
+            0x7e, 0x26, 0xcb, 0x1d, 0xa1, 0xb3, 0xe9, 0x8a, // data_hash
+            0x72, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(1)
+            0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (11 bytes)
+            
+            // Records chunk data (14 bytes)
+            0x00,                                           // compression_type (None)
+            0x01,                                           // compressed_sizes_size (varint 1)
+            0x0b,                                           // compressed_sizes (varint 11)
+            
+            // Record value (11 bytes)
+            0x74, 0x65, 0x73, 0x74, 0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64,  // "test-record"
+            
+            // No extra empty chunk after our fix
+        ];
+        
+        // Verify the file content
+        if data != EXPECTED_SINGLE_RECORD_FILE {
+            panic!("Actual bytes:\n{}", format_bytes_for_assert(&data));
+        }
+        
+        assert_eq!(data.len(), EXPECTED_SINGLE_RECORD_FILE.len(), "File sizes don't match");
+        assert_eq!(data, EXPECTED_SINGLE_RECORD_FILE, "File content doesn't match expected");
+    }
+    
+    /// Test writing two records that should be in a single chunk
+    #[test]
+    fn test_two_records_same_chunk_bytes() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer with fixed compression type for consistent output
+        // and large chunk size to ensure both records go in the same chunk
+        let config = RecordWriterConfig {
+            compression_type: CompressionType::None,
+            chunk_size_bytes: 1024, // Plenty of space for both records
+            ..Default::default()
+        };
+        
+        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        
+        // Write two records with predictable content
+        writer.write_record(b"first").unwrap();
+        writer.write_record(b"second").unwrap();
+        
+        // Close to ensure all data is written
+        writer.close().unwrap();
+        
+        // Get the written data
+        let data = writer.get_data().unwrap();
+        
+        // The expected bytes for a file with two records in a single chunk
+        // Updated to reflect the fix for the empty chunk bug
+        #[rustfmt::skip]
+        const EXPECTED_TWO_RECORDS_FILE: &[u8] = &[
+            // Block header (24 bytes)
+            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
+            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            
+            // Signature chunk header (40 bytes)
+            0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size
+            0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, // data_hash
+            0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size
+            
+            // Records chunk header (40 bytes)
+            0xe5, 0xdf, 0x3d, 0x19, 0x01, 0x02, 0x5c, 0x97, // header_hash
+            0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (15 bytes)
+            0x96, 0xc5, 0xcf, 0x8f, 0xee, 0xde, 0x25, 0x67, // data_hash
+            0x72, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(2)
+            0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (11 bytes)
+            
+            // Records chunk data (15 bytes)
+            0x00,                                           // compression_type (None)
+            0x02,                                           // compressed_sizes_size (varint 2)
+            0x05, 0x06,                                     // compressed_sizes (varints: 5, 6)
+            
+            // Record values (11 bytes total)
+            0x66, 0x69, 0x72, 0x73, 0x74,                   // "first"
+            0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64,             // "second"
+            
+            // No extra empty chunk after our fix
+        ];
+        
+        // Print actual bytes if different from expected (for debugging)
+        if data != EXPECTED_TWO_RECORDS_FILE {
+            panic!("Actual bytes:\n{}", format_bytes_for_assert(&data));
+        }
+        
+        assert_eq!(data.len(), EXPECTED_TWO_RECORDS_FILE.len(), "File sizes don't match");
+        assert_eq!(data, EXPECTED_TWO_RECORDS_FILE, "File content doesn't match expected");
+    }
+    
+    /// Test specifically to verify that our fix for the empty chunk bug works
+    #[test]
+    fn test_no_extra_empty_chunk() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer with fixed compression type for consistent output
+        let config = RecordWriterConfig {
+            compression_type: CompressionType::None,
+            ..Default::default()
+        };
+        
+        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        
+        // Write a single record with known content
+        writer.write_record(b"test-record").unwrap();
+        
+        // Now we'll verify the state transitions
+        assert_eq!(writer.state, WriterState::RecordsWritten);
+        
+        // Flush the chunk
+        writer.flush_chunk().unwrap();
+        
+        // After flushing, state should be Flushed
+        assert_eq!(writer.state, WriterState::Flushed);
+        
+        // Flushing again should not create another chunk
+        writer.flush().unwrap();
+        writer.flush_chunk().unwrap(); // This should be a no-op due to the state check
+        
+        // State should still be Flushed
+        assert_eq!(writer.state, WriterState::Flushed);
+        
+        // Get the written data
+        let data = writer.get_data().unwrap();
+        
+        // Expected bytes for a file with our single flushed record chunk
+        #[rustfmt::skip]
+        const EXPECTED_FILE: &[u8] = &[
+            // Block header (24 bytes)
+            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
+            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            
+            // Signature chunk header (40 bytes)
+            0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size
+            0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, // data_hash
+            0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size
+            
+            // Records chunk header (40 bytes)
+            0xbd, 0xb9, 0x1d, 0x4e, 0x15, 0xe0, 0x15, 0x9b, // header_hash
+            0x0e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (14 bytes)
+            0x7e, 0x26, 0xcb, 0x1d, 0xa1, 0xb3, 0xe9, 0x8a, // data_hash
+            0x72, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(1)
+            0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (11 bytes)
+            
+            // Records chunk data (14 bytes)
+            0x00,                                           // compression_type (None)
+            0x01,                                           // compressed_sizes_size (varint 1)
+            0x0b,                                           // compressed_sizes (varint 11)
+            
+            // Record value (11 bytes)
+            0x74, 0x65, 0x73, 0x74, 0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64,  // "test-record"
+            
+            // No extra empty chunk with our fix
+        ];
+        
+        if data != EXPECTED_FILE {
+            panic!("Actual bytes:\n{}", format_bytes_for_assert(&data));
+        }
+        
+        assert_eq!(data.len(), EXPECTED_FILE.len(), "File sizes don't match");
+        assert_eq!(data, EXPECTED_FILE, "File content doesn't match expected");
+    }
+}

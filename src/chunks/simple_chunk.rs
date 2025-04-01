@@ -25,7 +25,7 @@ impl ChunkWriter for SimpleChunkWriter {
     /// - compressed_sizes_size (varint64) - size of compressed_sizes
     /// - compressed_sizes (compressed_sizes_size bytes) - compressed buffer with record sizes
     /// - compressed_values (the rest of data) - compressed buffer with record values
-    fn serialize_chunk(&mut self) -> Bytes {
+    fn serialize_chunk(&mut self) -> Result<Bytes> {
         let mut chunk = BytesMut::new();
 
         // Reserve space for:
@@ -55,7 +55,7 @@ impl ChunkWriter for SimpleChunkWriter {
         self.sizes.clear();
         self.num_records = 0;
 
-        result
+        Ok(result)
     }
 }
 
@@ -133,7 +133,7 @@ mod tests {
         writer.write_record(b"Record 3").unwrap();
 
         // Serialize the chunk
-        let serialized = writer.serialize_chunk();
+        let serialized = writer.serialize_chunk().unwrap();
 
         // Verify the writer state is reset
         assert_eq!(writer.num_records, 0);
@@ -171,7 +171,7 @@ mod tests {
         let mut writer = SimpleChunkWriter::new(CompressionType::None);
 
         // Serialize an empty chunk
-        let serialized = writer.serialize_chunk();
+        let serialized = writer.serialize_chunk().unwrap();
 
         // Parse the chunk
         let mut data = serialized.clone();
@@ -197,7 +197,7 @@ mod tests {
 
         writer.write_record(record1_1).unwrap();
         writer.write_record(record1_2).unwrap();
-        let first_chunk = writer.serialize_chunk();
+        let first_chunk = writer.serialize_chunk().unwrap();
 
         // Verify writer state was reset
         assert_eq!(writer.num_records, 0);
@@ -212,7 +212,7 @@ mod tests {
         writer.write_record(record2_1).unwrap();
         writer.write_record(record2_2).unwrap();
         writer.write_record(record2_3).unwrap();
-        let second_chunk = writer.serialize_chunk();
+        let second_chunk = writer.serialize_chunk().unwrap();
 
         // Verify writer state was reset again
         assert_eq!(writer.num_records, 0);
@@ -299,7 +299,7 @@ mod tests {
         assert!(writer.sizes.len() > 0);
 
         // Serialize the chunk
-        let _ = writer.serialize_chunk();
+        let _ = writer.serialize_chunk().unwrap();
 
         // Verify state was completely reset
         assert_eq!(writer.num_records, 0);
@@ -325,11 +325,11 @@ mod tests {
 
         // Write and serialize first chunk
         writer.write_record(b"First chunk record").unwrap();
-        let first_chunk = writer.serialize_chunk();
+        let first_chunk = writer.serialize_chunk().unwrap();
 
         // Write and serialize second chunk with different data
         writer.write_record(b"Second chunk record").unwrap();
-        let second_chunk = writer.serialize_chunk();
+        let second_chunk = writer.serialize_chunk().unwrap();
 
         // Parse first chunk
         let mut data1 = first_chunk.clone();

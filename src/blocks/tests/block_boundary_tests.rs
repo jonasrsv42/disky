@@ -380,8 +380,8 @@ fn test_header_values() {
     // next_chunk: distance from beginning of block to end of chunk
     // The specification is referring to the distance from block boundary to the end of the chunk data
     // In this case, we're writing 50 bytes after the block boundary
-    // The header itself is not counted in this distance
-    let expected_next_chunk = 50; 
+    // The header itself (24 bytes) is included in this distance
+    let expected_next_chunk = 24 + 50; 
     
     // If the test fails, print debugging info
     if next_chunk != expected_next_chunk {

@@ -309,7 +309,12 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
             if self.is_block_boundary(self.pos) {
                 // We're at a block boundary - write a block header
                 let previous_chunk = self.pos - chunk_begin;
-                let next_chunk = (chunk_data.len() - data_pos) as u64; // Remaining data
+                
+                // next_chunk should include the block header size itself, since it's
+                // "the distance from the beginning of the block to the end of the chunk"
+                // according to the specification
+                let next_chunk = BLOCK_HEADER_SIZE + (chunk_data.len() - data_pos) as u64;
+                
                 self.write_block_header(previous_chunk, next_chunk)?;
                 continue;
             }

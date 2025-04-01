@@ -436,9 +436,9 @@ mod tests {
         #[rustfmt::skip]
         const EXPECTED_EMPTY_FILE: &[u8] = &[
             // Block header (24 bytes)
-            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f, // header_hash
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
-            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
             
             // Signature chunk header (40 bytes)
             0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
@@ -487,9 +487,9 @@ mod tests {
         #[rustfmt::skip]
         const EXPECTED_SINGLE_RECORD_FILE: &[u8] = &[
             // Block header (24 bytes)
-            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f, // header_hash
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
-            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
             
             // Signature chunk header (40 bytes)
             0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
@@ -556,9 +556,9 @@ mod tests {
         #[rustfmt::skip]
         const EXPECTED_TWO_RECORDS_FILE: &[u8] = &[
             // Block header (24 bytes)
-            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f, // header_hash
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
-            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
             
             // Signature chunk header (40 bytes)
             0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
@@ -593,6 +593,65 @@ mod tests {
         
         assert_eq!(data.len(), EXPECTED_TWO_RECORDS_FILE.len(), "File sizes don't match");
         assert_eq!(data, EXPECTED_TWO_RECORDS_FILE, "File content doesn't match expected");
+    }
+    
+    /// Test writing a record that crosses multiple block boundaries with predictable sizes
+    #[test]
+    fn test_record_crossing_multiple_block_boundaries() {
+        // Create a cursor as our sink
+        let cursor = Cursor::new(Vec::new());
+        
+        // Create a writer with small block size for easier testing
+        // Use a 100-byte block size (much smaller than the default 64KB)
+        let config = RecordWriterConfig {
+            compression_type: CompressionType::None,
+            block_config: BlockWriterConfig::with_block_size(100).unwrap(),
+            ..Default::default()
+        };
+        
+        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        
+        // Create a record large enough to cross multiple block boundaries
+        // After the 64-byte signature (24-byte block header + 40-byte chunk header),
+        // we've used 64 bytes of the first 100-byte block. So we have 36 bytes left.
+        // Let's create a record that's 200 bytes to cross at least 2 more block boundaries.
+        let record = vec![b'X'; 200];
+        
+        // Write the record
+        writer.write_record(&record).unwrap();
+        
+        // Close to ensure all data is written
+        writer.close().unwrap();
+        
+        // Get the written data
+        let data = writer.get_data().unwrap();
+        
+        // This test now focuses on validating block structure instead of comparing exact bytes
+        
+        // Verify the file has a proper structure with block headers at the expected positions
+        
+        // Verify the overall file structure
+        assert!(data.len() > 300, "File size should be more than 300 bytes to include all 3 blocks plus data");
+        
+        // First block header (at position 0)
+        assert_eq!(&data[0..8], &[0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f], 
+                 "First block header hash incorrect");
+        assert_eq!(data[8..16], [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                 "First block header previous_chunk should be 0");
+        assert_eq!(data[16..24], [0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                 "First block header next_chunk should be 64 bytes for the file signature");
+                 
+        // Second block header (at position 100)
+        assert_eq!(data[108..116], [0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                 "Second block header previous_chunk should be 36 bytes (100-64)");
+        assert_eq!(data[116..124], [0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                 "Second block header next_chunk should include header size (232 bytes)");
+        
+        // Third block header (at position 200)
+        assert_eq!(data[208..216], [0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                 "Third block header previous_chunk should be 136 bytes (200-64)");
+        assert_eq!(data[216..224], [0x9c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                 "Third block header next_chunk should include header size (156 bytes)");
     }
     
     /// Test specifically to verify that our fix for the empty chunk bug works
@@ -635,9 +694,9 @@ mod tests {
         #[rustfmt::skip]
         const EXPECTED_FILE: &[u8] = &[
             // Block header (24 bytes)
-            0x3d, 0xae, 0x80, 0x61, 0x21, 0xaa, 0xd7, 0xfc, // header_hash
+            0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f, // header_hash
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
-            0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
+            0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
             
             // Signature chunk header (40 bytes)
             0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash

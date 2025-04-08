@@ -181,7 +181,11 @@ fn test_chunk_ending_near_block_boundary() {
 }
 
 /// Test 4: Forced chunking patterns
-/// Writes records of specific sizes to force chunks to split at predictable boundaries
+/// Writes records of specific sizes to force chunks to split at predictable boundaries.
+/// This test demonstrates how the chunking mechanism works:
+/// 1. The writer accumulates records in a chunk until it approaches the chunk size limit
+/// 2. When a record would make the chunk exceed that limit, a new chunk is created
+/// 3. Records are never split across chunk boundaries
 #[test]
 fn test_forced_chunking_pattern() {
     // Create a cursor as our sink
@@ -202,8 +206,12 @@ fn test_forced_chunking_pattern() {
     writer.write_record(b"record-3").unwrap();  // 8 bytes  
     // Total: 24 bytes, just under our 30-byte limit
     
-    // This record should force a new chunk
+    // This record will bring us to the chunking limit, but the chunk won't
+    // actually split until the next record is added
     writer.write_record(b"forces-new-chunk").unwrap();  // 16 bytes
+    
+    // This record should now be in a new chunk
+    writer.write_record(b"new-chunk-record").unwrap();  // 16 bytes
     
     // Close to ensure all data is written
     writer.close().unwrap();
@@ -212,7 +220,8 @@ fn test_forced_chunking_pattern() {
     let data = writer.get_data().unwrap();
     
     // Expected bytes for a file with forced chunk boundaries
-    // Note: Actual implementation creates a single chunk with all 4 records
+    // First chunk contains the first 4 records up to forces-new-chunk
+    // Second chunk contains the new-chunk-record which has been forced into a new chunk
     #[rustfmt::skip]
     const EXPECTED_CHUNKING_FILE: &[u8] = &[
         // Block header (24 bytes)
@@ -227,14 +236,14 @@ fn test_forced_chunking_pattern() {
         0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size
         
-        // Single records chunk header (40 bytes) - contains all 4 records
+        // First records chunk header (40 bytes) - contains first 4 records
         0x8f, 0x0b, 0x30, 0xb7, 0x95, 0xef, 0x6c, 0x8e, // header_hash
         0x2e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (46 bytes)
         0x58, 0x41, 0xa4, 0x3f, 0xa3, 0x57, 0xc1, 0x5a, // data_hash
         0x72, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(4)
         0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (40 bytes)
         
-        // Chunk data (46 bytes)
+        // First chunk data (46 bytes)
         0x00,                                           // compression_type (None)
         0x04,                                           // compressed_sizes_size (varint 4)
         0x08, 0x08, 0x08, 0x10,                         // compressed_sizes (varints: 8, 8, 8, 16)
@@ -246,13 +255,21 @@ fn test_forced_chunking_pattern() {
         0x66, 0x6f, 0x72, 0x63, 0x65, 0x73, 0x2d, 0x6e, // "forces-n"
         0x65, 0x77, 0x2d, 0x63, 0x68, 0x75, 0x6e, 0x6b, // "ew-chunk"
         
-        // Pad chunk (88 bytes)
-        0x15, 0x13, 0xbc, 0xb4, 0xee, 0x92, 0x10, 0x19, // header_hash
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (2 bytes)
-        0x88, 0x04, 0x07, 0x1f, 0x4c, 0x00, 0x19, 0xbe, // data_hash
-        0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(0)
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (0 bytes)
-        0x00, 0x00                                      // padding bytes
+        // Second records chunk header (40 bytes) - contains the new-chunk-record
+        0x84, 0x20, 0xba, 0x4e, 0x2a, 0xbc, 0x7c, 0x97, // header_hash
+        0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (19 bytes)
+        0xd8, 0x6a, 0xfe, 0x50, 0x45, 0x2c, 0x5d, 0xc3, // data_hash
+        0x72, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(1)
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (16 bytes)
+        
+        // Second chunk data (19 bytes)
+        0x00,                                           // compression_type (None)
+        0x01,                                           // compressed_sizes_size (varint 1)
+        0x10,                                           // compressed_sizes (varint 16)
+        
+        // Record value (16 bytes)
+        0x6e, 0x65, 0x77, 0x2d, 0x63, 0x68, 0x75, 0x6e, // "new-chun"
+        0x6b, 0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64  // "k-record"
     ];
     
     // Verify the file content

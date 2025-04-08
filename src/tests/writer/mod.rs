@@ -16,6 +16,7 @@
 
 // Submodules
 pub mod conformance;
+pub mod conformance_edge_cases;
 
 use std::io::Cursor;
 

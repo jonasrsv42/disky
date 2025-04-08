@@ -12,8 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tests for the Riegeli implementation.
+//! Utility functions for tests
 
-// Import test modules
-pub mod utils;
-pub mod writer;
+/// Helper function to print bytes in a format that's easy to copy for assertions
+pub fn format_bytes_for_assert(bytes: &[u8]) -> String {
+    let mut result = String::from("&[\n    ");
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && i % 8 == 0 {
+            result.push_str(",\n    ");
+        } else if i > 0 {
+            result.push_str(", ");
+        }
+        result.push_str(&format!("0x{:02x}", b));
+    }
+    result.push_str("\n]");
+    result
+}

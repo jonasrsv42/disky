@@ -19,21 +19,7 @@ use std::io::Cursor;
 
 use crate::compression::CompressionType;
 use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
-
-/// Helper function to print bytes in a format that's easy to copy for assertions
-fn format_bytes_for_assert(bytes: &[u8]) -> String {
-    let mut result = String::from("&[\n    ");
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && i % 8 == 0 {
-            result.push_str(",\n    ");
-        } else if i > 0 {
-            result.push_str(", ");
-        }
-        result.push_str(&format!("0x{:02x}", b));
-    }
-    result.push_str("\n]");
-    result
-}
+use crate::tests::utils::format_bytes_for_assert;
 
 /// Test a small, predictable file containing just the signature chunk
 #[test]

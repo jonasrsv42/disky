@@ -113,13 +113,12 @@ fn test_append_at_block_boundary() {
         0x79, 0x79, 0x79, 0x79, 0x79, 0x79, 0x79, 0x79, // 8 'y's
         0x79, 0x79, 0x79, 0x79, 0x79,                   // 5 'y's
         
-        // New record added during append (from the actual output)
-        // At position 128 we have the next chunk header directly
-        // Note: There is no block header here because current implementation
-        // doesn't add a block header when appending - this is not a bug but a 
-        // design decision to continue with chunks
+        // Appended data starts here - Position 128
+        // This is a block header inserted when appending at a block boundary
+        // Since this block header is at the beginning of a new chunk (the append operation),
+        // the previous_chunk value is correctly set to 0 according to the Riegeli spec.
         0x62, 0x51, 0x82, 0x10, 0xf9, 0x07, 0xd8, 0x3e, // header_hash
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (0 - this doesn't match spec)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (0 - correct: indicates new chunk starts at block boundary)
         0x4d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (77 bytes from start)
         
         // Appended record chunk header (40 bytes)
@@ -415,9 +414,11 @@ fn test_block_boundary_alignment() {
     
     // The exact expected bytes for an appended file - copied from actual output
     // Note that when appending to a file that ends at a block boundary,
-    // the implementation directly appends a new chunk without inserting a block header.
-    // This behavior is different from what you might expect according to the Riegeli spec,
-    // but it works correctly for appending to files.
+    // the implementation correctly inserts a block header with previous_chunk=0.
+    // This is consistent with the Riegeli spec, which states that when a block header
+    // lies exactly between chunks (as in this append case), it's considered to
+    // interrupt the next chunk. Since there is no "previous" distance within the
+    // new chunk (it's just starting), previous_chunk is correctly set to 0.
     #[rustfmt::skip]
     const EXPECTED_APPENDED_BLOCK_BOUNDARY_FILE: &[u8] = &[
         0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f,
@@ -479,9 +480,10 @@ fn test_block_boundary_alignment() {
     assert!(appended_data.len() > block_size as usize, "File should be larger than one block");
     
     // Examine the previous_chunk field in the appended chunk header
-    // According to the Riegeli spec, when appending at a block boundary, the previous_chunk
-    // field should point to the beginning of the file, which would be 128 (the size of the first block).
-    // However, our implementation sets it to 0, which is a deviation from the spec.
+    // According to the Riegeli spec, when a block header lies exactly between chunks,
+    // it's considered to interrupt the next chunk. Since we're appending at a block boundary,
+    // the new chunk starts exactly at this boundary, so the previous_chunk value is correctly 0
+    // (there is no "previous" portion of the chunk before the boundary).
     let previous_chunk_bytes = &appended_data[128+8..128+16];
     let previous_chunk_value = u64::from_le_bytes([
         previous_chunk_bytes[0],
@@ -494,7 +496,7 @@ fn test_block_boundary_alignment() {
         previous_chunk_bytes[7],
     ]);
     
-    // Verify the previous_chunk field is indeed 0 as expected with our implementation
-    assert_eq!(previous_chunk_value, 0, "The previous_chunk field in the appended chunk should be 0");
+    // Verify the previous_chunk field is correctly set to 0
+    assert_eq!(previous_chunk_value, 0, "The previous_chunk field should be 0 when appending at a block boundary");
 }
 

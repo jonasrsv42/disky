@@ -660,126 +660,126 @@ fn test_empty_records() {
 }
 
 // Test a mix of small and large records to verify padding and alignment
-//#[test]
-//fn test_mixed_record_sizes() {
-//    // Create a cursor as our sink
-//    let cursor = Cursor::new(Vec::new());
-//    
-//    // Create a writer with default config but small block size
-//    let config = RecordWriterConfig {
-//        compression_type: CompressionType::None,
-//        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(128).unwrap(), // Small block size
-//        ..Default::default()
-//    };
-//    
-//    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-//    
-//    // Write a tiny record first
-//    writer.write_record(b"tiny").unwrap();
-//    
-//    // Now write a medium-sized record
-//    let medium_record = vec![b'A'; 50];
-//    writer.write_record(&medium_record).unwrap();
-//    
-//    // Now write a record large enough to span a block boundary
-//    let large_record = vec![b'B'; 100];
-//    writer.write_record(&large_record).unwrap();
-//    
-//    // Close to ensure all data is written
-//    writer.close().unwrap();
-//    
-//    // Get the written data
-//    let data = writer.get_data().unwrap();
-//    
-//    // Uncomment to print the actual bytes for debugging/updating the test
-//    // println!("ACTUAL BYTES:\n{}", format_bytes_for_assert(&data));
-//    
-//    // Expected bytes for a file with mixed record sizes crossing block boundaries - from actual implementation
-//    // Updated with actual bytes from the implementation
-//    #[rustfmt::skip]
-//    const EXPECTED_MIXED_SIZES_FILE: &[u8] = &[
-//        // Block 1 (starts at byte 0)
-//        // Block header (24 bytes)
-//        0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f, // header_hash
-//        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk
-//        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk
-//        
-//        // Signature chunk header (40 bytes)
-//        0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
-//        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size
-//        0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, // data_hash
-//        0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records
-//        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size
-//        
-//        // Records chunk header (40 bytes)
-//        0x5f, 0xde, 0x67, 0xd5, 0x07, 0xd1, 0x98, 0x86, // header_hash
-//        0x9f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (159 bytes)
-//        0x77, 0x63, 0x2b, 0x27, 0xdc, 0x09, 0x28, 0x47, // data_hash
-//        0x72, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(3)
-//        0x9a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (154 bytes)
-//        
-//        // Records chunk data (starts at byte 104)
-//        0x00,                                           // compression_type (None)
-//        0x03,                                           // compressed_sizes_size (varint 3)
-//        0x04, 0x32, 0x64,                               // compressed_sizes (varints: 4, 50, 100)
-//        
-//        // Record values (154 bytes total)
-//        0x74, 0x69, 0x6e, 0x79,                         // "tiny" (4 bytes)
-//        
-//        // Medium-sized record (50 bytes of 'A')
-//        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // AAAAAAAA
-//        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // AAAAAAAA
-//        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // AAAAAAAA
-//        
-//        // Block 2 (starts at byte 128)
-//        // Block header (24 bytes)
-//        0xf0, 0x9d, 0x74, 0x03, 0xf0, 0xe2, 0xb1, 0x86, // header_hash
-//        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (64 bytes)
-//        0x9f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (159 bytes)
-//        
-//        // Continuation of medium-sized record (26 bytes remaining)
-//        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // AAAAAAAA
-//        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // AAAAAAAA
-//        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // AAAAAAAA
-//        0x41, 0x41,                                     // AA
-//        
-//        // Large record that crosses block boundary (100 bytes of 'B')
-//        // First part in block 2 (74 bytes in this block)
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42,                                     // BB
-//        
-//        // Block 3 (starts at byte 256)
-//        // Block header (24 bytes)
-//        0xd8, 0xb3, 0x73, 0xb7, 0x08, 0x8d, 0x48, 0x4c, // header_hash
-//        0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (192 bytes)
-//        0x37, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (55 bytes)
-//        
-//        // Remaining part of the large record in block 3 (31 bytes)
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // BBBBBBBB
-//        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42        // BBBBBBB
-//    ];
-//    
-//    // Verify the file content
-//    if data != EXPECTED_MIXED_SIZES_FILE {
-//        panic!("Actual bytes (len:{}):\n{}", data.len(), format_bytes_for_assert(&data));
-//    }
-//    
-//    // Analysis of mixed record sizes:
-//    // 1. The chunk header starts in block 1 and continues in block 2
-//    // 2. The large record (100 bytes) crosses from block 2 to block 3
-//    // 3. Block headers are placed at the correct 128-byte intervals
-//    // 4. Block headers correctly reference previous_chunk and next_chunk values
-//    // 5. Records are properly encoded within a single chunk
-//    
-//    assert_eq!(data.len(), EXPECTED_MIXED_SIZES_FILE.len(), "File sizes don't match");
-//    assert_eq!(data, EXPECTED_MIXED_SIZES_FILE, "File content doesn't match expected");
-//}
+#[test]
+fn test_mixed_record_sizes() {
+    // Create a cursor as our sink
+    let cursor = Cursor::new(Vec::new());
+    
+    // Create a writer with default config but small block size
+    let config = RecordWriterConfig {
+        compression_type: CompressionType::None,
+        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(128).unwrap(), // Small block size
+        ..Default::default()
+    };
+    
+    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    
+    // Write a tiny record first
+    writer.write_record(b"tiny").unwrap();
+    
+    // Now write a medium-sized record
+    let medium_record = vec![b'A'; 50];
+    writer.write_record(&medium_record).unwrap();
+    
+    // Now write a record large enough to span a block boundary
+    let large_record = vec![b'B'; 100];
+    writer.write_record(&large_record).unwrap();
+    
+    // Close to ensure all data is written
+    writer.close().unwrap();
+    
+    // Get the written data
+    let data = writer.get_data().unwrap();
+    
+    // Expected bytes for a file with mixed record sizes crossing block boundaries
+    #[rustfmt::skip]
+    const EXPECTED_MIXED_SIZES_FILE: &[u8] = &[
+        //=================================================================================
+        // BLOCK 1 (bytes 0-127): Initial block with file signature and start of records chunk
+        //=================================================================================
+        
+        // Block header (24 bytes)
+        0x83, 0xaf, 0x70, 0xd1, 0x0d, 0x88, 0x4a, 0x3f, // header_hash
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (0 bytes)
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (64 bytes)
+        
+        // Signature chunk header (40 bytes)
+        0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, // header_hash
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (0 bytes)
+        0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, // data_hash
+        0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('s') + num_records (0)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (0 bytes)
+        
+        // Records chunk header (40 bytes)
+        0x5f, 0xde, 0x67, 0xd5, 0x07, 0xd1, 0x98, 0x86, // header_hash
+        0x9f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // data_size (159 bytes)
+        0x77, 0x63, 0x2b, 0x27, 0xdc, 0x09, 0x28, 0x47, // data_hash
+        0x72, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // chunk_type('r') + num_records(3)
+        0x9a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // decoded_data_size (154 bytes)
+        
+        // Records chunk data - start (23 bytes in this block)
+        0x00,                                           // compression_type (None)
+        0x03,                                           // compressed_sizes_size (varint 3)
+        0x04, 0x32, 0x64,                               // compressed_sizes (varints: 4, 50, 100)
+        0x74, 0x69, 0x6e, 0x79,                         // "tiny" (4 bytes)
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,       // Start of 'A's (7 bytes)
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // More 'A's (8 bytes)
+        
+        //=================================================================================
+        // BLOCK 2 (bytes 128-255): Continuation of records data crossing block boundary
+        //=================================================================================
+        
+        // Block header (24 bytes) 
+        0xf0, 0x9d, 0x74, 0x03, 0xf0, 0xe2, 0xb1, 0x86, // header_hash
+        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (64 bytes)
+        0x9f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (159 bytes)
+        
+        // Continuation of medium record (35 bytes in this block)
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // "AAAAAAAA"
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // "AAAAAAAA"
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // "AAAAAAAA"
+        0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, // "AAAAAAAA"
+        0x41, 0x41, 0x41,                               // "AAA" (end of 50 'A's)
+        
+        // Start of large record (69 bytes of 'B's in this block)
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42,                   // "BBBBB"
+        
+        //=================================================================================
+        // BLOCK 3 (bytes 256-310): Final part of large record data
+        //=================================================================================
+        
+        // Block header (24 bytes)
+        0xd8, 0xb3, 0x73, 0xb7, 0x08, 0x8d, 0x48, 0x4c, // header_hash
+        0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (192 bytes)
+        0x37, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (55 bytes)
+        
+        // Remaining part of the large record (31 bytes)
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, // "BBBBBBBB"
+        0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42        // "BBBBBBB" (completion of 100 'B's)
+    ];
+    
+    // Verify the file content
+    if data != EXPECTED_MIXED_SIZES_FILE {
+        panic!("Actual bytes (len:{}):\n{}", data.len(), format_bytes_for_assert(&data));
+    }
+    
+    // Analysis of mixed record sizes:
+    // 1. The chunk header starts in block 1 and continues in block 2
+    // 2. The large record (100 bytes) crosses from block 2 to block 3
+    // 3. Block headers are placed at the correct 128-byte intervals
+    // 4. Block headers correctly reference previous_chunk and next_chunk values
+    // 5. Records are properly encoded within a single chunk
+    
+    assert_eq!(data.len(), EXPECTED_MIXED_SIZES_FILE.len(), "File sizes don't match");
+    assert_eq!(data, EXPECTED_MIXED_SIZES_FILE, "File content doesn't match expected");
+}

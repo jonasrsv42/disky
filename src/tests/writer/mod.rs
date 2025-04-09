@@ -18,6 +18,7 @@
 pub mod conformance;
 pub mod conformance_edge_cases;
 pub mod conformance_append;
+pub mod chunk_boundary_validation;
 
 use std::io::Cursor;
 

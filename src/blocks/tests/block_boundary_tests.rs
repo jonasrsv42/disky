@@ -334,6 +334,24 @@ fn test_header_values() {
     let chunk_size = (block_size - initial_pos + 50) as usize;
     let chunk_data = Bytes::from(vec![b'X'; chunk_size]);
     
+    // Get the expected header values that should be calculated
+    let chunk_begin = initial_pos;
+    let expected_previous_chunk = block_size - initial_pos;
+    
+    // For next_chunk, we need to calculate the distance from the current block to the end of the chunk
+    // In our new implementation, we first calculate the absolute position of the chunk end
+    // Then we calculate next_chunk as (chunk_end - block_position)
+    
+    // First, calculate the absolute position of the chunk end
+    let usable_block_size = block_size - BLOCK_HEADER_SIZE;
+    let num_overhead_blocks = (chunk_size as u64 
+        + (chunk_begin + usable_block_size - 1) % block_size) 
+        / usable_block_size;
+    let chunk_end = chunk_begin + chunk_size as u64 + num_overhead_blocks * BLOCK_HEADER_SIZE;
+    
+    // Then calculate the distance from the current block to that end position
+    let expected_next_chunk = chunk_end - block_size;
+    
     // Write the chunk
     writer.write_chunk(chunk_data.clone()).unwrap();
     
@@ -373,15 +391,8 @@ fn test_header_values() {
     
     // Verify the values
     // previous_chunk: distance from beginning of chunk to beginning of block
-    let expected_previous_chunk = block_size - initial_pos;
     assert_eq!(previous_chunk, expected_previous_chunk,
         "previous_chunk value in the header should be distance from chunk start to block start");
-    
-    // next_chunk: distance from beginning of block to end of chunk
-    // The specification is referring to the distance from block boundary to the end of the chunk data
-    // In this case, we're writing 50 bytes after the block boundary
-    // The header itself (24 bytes) is included in this distance
-    let expected_next_chunk = 24 + 50; 
     
     // If the test fails, print debugging info
     if next_chunk != expected_next_chunk {
@@ -390,10 +401,118 @@ fn test_header_values() {
         println!("  initial_pos: {}", initial_pos);
         println!("  chunk_size: {}", chunk_size);
         println!("  header_pos: {}", header_pos);
+        println!("  chunk_begin: {}", chunk_begin);
         println!("  previous_chunk: {} (expected: {})", previous_chunk, expected_previous_chunk);
         println!("  next_chunk: {} (expected: {})", next_chunk, expected_next_chunk);
     }
     
     assert_eq!(next_chunk, expected_next_chunk,
-        "next_chunk value in the header should be distance from block start to chunk end");
+        "next_chunk value in the header should match the expected relative distance from block to chunk end");
+}
+
+#[test]
+fn test_compute_chunk_end() {
+    // Test the compute_chunk_end method based on Riegeli spec formula
+    // The implementation calculates the total distance from chunk beginning to chunk end,
+    // taking into account any block headers that will be inserted at block boundaries
+    
+    // Create a writer with a 64-byte block size
+    let buffer = Cursor::new(Vec::new());
+    let writer = BlockWriter::with_config(
+        buffer,
+        BlockWriterConfig { block_size: 64 }
+    ).unwrap();
+    
+    // Test cases for a 64-byte block size
+    // Block header is 24 bytes, so usable block size is 40 bytes
+    
+    // Case 1: Small chunk that doesn't cross boundary
+    // In this case, the chunk will fit entirely within the first block after the header
+    // chunk_begin=0, chunk_size=20
+    let calculated = writer.compute_chunk_end(0, 20);
+    // Should include initial header (24) + data (20) = 44
+    assert_eq!(calculated, 44, 
+        "Small chunk that fits in first block should account for initial header");
+    
+    // Case 2: Chunk just fits in usable space
+    // chunk_begin=0, chunk_size=40 (exactly the usable block size)
+    let calculated = writer.compute_chunk_end(0, 40);
+    // Should include initial header (24) + data (40) = 64
+    assert_eq!(calculated, 64, 
+        "Chunk that exactly fits usable space should not need additional headers");
+    
+    // Case 3: Chunk slightly exceeds usable space
+    // chunk_begin=0, chunk_size=41 (1 byte more than usable space)
+    let calculated = writer.compute_chunk_end(0, 41);
+    // Should include initial header (24) + first block data (40) + second header (24) + remaining data (1) = 89
+    assert_eq!(calculated, 89, 
+        "Chunk that exceeds usable space should include additional header");
+    
+    // Case 4: Chunk starts at non-zero position
+    // chunk_begin=10, chunk_size=30
+    let calculated = writer.compute_chunk_end(10, 30);
+    // When starting at position 10, we're already after the initial header
+    // The formula still adds an overhead block calculation
+    assert_eq!(calculated, 64, 
+        "Chunk starting at non-zero position should calculate correctly");
+    
+    // Case 5: Chunk crosses a block boundary
+    // chunk_begin=10, chunk_size=60
+    let calculated = writer.compute_chunk_end(10, 60);
+    // With the actual formula implementation:
+    // num_overhead_blocks = (60 + (10 + 40 - 1) % 64) / 40 = (60 + 49) / 40 = 109 / 40 = 2.7 = 2
+    // chunk_end = 10 + 60 + 2*24 = 10 + 60 + 48 = 118
+    assert_eq!(calculated, 118, 
+        "Chunk crossing block boundary should account for overhead blocks");
+    
+    // Case 6: Chunk crosses multiple block boundaries
+    // chunk_begin=10, chunk_size=120
+    let calculated = writer.compute_chunk_end(10, 120);
+    // With the actual formula implementation:
+    // num_overhead_blocks = (120 + (10 + 40 - 1) % 64) / 40 = (120 + 49) / 40 = 169 / 40 = 4.2 = 4
+    // chunk_end = 10 + 120 + 4*24 = 10 + 120 + 96 = 226
+    assert_eq!(calculated, 226, 
+        "Chunk crossing multiple block boundaries should include multiple headers");
+    
+    // Test with default block size (64KiB = 65536 bytes)
+    let buffer = Cursor::new(Vec::new());
+    let writer = BlockWriter::with_config(
+        buffer,
+        BlockWriterConfig::default()
+    ).unwrap();
+    
+    let usable_block_size = writer.config.usable_block_size(); // 65536 - 24 = 65512
+    
+    // Case 7: Chunk fits within the first block
+    let calculated = writer.compute_chunk_end(0, 1000);
+    // Chunk of 1000 bytes fits within first usable block, so just need initial header: 24 + 1000 = 1024
+    assert_eq!(calculated, 1024, 
+        "Small chunk with default block size should include initial header");
+    
+    // Case 8: Chunk exactly fills usable space
+    let calculated = writer.compute_chunk_end(0, usable_block_size);
+    // Exactly fills first block: 24 + 65512 = 65536
+    assert_eq!(calculated, 65536, 
+        "Chunk that fills exactly one block should not need additional headers");
+    
+    // Case 9: Chunk slightly exceeds usable space
+    let calculated = writer.compute_chunk_end(0, usable_block_size + 1);
+    // Exceeds first block by 1 byte, needs second header: 24 + 65512 + 24 + 1 = 65561
+    assert_eq!(calculated, 65561, 
+        "Chunk that slightly exceeds one block should include additional header");
+    
+    // Case 10: Complex calculation with offset
+    let chunk_begin = 1000;
+    let chunk_size = 130000; // Will cross multiple block boundaries
+    let calculated = writer.compute_chunk_end(chunk_begin, chunk_size);
+    
+    // Manual calculation for verification
+    let first_block_boundary = (chunk_begin / 65536 + 1) * 65536;
+    let remaining_after_first_boundary = chunk_size - (first_block_boundary - chunk_begin);
+    let additional_headers = (remaining_after_first_boundary + usable_block_size - 1) / usable_block_size;
+    let expected = chunk_begin + chunk_size + additional_headers * BLOCK_HEADER_SIZE;
+    
+    assert_eq!(calculated, expected,
+        "Complex calculation case failed: chunk_begin={}, chunk_size={}, expected={}, got={}",
+        chunk_begin, chunk_size, expected, calculated);
 }

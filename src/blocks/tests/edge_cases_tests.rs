@@ -1,6 +1,7 @@
 //! Tests for edge cases and error handling in BlockWriter
 
-use super::super::writer::{BlockWriter, BlockWriterConfig, BLOCK_HEADER_SIZE};
+use super::super::writer::{BlockWriter, BlockWriterConfig};
+use super::super::utils::BLOCK_HEADER_SIZE;
 use bytes::Bytes;
 use std::io::{Cursor, Seek, Write};
 

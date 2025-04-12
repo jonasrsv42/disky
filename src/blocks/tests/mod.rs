@@ -4,6 +4,7 @@ mod block_boundary_tests;
 mod edge_cases_tests;
 mod real_world_tests;
 mod edge_case_boundary_tests;
+mod reader_tests;
 
 // Helper re-exports for tests
 #[doc(hidden)]

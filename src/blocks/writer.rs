@@ -1,15 +1,9 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use std::io::{Seek, Write};
 
+use crate::blocks::utils::{self, BLOCK_HEADER_SIZE, DEFAULT_BLOCK_SIZE};
 use crate::error::Result;
 use crate::hash::highway_hash;
-
-/// The size of a block header in bytes.
-/// Always 24 bytes: 8 for header_hash, 8 for previous_chunk, 8 for next_chunk.
-pub const BLOCK_HEADER_SIZE: u64 = 24;
-
-/// Default riegeli block size is 64 kiB
-pub const DEFAULT_BLOCK_SIZE: u64 = 1 << 16;
 
 /// Configuration options for BlockWriter.
 #[derive(Debug, Clone)]
@@ -38,29 +32,13 @@ impl BlockWriterConfig {
     /// which could cause cascading headers.
     pub fn with_block_size(block_size: u64) -> crate::error::Result<Self> {
         // Validate block size to prevent cascading headers
-        Self::validate_block_size(block_size)?;
-
+        utils::validate_block_size(block_size)?;
         Ok(Self { block_size })
     }
 
     /// Returns the usable block size (block size minus block header size).
     pub fn usable_block_size(&self) -> u64 {
-        self.block_size - BLOCK_HEADER_SIZE
-    }
-
-    /// Validates that the block size is large enough to prevent cascading headers.
-    ///
-    /// The block size must be at least twice the header size to prevent cascading headers.
-    /// This is because a header spans across a block boundary, another header would be needed,
-    /// which could cause an infinite cascade of headers.
-    fn validate_block_size(block_size: u64) -> crate::error::Result<()> {
-        if block_size < BLOCK_HEADER_SIZE * 2 {
-            return Err(crate::error::RiegeliError::Other(
-                format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
-                        block_size, BLOCK_HEADER_SIZE)
-            ));
-        }
-        Ok(())
+        utils::usable_block_size(self.block_size)
     }
 }
 
@@ -119,7 +97,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// Creates a new BlockWriter with custom configuration.
     pub fn with_config(mut sink: Sink, config: BlockWriterConfig) -> Result<Self> {
         // Validate the configuration - ensure block size is reasonable
-        BlockWriterConfig::validate_block_size(config.block_size)?;
+        utils::validate_block_size(config.block_size)?;
 
         let pos = sink.stream_position()?;
         Ok(Self { sink, pos, config })
@@ -152,7 +130,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         config: BlockWriterConfig,
     ) -> Result<Self> {
         // Validate the configuration - ensure block size is reasonable
-        BlockWriterConfig::validate_block_size(config.block_size)?;
+        utils::validate_block_size(config.block_size)?;
 
         // Verify the sink position matches the expected position
         let actual_pos = sink.stream_position()?;
@@ -215,7 +193,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
 
     /// Returns the number of bytes remaining in the current block.
     fn remaining_in_block(&self, pos: u64) -> u64 {
-        self.config.block_size - pos % self.config.block_size
+        utils::remaining_in_block(pos, self.config.block_size)
     }
 
     /// Checks if a position falls on a block boundary.
@@ -223,7 +201,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// According to the Riegeli specification, block boundaries occur at multiples of block_size,
     /// which includes position 0 (i.e., files always start with a header).
     fn is_block_boundary(&self, pos: u64) -> bool {
-        pos % self.config.block_size == 0
+        utils::is_block_boundary(pos, self.config.block_size)
     }
 
     /// Computes the absolute position of the chunk end based on the Riegeli specification.

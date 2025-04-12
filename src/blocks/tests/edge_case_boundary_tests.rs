@@ -19,7 +19,8 @@
 use std::io::Cursor;
 use bytes::Bytes;
 
-use crate::blocks::writer::{BlockWriter, BlockWriterConfig, BLOCK_HEADER_SIZE};
+use crate::blocks::writer::{BlockWriter, BlockWriterConfig};
+use crate::blocks::utils::BLOCK_HEADER_SIZE;
 
 /// Test chunk end calculation for a variety of edge cases.
 #[test]

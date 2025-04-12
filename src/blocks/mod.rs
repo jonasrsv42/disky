@@ -22,11 +22,12 @@
 //! ```
 //!
 //! - `header_hash`: A 64-bit HighwayHash of the rest of the header
-//! - `previous_chunk`: Distance from chunk beginning to block boundary 
+//! - `previous_chunk`: Distance from chunk beginning to block boundary
 //! - `next_chunk`: Distance from block boundary to chunk end
 
-pub mod writer;
 pub mod reader;
+pub mod writer;
+pub mod utils;
 
 #[cfg(test)]
 mod tests;

@@ -263,9 +263,9 @@ fn test_record_crossing_multiple_block_boundaries() {
         //=================================================================================
         
         // Block header (24 bytes) at position 100
-        0x77, 0x7a, 0x72, 0x39, 0x59, 0xa0, 0xe2, 0x2b, // header_hash
+        0x6b, 0xb2, 0x42, 0xff, 0xcd, 0xfa, 0x5c, 0x32, // header_hash
         0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (36 bytes from chunk start to block boundary)
-        0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (232 bytes to end of chunk including header)
+        0x18, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (280 bytes to end of chunk from block boundary)
         
         // Remaining 4 bytes of records chunk header + record data
         0x00, 0x00, 0x00, 0x00,                         // remaining decoded_data_size bytes
@@ -291,9 +291,9 @@ fn test_record_crossing_multiple_block_boundaries() {
         //=================================================================================
         
         // Block header (24 bytes) at position 200
-        0x62, 0xa7, 0x1b, 0x9c, 0x90, 0x61, 0xd2, 0xb3, // header_hash
+        0x58, 0xcb, 0x17, 0x3f, 0x0e, 0xef, 0xe9, 0x1b, // header_hash
         0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // previous_chunk (136 bytes from chunk start to block boundary)
-        0x9c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (156 bytes to end of chunk including header)
+        0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // next_chunk (180 bytes to end of chunk from block boundary)
         
         // Middle part of 200-byte record content (76 bytes in this block)
         0x58, 0x58, 0x58, 0x58, 0x58, 0x58, 0x58, 0x58, // "XXXXXXXX" (bytes 69-76)
@@ -360,14 +360,14 @@ fn test_record_crossing_multiple_block_boundaries() {
     // Second block header (at position 100)
     assert_eq!(data[108..116], [0x24, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
                 "Second block header previous_chunk should be 36 bytes (100-64)");
-    assert_eq!(data[116..124], [0xe8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
-                "Second block header next_chunk should include header size (232 bytes)");
+    assert_eq!(data[116..124], [0x18, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                "Second block header next_chunk should be 280 bytes");
     
     // Third block header (at position 200)
     assert_eq!(data[208..216], [0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
                 "Third block header previous_chunk should be 136 bytes (200-64)");
-    assert_eq!(data[216..224], [0x9c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
-                "Third block header next_chunk should include header size (156 bytes)");
+    assert_eq!(data[216..224], [0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 
+                "Third block header next_chunk should be 180 bytes");
 }
 
 /// Test specifically to verify that our fix for the empty chunk bug works

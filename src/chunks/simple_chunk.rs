@@ -533,4 +533,61 @@ mod tests {
         assert_eq!(data_hash1, highway_hash(&Bytes::copy_from_slice(data1_bytes)));
         assert_eq!(data_hash2, highway_hash(&Bytes::copy_from_slice(data2_bytes)));
     }
+    
+    #[test]
+    fn test_chunk_size_fields_correctness() {
+        // Create a chunk writer
+        let mut chunk_writer = SimpleChunkWriter::new(CompressionType::None);
+        
+        // Add a record with predictable content
+        let record_data = b"test record data for size validation";
+        
+        // Add the record - write_record returns RecordsSize but modifies the writer
+        let _ = chunk_writer.write_record(record_data).unwrap();
+        
+        // Serialize the chunk
+        let chunk_data = chunk_writer.serialize_chunk().unwrap();
+        
+        // Extract the data_size and decoded_data_size fields from the header
+        let data_size = u64::from_le_bytes([
+            chunk_data[8], chunk_data[9], chunk_data[10], chunk_data[11],
+            chunk_data[12], chunk_data[13], chunk_data[14], chunk_data[15],
+        ]);
+        
+        let decoded_data_size = u64::from_le_bytes([
+            chunk_data[32], chunk_data[33], chunk_data[34], chunk_data[35],
+            chunk_data[36], chunk_data[37], chunk_data[38], chunk_data[39],
+        ]);
+        
+        // Verify that data_size matches the actual data size + necessary overhead
+        let record_size = record_data.len() as u64;
+        
+        // For uncompressed data, overhead is:
+        // - 1 byte for compression_type
+        // - 1 byte for compressed_sizes_size (since we have 1 record with size < 128)
+        // - 1 byte for the compressed_size (varint encoding of the record size)
+        let expected_data_size = record_size + 3;
+        
+        assert_eq!(data_size, expected_data_size, 
+            "data_size field should be record size ({}) plus 3 bytes overhead", record_size);
+        
+        // decoded_data_size should be exactly equal to the original record size
+        assert_eq!(decoded_data_size, record_size, 
+            "decoded_data_size field should equal the original record size");
+            
+        // Also verify the chunk_type and num_records fields
+        let chunk_type = chunk_data[24];
+        assert_eq!(chunk_type, ChunkType::SimpleRecords as u8, 
+            "Chunk type should be 'r' for simple records");
+        
+        let num_records = 
+            (chunk_data[25] as u64) |
+            ((chunk_data[26] as u64) << 8) |
+            ((chunk_data[27] as u64) << 16) |
+            ((chunk_data[28] as u64) << 24) |
+            ((chunk_data[29] as u64) << 32) |
+            ((chunk_data[30] as u64) << 40) |
+            ((chunk_data[31] as u64) << 48);
+        assert_eq!(num_records, 1, "Number of records should be 1");
+    }
 }

@@ -229,7 +229,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// taking into account any additional block headers that must be inserted at block boundaries.
     ///
     /// The formula follows the Riegeli spec:
-    /// ```
+    /// ```text
     /// NumOverheadBlocks(pos, size) = (size + (pos + kUsableBlockSize - 1) % kBlockSize) / kUsableBlockSize;
     /// chunk_end = chunk_begin + chunk_size + NumOverheadBlocks * kBlockHeaderSize;
     /// ```

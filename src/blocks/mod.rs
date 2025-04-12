@@ -26,6 +26,7 @@
 //! - `next_chunk`: Distance from block boundary to chunk end
 
 pub mod writer;
+pub mod reader;
 
 #[cfg(test)]
 mod tests;

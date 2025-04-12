@@ -8,6 +8,9 @@ use crate::hash::highway_hash;
 /// Always 24 bytes: 8 for header_hash, 8 for previous_chunk, 8 for next_chunk.
 pub const BLOCK_HEADER_SIZE: u64 = 24;
 
+/// Default riegeli block size is 64 kiB
+pub const DEFAULT_BLOCK_SIZE: u64 = 1 << 16;
+
 /// Configuration options for BlockWriter.
 #[derive(Debug, Clone)]
 pub struct BlockWriterConfig {
@@ -23,7 +26,7 @@ impl Default for BlockWriterConfig {
         // NOTE: It should ALWAYS be 64KiB for actual writing, it's only configurable
         // to allow for test injection to write "human-readable" tests
         Self {
-            block_size: 1 << 16, // 64 KiB
+            block_size: DEFAULT_BLOCK_SIZE, // 64 KiB
         }
     }
 }
@@ -320,13 +323,13 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
                 // We're at a block boundary - write a block header
                 let previous_chunk = self.pos - chunk_begin;
 
-                // next_chunk should be the distance from the beginning of the current block 
+                // next_chunk should be the distance from the beginning of the current block
                 // to the end of the chunk, according to the Riegeli specification:
                 // "distance from the beginning of the block to the end of the chunk interrupted by this block header"
-                
+
                 // First, calculate the absolute position of the chunk end
                 let chunk_end = self.compute_chunk_end(chunk_begin, chunk_data.len() as u64);
-                
+
                 // Then calculate the distance from the current block to that end position
                 let next_chunk = chunk_end - self.pos;
 

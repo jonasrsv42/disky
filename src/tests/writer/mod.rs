@@ -24,7 +24,7 @@ pub mod conformance_edge_cases;
 use std::io::Cursor;
 
 use crate::compression::CompressionType;
-use crate::error::RiegeliError;
+use crate::error::DiskyError;
 use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
 
 // Test-only implementation for RecordWriter with Cursor<Vec<u8>>
@@ -115,7 +115,7 @@ fn test_close_and_reopen() {
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
-        RiegeliError::WritingClosedFile
+        DiskyError::WritingClosedFile
     ));
 
     // Get the written data directly

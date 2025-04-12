@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Error types for the Riegeli format.
+//! Error types for the Disky format.
 
 use std::io;
 use thiserror::Error;
 
-/// The main error type for Riegeli operations.
+/// The main error type for Disky operations.
 #[derive(Debug, Error)]
-pub enum RiegeliError {
+pub enum DiskyError {
     /// An I/O error occurred.
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    /// The file does not have a valid Riegeli file signature.
+    /// The file does not have a valid Disky file signature.
     #[error("Invalid file signature")]
     InvalidFileSignature,
 
@@ -56,11 +56,11 @@ pub enum RiegeliError {
     #[error("Unexpected end of file")]
     UnexpectedEof,
 
-    /// The file is not a Riegeli file.
-    #[error("Not a Riegeli file")]
-    NotRiegeliFile,
+    /// The file is not a Disky file.
+    #[error("Not a Disky file")]
+    NotDiskyFile,
 
-    /// The file is not a Riegeli file.
+    /// Attempted to write to a closed file.
     #[error("Writing a closed file")]
     WritingClosedFile,
 
@@ -69,5 +69,5 @@ pub enum RiegeliError {
     Other(String),
 }
 
-/// A specialized Result type for Riegeli operations.
-pub type Result<T> = std::result::Result<T, RiegeliError>;
+/// A specialized Result type for Disky operations.
+pub type Result<T> = std::result::Result<T, DiskyError>;

@@ -22,7 +22,7 @@
 //    BLOCK_SIZE, BLOCK_HEADER_SIZE, CHUNK_HEADER_SIZE, CHUNK_TYPE_FILE_SIGNATURE,
 //    CHUNK_TYPE_SIMPLE_RECORDS, COMPRESSION_TYPE_NONE, FILE_SIGNATURE,
 //};
-//use crate::error::{Result, RiegeliError};
+//use crate::error::{Result, DiskyError};
 //use crate::hash::highway_hash;
 //use crate::record_position::RecordPosition;
 //
@@ -113,7 +113,7 @@
 //        match self.reader.read_exact(&mut signature) {
 //            Ok(_) => {
 //                if signature != FILE_SIGNATURE {
-//                    return Err(RiegeliError::InvalidFileSignature);
+//                    return Err(DiskyError::InvalidFileSignature);
 //                }
 //            },
 //            Err(e) => {
@@ -122,7 +122,7 @@
 //                    // Just pretend we read the signature
 //                    self.reader.seek(SeekFrom::Start(64))?;
 //                } else {
-//                    return Err(RiegeliError::Io(e));
+//                    return Err(DiskyError::Io(e));
 //                }
 //            }
 //        }
@@ -136,7 +136,7 @@
 //    /// Reads the next record from the file.
 //    pub fn read_record(&mut self) -> Result<Bytes> {
 //        if self.closed {
-//            return Err(RiegeliError::Other("Reader is closed".to_string()));
+//            return Err(DiskyError::Other("Reader is closed".to_string()));
 //        }
 //        
 //        // If we've read all records in the current chunk (or no chunk is loaded),
@@ -147,7 +147,7 @@
 //        
 //        // If we still don't have records, we've reached the end of the file
 //        if self.record_index >= self.num_records {
-//            return Err(RiegeliError::UnexpectedEof);
+//            return Err(DiskyError::UnexpectedEof);
 //        }
 //        
 //        // Get the size of the current record
@@ -156,7 +156,7 @@
 //        // Extract the record data
 //        let record_end = self.data_offset + record_size as usize;
 //        if record_end > self.record_data.len() {
-//            return Err(RiegeliError::Corruption("Record extends beyond chunk data".to_string()));
+//            return Err(DiskyError::Corruption("Record extends beyond chunk data".to_string()));
 //        }
 //        
 //        let record = self.record_data.slice(self.data_offset..record_end);
@@ -190,7 +190,7 @@
 //            
 //            if let Err(e) = header_result {
 //                // If we're at EOF, return Ok with no records
-//                if let RiegeliError::UnexpectedEof = e {
+//                if let DiskyError::UnexpectedEof = e {
 //                    return Ok(());
 //                }
 //                
@@ -331,9 +331,9 @@
 //        match self.reader.read_exact(&mut header) {
 //            Ok(_) => {}
 //            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-//                return Err(RiegeliError::UnexpectedEof);
+//                return Err(DiskyError::UnexpectedEof);
 //            }
-//            Err(e) => return Err(RiegeliError::Io(e)),
+//            Err(e) => return Err(DiskyError::Io(e)),
 //        }
 //        
 //        // Extract header fields
@@ -354,7 +354,7 @@
 //        // Verify header hash
 //        let calculated_hash = highway_hash(&header[8..]);
 //        if calculated_hash != header_hash {
-//            return Err(RiegeliError::ChunkHeaderHashMismatch);
+//            return Err(DiskyError::ChunkHeaderHashMismatch);
 //        }
 //        
 //        Ok((chunk_type, data_size, data_hash, num_records, decoded_data_size))
@@ -368,7 +368,7 @@
 //        // Verify data hash
 //        let calculated_hash = highway_hash(&data);
 //        if calculated_hash != data_hash {
-//            return Err(RiegeliError::ChunkDataHashMismatch);
+//            return Err(DiskyError::ChunkDataHashMismatch);
 //        }
 //        
 //        Ok(Bytes::from(data))
@@ -380,20 +380,20 @@
 //        
 //        // Read compression type
 //        if buf.remaining() < 1 {
-//            return Err(RiegeliError::Corruption("Truncated chunk data".to_string()));
+//            return Err(DiskyError::Corruption("Truncated chunk data".to_string()));
 //        }
 //        let compression_type = buf.get_u8();
 //        
 //        // We only support uncompressed data for now
 //        if compression_type != COMPRESSION_TYPE_NONE {
-//            return Err(RiegeliError::UnsupportedCompressionType(compression_type));
+//            return Err(DiskyError::UnsupportedCompressionType(compression_type));
 //        }
 //        
 //        // Read sizes buffer size (varint)
 //        let sizes_size = self.read_varint(&mut buf)?;
 //        
 //        if buf.remaining() < sizes_size as usize {
-//            return Err(RiegeliError::Corruption("Truncated sizes buffer".to_string()));
+//            return Err(DiskyError::Corruption("Truncated sizes buffer".to_string()));
 //        }
 //        
 //        // Extract sizes buffer
@@ -429,7 +429,7 @@
 //        
 //        loop {
 //            if buf.remaining() < 1 {
-//                return Err(RiegeliError::Corruption("Truncated varint".to_string()));
+//                return Err(DiskyError::Corruption("Truncated varint".to_string()));
 //            }
 //            
 //            let byte = buf.get_u8();
@@ -441,7 +441,7 @@
 //            
 //            shift += 7;
 //            if shift >= 64 {
-//                return Err(RiegeliError::Corruption("Varint too long".to_string()));
+//                return Err(DiskyError::Corruption("Varint too long".to_string()));
 //            }
 //        }
 //        
@@ -451,7 +451,7 @@
 //    /// Returns the position of the last read record.
 //    pub fn last_pos(&self) -> Result<RecordPosition> {
 //        if self.record_index == 0 {
-//            return Err(RiegeliError::Other("No record has been read".to_string()));
+//            return Err(DiskyError::Other("No record has been read".to_string()));
 //        }
 //        
 //        Ok(RecordPosition::new(self.chunk_begin, self.record_index - 1))
@@ -465,7 +465,7 @@
 //    /// Seeks to a record position.
 //    pub fn seek(&mut self, pos: RecordPosition) -> Result<()> {
 //        if self.closed {
-//            return Err(RiegeliError::Other("Reader is closed".to_string()));
+//            return Err(DiskyError::Other("Reader is closed".to_string()));
 //        }
 //        
 //        // If we're already at the right chunk and the record is in range,
@@ -489,7 +489,7 @@
 //        
 //        // Check if the record index is valid
 //        if pos.record_index >= self.num_records {
-//            return Err(RiegeliError::Other("Invalid record index".to_string()));
+//            return Err(DiskyError::Other("Invalid record index".to_string()));
 //        }
 //        
 //        // Set the record index and data offset

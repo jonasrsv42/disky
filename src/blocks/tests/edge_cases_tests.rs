@@ -133,7 +133,7 @@ fn test_error_propagation() {
     assert!(result.is_err(), "Expected an error but got success");
 
     match result {
-        Err(crate::error::RiegeliError::Io(_)) => {
+        Err(crate::error::DiskyError::Io(_)) => {
             // This is the expected error type
             // Now verify we can obtain the partial data
             let sink = writer.get_ref();
@@ -171,7 +171,7 @@ fn test_failure_during_header_write() {
     assert!(result.is_err(), "Expected an error but got success");
 
     match result {
-        Err(crate::error::RiegeliError::Io(_)) => {
+        Err(crate::error::DiskyError::Io(_)) => {
             // Verify the state of the writer
             let sink = writer.get_ref();
             assert_eq!(
@@ -205,7 +205,7 @@ fn test_flush_error_handling() {
     assert!(result.is_err(), "Expected flush to fail");
 
     match result {
-        Err(crate::error::RiegeliError::Io(_)) => {
+        Err(crate::error::DiskyError::Io(_)) => {
             // Expected error type
             // Check that data was written correctly despite flush error
             let sink = writer.get_ref();
@@ -317,7 +317,7 @@ fn test_incremental_writing() {
         if let Err(e) = result {
             // Handle the error - in a real app, we'd record where we got to
             match e {
-                crate::error::RiegeliError::Io(_) => {
+                crate::error::DiskyError::Io(_) => {
                     had_error = true;
                     break;
                 }

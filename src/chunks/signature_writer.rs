@@ -32,7 +32,7 @@
 use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::chunks::ChunkWriter;
-use crate::error::{Result, RiegeliError};
+use crate::error::{Result, DiskyError};
 
 /// The chunk header portion of the Riegeli file signature (40 bytes).
 ///
@@ -97,10 +97,10 @@ impl SignatureWriter {
     /// # Returns
     ///
     /// * `Ok(Bytes)` - A `Bytes` object containing the 40-byte signature header
-    /// * `Err(RiegeliError)` - If the signature has already been written
+    /// * `Err(DiskyError)` - If the signature has already been written
     pub fn try_serialize_chunk(&mut self) -> Result<Bytes> {
         if self.signature_written {
-            return Err(RiegeliError::Other(
+            return Err(DiskyError::Other(
                 "Signature has already been written. The signature chunk should only be written once at the beginning of a file.".to_string()
             ));
         }
@@ -140,7 +140,7 @@ impl ChunkWriter for SignatureWriter {
 mod tests {
     use crate::chunks::header_writer::{ChunkType, write_chunk_header};
     use crate::chunks::signature_writer::{SignatureWriter, FILE_SIGNATURE_HEADER};
-    use crate::error::RiegeliError;
+    use crate::error::DiskyError;
     use crate::hash::highway_hash;
 
     #[test]
@@ -166,10 +166,10 @@ mod tests {
         let result = writer.try_serialize_chunk();
         assert!(result.is_err());
         
-        if let Err(RiegeliError::Other(msg)) = result {
+        if let Err(DiskyError::Other(msg)) = result {
             assert!(msg.contains("Signature has already been written"));
         } else {
-            panic!("Expected RiegeliError::Other, got: {:?}", result);
+            panic!("Expected DiskyError::Other, got: {:?}", result);
         }
     }
     

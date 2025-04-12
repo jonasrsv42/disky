@@ -1,4 +1,4 @@
-use crate::error::{Result, RiegeliError};
+use crate::error::{Result, DiskyError};
 use bytes::{Buf, Bytes};
 use bytes::{BufMut, BytesMut};
 ///
@@ -22,7 +22,7 @@ pub fn read_vu64(buf: &mut Bytes) -> Result<u64> {
 
     loop {
         if buf.remaining() < 1 {
-            return Err(RiegeliError::Corruption("Truncated varint".to_string()));
+            return Err(DiskyError::Corruption("Truncated varint".to_string()));
         }
 
         let byte = buf.get_u8();
@@ -34,7 +34,7 @@ pub fn read_vu64(buf: &mut Bytes) -> Result<u64> {
 
         shift += 7;
         if shift >= 64 {
-            return Err(RiegeliError::Corruption("Varint too long".to_string()));
+            return Err(DiskyError::Corruption("Varint too long".to_string()));
         }
     }
 

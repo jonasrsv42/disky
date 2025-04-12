@@ -1,6 +1,6 @@
 //! Common utilities and constants for Riegeli block operations.
 
-use crate::error::{Result, RiegeliError};
+use crate::error::{Result, DiskyError};
 
 /// The size of a block header in bytes.
 /// Always 24 bytes: 8 for header_hash, 8 for previous_chunk, 8 for next_chunk.
@@ -24,7 +24,7 @@ pub const DEFAULT_BLOCK_SIZE: u64 = 1 << 16;
 /// * `Result<()>` - Ok if valid, or an error explaining why it's invalid
 pub fn validate_block_size(block_size: u64) -> Result<()> {
     if block_size < BLOCK_HEADER_SIZE * 2 {
-        return Err(RiegeliError::Other(
+        return Err(DiskyError::Other(
             format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
                     block_size, BLOCK_HEADER_SIZE)
         ));
@@ -97,20 +97,20 @@ pub fn validate_header_values(
     let usable_size = usable_block_size(block_size);
     
     if previous_chunk % block_size >= usable_size {
-        return Err(RiegeliError::Corruption(format!(
+        return Err(DiskyError::Corruption(format!(
             "Invalid previous_chunk value: {} % {} >= {}", 
             previous_chunk, block_size, usable_size
         )));
     }
     
     if next_chunk == 0 {
-        return Err(RiegeliError::Corruption(
+        return Err(DiskyError::Corruption(
             "Invalid next_chunk value: cannot be zero".to_string()
         ));
     }
     
     if (next_chunk - 1) % block_size < BLOCK_HEADER_SIZE {
-        return Err(RiegeliError::Corruption(format!(
+        return Err(DiskyError::Corruption(format!(
             "Invalid next_chunk value: ({} - 1) % {} < {}", 
             next_chunk, block_size, BLOCK_HEADER_SIZE
         )));

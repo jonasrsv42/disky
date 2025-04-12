@@ -23,7 +23,7 @@ use crate::blocks::writer::{BlockWriter, BlockWriterConfig};
 use crate::chunks::{ChunkWriter, SimpleChunkWriter};
 use crate::chunks::signature_writer::SignatureWriter;
 use crate::compression::CompressionType;
-use crate::error::{Result, RiegeliError};
+use crate::error::{Result, DiskyError};
 
 /// Configuration options for a RecordWriter.
 #[derive(Debug, Clone)]
@@ -163,7 +163,7 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
     /// Writes the Riegeli file signature.
     fn write_file_signature(&mut self) -> Result<()> {
         if self.state != WriterState::New {
-            return Err(RiegeliError::Other(
+            return Err(DiskyError::Other(
                 "File signature has already been written".to_string()
             ));
         }
@@ -197,7 +197,7 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
     /// * `Result<()>` - Success or an error if the write failed
     pub fn write_record(&mut self, record: &[u8]) -> Result<()> {
         if self.state == WriterState::Closed {
-            return Err(RiegeliError::WritingClosedFile);
+            return Err(DiskyError::WritingClosedFile);
         }
         
         // Add the record to the chunk and get current records size

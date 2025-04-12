@@ -19,7 +19,7 @@
 
 use bytes::{BufMut, Bytes, BytesMut};
 use crate::hash::highway_hash;
-use crate::error::{Result, RiegeliError};
+use crate::error::{Result, DiskyError};
 
 /// The size of the Riegeli chunk header in bytes.
 pub const CHUNK_HEADER_SIZE: usize = 40;
@@ -97,7 +97,7 @@ pub fn write_chunk_header(
 ) -> Result<Bytes> {
     // Check num_records limit before allocating any memory
     if num_records > 0x00FF_FFFF_FFFF_FFFF {
-        return Err(RiegeliError::Other(
+        return Err(DiskyError::Other(
             format!("num_records ({}) exceeds maximum allowed value (0x00FFFFFFFFFFFFFF)", num_records)
         ));
     }
@@ -255,7 +255,7 @@ mod tests {
         );
         
         assert!(result.is_err());
-        if let Err(RiegeliError::Other(msg)) = result {
+        if let Err(DiskyError::Other(msg)) = result {
             assert!(msg.contains("num_records"));
             assert!(msg.contains("exceeds maximum allowed value"));
         } else {

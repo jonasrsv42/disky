@@ -1,5 +1,5 @@
 use crate::blocks::utils::{self, BLOCK_HEADER_SIZE, DEFAULT_BLOCK_SIZE};
-use crate::error::{Result, RiegeliError};
+use crate::error::{Result, DiskyError};
 use crate::hash::highway_hash;
 use bytes::{Bytes, BytesMut};
 use std::cmp::min;
@@ -45,7 +45,7 @@ struct BlockHeader {
     next_chunk: u64,
 }
 
-/// Reader for Riegeli blocks that handles block boundary interruptions.
+/// Reader for Disky blocks that handles block boundary interruptions.
 ///
 /// According to the Riegeli specification, a chunk of logical data can be interrupted by
 /// a block header at any block boundary. This reader handles those interruptions by
@@ -139,7 +139,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         let bytes_read = self.source.read(&mut header_bytes)?;
         
         if bytes_read < header_bytes.len() {
-            return Err(RiegeliError::UnexpectedEof);
+            return Err(DiskyError::UnexpectedEof);
         }
 
         // Extract header components
@@ -163,7 +163,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         let calculated_hash = highway_hash(content);
         
         if calculated_hash != header_hash {
-            return Err(RiegeliError::BlockHeaderHashMismatch);
+            return Err(DiskyError::BlockHeaderHashMismatch);
         }
 
         // Validate header values 
@@ -248,7 +248,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         
         // Verify previous_chunk is consistent (should be 0 at start of chunk)
         if header.previous_chunk != 0 {
-            return Err(RiegeliError::Corruption(format!(
+            return Err(DiskyError::Corruption(format!(
                 "Expected previous_chunk=0 at the beginning of a chunk, got {}", 
                 header.previous_chunk
             )));
@@ -286,7 +286,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         
         if bytes_read == 0 {
             if self.buffer.is_empty() {
-                return Err(RiegeliError::UnexpectedEof);
+                return Err(DiskyError::UnexpectedEof);
             }
             return Ok(self.buffer.split().freeze());
         }
@@ -312,7 +312,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 // Verify the previous_chunk value is consistent
                 let expected_previous_chunk = self.pos - BLOCK_HEADER_SIZE - self.chunk_begin;
                 if header.previous_chunk != expected_previous_chunk {
-                    return Err(RiegeliError::Corruption(format!(
+                    return Err(DiskyError::Corruption(format!(
                         "Block header previous_chunk value mismatch: expected {}, got {}",
                         expected_previous_chunk, header.previous_chunk
                     )));
@@ -349,7 +349,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 // Verify the previous_chunk value is consistent
                 let expected_previous_chunk = self.pos - BLOCK_HEADER_SIZE - self.chunk_begin;
                 if header.previous_chunk != expected_previous_chunk {
-                    return Err(RiegeliError::Corruption(format!(
+                    return Err(DiskyError::Corruption(format!(
                         "Block header previous_chunk value mismatch: expected {}, got {}",
                         expected_previous_chunk, header.previous_chunk
                     )));
@@ -369,7 +369,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
             
             if bytes_read == 0 {
                 // End of file reached unexpectedly
-                return Err(RiegeliError::UnexpectedEof);
+                return Err(DiskyError::UnexpectedEof);
             }
             
             // Update remaining size

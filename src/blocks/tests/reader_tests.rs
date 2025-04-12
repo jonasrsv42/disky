@@ -4,7 +4,7 @@ use super::super::reader::{BlockReader, BlockReaderConfig};
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use bytes::Bytes;
-use crate::error::RiegeliError;
+use crate::error::DiskyError;
 use std::io::Cursor;
 
 /// Helper function to create a test file with specific data
@@ -277,7 +277,7 @@ fn test_multiple_chunks_in_single_block() {
         Err(e) => {
             // An EOF error is acceptable at the end of the file
             match e {
-                RiegeliError::UnexpectedEof => {
+                DiskyError::UnexpectedEof => {
                     // This is expected, we've reached the end of the file
                     println!("Got expected EOF on third read");
                 },

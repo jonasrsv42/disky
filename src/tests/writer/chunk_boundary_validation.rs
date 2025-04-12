@@ -36,7 +36,7 @@ use crate::writer::{RecordWriter, RecordWriterConfig};
 fn test_chunk_boundary_formula_validation() {
     // Create a file with multiple block boundaries
     let block_size = 128; // Small block size for testing
-    let usable_block_size = block_size - BLOCK_HEADER_SIZE;
+    // No need to calculate usable_block_size here as it's not used in this test
     
     // Create the writer with small block size
     let cursor = Cursor::new(Vec::new());

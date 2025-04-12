@@ -15,6 +15,7 @@ pub fn write_vu64(value: u64, buffer: &mut BytesMut) {
 
 /// Reads the next varint encoded u64
 #[inline]
+#[allow(dead_code)] // This will be used in future reader implementations
 pub fn read_vu64(buf: &mut Bytes) -> Result<u64> {
     let mut result: u64 = 0;
     let mut shift: u32 = 0;

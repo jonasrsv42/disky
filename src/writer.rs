@@ -295,17 +295,17 @@ impl<Sink: Write + Seek> Drop for RecordWriter<Sink> {
 #[cfg(test)]
 impl<Sink: Write + Seek> RecordWriter<Sink> {
     /// Get the current writer state (testing only)
-    pub fn get_state(&self) -> &WriterState {
+    pub(crate) fn get_state(&self) -> &WriterState {
         &self.state
     }
     
     /// Get a reference to the block writer (testing only)
-    pub fn get_block_writer(&self) -> &BlockWriter<Sink> {
+    pub(crate) fn get_block_writer(&self) -> &BlockWriter<Sink> {
         &self.block_writer
     }
     
     /// Set the writer state (testing only)
-    pub fn set_state(&mut self, state: WriterState) {
+    pub(crate) fn set_state(&mut self, state: WriterState) {
         self.state = state;
     }
 }

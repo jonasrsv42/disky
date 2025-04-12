@@ -52,6 +52,25 @@ struct BlockHeader {
 /// automatically skipping block headers at the appropriate positions and reconstructing
 /// the original data.
 ///
+/// # Important Limitation
+///
+/// This reader handles the Riegeli block format, which has some important behaviors to understand:
+/// 
+/// 1. When reading at a block boundary, the reader uses the block header information to
+///    read exactly one logical chunk, as defined by the BlockWriter when `write_chunk()` was called.
+///
+/// 2. When reading in the middle of a block (not at a boundary), the reader reads all data
+///    up to the next block boundary. This means:
+///    - If multiple chunks fit within a block after the first chunk, they will all be returned
+///      together in a single Bytes object on the next read.
+///    - There's no way to separate individual chunks within this data without additional
+///      chunk-level parsing.
+///
+/// For proper chunk separation, you need to use a higher-level chunk reader that understands
+/// the chunk format (e.g., simple chunks, transposed chunks) which will include size
+/// information. The chunk parser will need to process the Bytes returned by this reader
+/// to separate and extract individual chunks.
+///
 /// # Structure of Riegeli Files
 ///
 /// Riegeli files consist of a sequence of blocks, each starting with a 24-byte block header
@@ -190,11 +209,16 @@ impl<Source: Read + Seek> BlockReader<Source> {
         Ok(bytes_read)
     }
 
-    /// Reads a complete chunk of data, handling block headers.
+    /// Reads chunks data, handling block headers.
     ///
     /// This method reads from the current position, skipping any block headers
-    /// it encounters, until it has read a complete chunk.
-    pub fn read_chunk(&mut self) -> Result<Bytes> {
+    /// it encounters, until it has read all of the chunks from a logical section of
+    /// the file. Note that this may return data containing multiple logical chunks 
+    /// if they are stored within a single block.
+    ///
+    /// The returned data needs to be processed by a higher-level chunk parser to
+    /// extract individual chunks based on their specific format.
+    pub fn read_chunks(&mut self) -> Result<Bytes> {
         // Update position and clear buffer for new chunk
         self.update_position()?;
         self.buffer.clear();
@@ -204,21 +228,21 @@ impl<Source: Read + Seek> BlockReader<Source> {
         
         // Start reading the chunk
         if self.is_block_boundary(self.pos) {
-            self.read_chunk_at_boundary()
+            self.read_chunks_at_boundary()
         } else {
-            self.read_chunk_mid_block()
+            self.read_chunks_mid_block()
         }
     }
 
-    /// Reads a chunk starting at a block boundary.
+    /// Reads chunks starting at a block boundary.
     ///
-    /// This is called when we're at a block boundary and we need to read a new chunk.
-    /// The block header tells us how far to read for the complete chunk.
+    /// This is called when we're at a block boundary and we need to read new chunks.
+    /// The block header tells us how far to read for the complete data section.
     ///
     /// # Returns
     ///
     /// * `Result<Bytes>` - The complete chunk data, or an error
-    fn read_chunk_at_boundary(&mut self) -> Result<Bytes> {
+    fn read_chunks_at_boundary(&mut self) -> Result<Bytes> {
         // Read the block header
         let header = self.read_block_header()?;
         
@@ -240,7 +264,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         Ok(self.buffer.split().freeze())
     }
 
-    /// Reads a chunk when we're in the middle of a block.
+    /// Reads chunks when we're in the middle of a block.
     ///
     /// This is called when our current position is not at a block boundary,
     /// so we need to read until the next block boundary and then use the header
@@ -249,7 +273,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
     /// # Returns
     ///
     /// * `Result<Bytes>` - The complete chunk data, or an error
-    fn read_chunk_mid_block(&mut self) -> Result<Bytes> {
+    fn read_chunks_mid_block(&mut self) -> Result<Bytes> {
         // Since this can be the end of a chunk, we might just need to return what we have
         // If there's no remaining data to read, just return the current buffer
         if self.buffer.len() > 0 {
@@ -355,12 +379,12 @@ impl<Source: Read + Seek> BlockReader<Source> {
         Ok(())
     }
 
-    /// Skips the current chunk and moves to the beginning of the next chunk.
+    /// Skips the current chunks and moves to the beginning of the next block section.
     ///
-    /// This is useful for error recovery when a chunk is corrupted.
-    pub fn skip_chunk(&mut self) -> Result<()> {
-        // Read the current chunk to determine its end position
-        let _chunk = self.read_chunk()?;
+    /// This is useful for error recovery when chunks are corrupted.
+    pub fn skip_chunks(&mut self) -> Result<()> {
+        // Read the current chunks to determine their end position
+        let _chunks = self.read_chunks()?;
         
         // Clear the buffer for the next chunk
         self.buffer.clear();

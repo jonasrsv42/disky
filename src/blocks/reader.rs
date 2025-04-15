@@ -37,12 +37,38 @@ impl BlockReaderConfig {
 }
 
 /// Represents a block header in the Riegeli format.
+#[derive(Clone)]
 struct BlockHeader {
     /// Distance from the beginning of the chunk to the beginning of the block.
     previous_chunk: u64,
 
     /// Distance from the beginning of the block to the end of the chunk.
     next_chunk: u64,
+}
+
+/// State for block reader
+#[derive(Clone)]
+enum BlockReaderState {
+    /// Reader is reading fresh chunks.
+    Fresh,
+    /// We just read a [BlockHeader]
+    ReadHeader(BlockHeader),
+    /// We just read a header with inconsistent header hash.
+    /// This likely implies a corruped header and possibly corrupted
+    /// block, therefore possibly corrupted chunks, so safeway forward is
+    /// to skip current chunks.
+    ReadCorruptedHeader(BlockHeader),
+
+    /// Read a block header which disagrees about when previous chunk
+    /// begins. This is likely due to a corruption of the current chunk and
+    /// a suprise begin of a new chunk. We should trust the new block header
+    /// and assume that the new chunk indeed begins where it indicates.
+    ReadHeaderPreviousChunkInconsistency(BlockHeader),
+
+    /// We have reached EOF.
+    EOF,
+    /// Actively reading a section of chunks.
+    Active,
 }
 
 /// Reader for Disky blocks that handles block boundary interruptions.
@@ -93,6 +119,9 @@ pub struct BlockReader<Source: Read + Seek> {
 
     /// Buffer for storing chunk data that has been read.
     buffer: BytesMut,
+
+    /// State of the reader
+    state: BlockReaderState,
 }
 
 impl<Source: Read + Seek> BlockReader<Source> {
@@ -111,6 +140,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
             pos,
             chunk_begin: pos,
             buffer: BytesMut::new(),
+            state: BlockReaderState::Fresh,
         })
     }
 
@@ -139,6 +169,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         let bytes_read = self.source.read(&mut header_bytes)?;
 
         if bytes_read < header_bytes.len() {
+            self.state = BlockReaderState::EOF;
             return Err(DiskyError::UnexpectedEof);
         }
 
@@ -176,24 +207,31 @@ impl<Source: Read + Seek> BlockReader<Source> {
             header_bytes[23],
         ]);
 
+        // Update position
+        self.pos += BLOCK_HEADER_SIZE;
+
         // Verify header hash
         let content = &header_bytes[8..24];
         let calculated_hash = highway_hash(content);
 
+        let block_header = BlockHeader {
+            previous_chunk,
+            next_chunk,
+        };
+
         if calculated_hash != header_hash {
+            self.state = BlockReaderState::ReadCorruptedHeader(block_header);
             return Err(DiskyError::BlockHeaderHashMismatch);
         }
 
         // Validate header values
-        utils::validate_header_values(previous_chunk, next_chunk, self.config.block_size)?;
+        utils::validate_header_values(
+            block_header.previous_chunk,
+            block_header.next_chunk,
+            self.config.block_size,
+        )?;
 
-        // Update position
-        self.pos += BLOCK_HEADER_SIZE;
-
-        Ok(BlockHeader {
-            previous_chunk,
-            next_chunk,
-        })
+        Ok(block_header)
     }
 
     /// Reads a block of data up to the next block boundary or specified limit.
@@ -237,19 +275,106 @@ impl<Source: Read + Seek> BlockReader<Source> {
     /// The returned data needs to be processed by a higher-level chunk parser to
     /// extract individual chunks based on their specific format.
     pub fn read_chunks(&mut self) -> Result<Bytes> {
-        // Update position and clear buffer for new chunks
-        self.update_position()?;
-        self.buffer.clear();
+        // Get previous state.
+        let state = self.state.clone();
 
-        // Mark the beginning of this chunk
-        self.chunk_begin = self.pos;
+        match &state {
+            BlockReaderState::Fresh | BlockReaderState::ReadHeader(_) => {
+                // Set state that we are now actively reading active reading.
+                self.state = BlockReaderState::Active;
+                // Clear buffer to make space for new chunks.
+                self.buffer.clear();
+                // Update our cursors position.
+                self.update_position()?;
+            }
+            _ => (),
+        }
 
-        // Start reading the chunk
+        match &state {
+            BlockReaderState::Fresh => {
+
+                self.chunk_begin = self.pos;
+                self.read_new_chunks()
+            }
+            BlockReaderState::ReadHeader(block_header) => {
+                // We previously read a block header delimiting a new chunk. 
+                // Now we read that new chunk which began BLOCK_HEADER_SIZE ago.
+                self.chunk_begin = self.pos - BLOCK_HEADER_SIZE;
+                self.read_from_header_with_check(block_header)
+            }
+            // Need to call `recover` before trying to read again.
+            BlockReaderState::ReadCorruptedHeader(_) | BlockReaderState::ReadHeaderPreviousChunkInconsistency(_) => Err(
+                DiskyError::Corruption(
+                    "Attemping to `read_chunks` on a corrupted reader. Try to call `recover` before reading again. This is likely a bug in `disky` if observed.".to_string()
+                    )
+                ),
+
+            BlockReaderState::EOF => Err(DiskyError::Other("Cannot read after EOF.".to_string())),
+
+            // We do not know how to recover from this. Please look in logs to see how we ended up
+            // trying to read again while we're in an active reading stage.
+            // Maybe a race condition?
+            BlockReaderState::Active => Err(DiskyError::UnrecoverableCorruption(
+                "Unrecoverable, how did you get here? This could be a race-condition or bug in disky, note that the base disky reader is not thread-safe on its own.".to_string(),
+            )),
+        }
+    }
+
+    /// Read as if we're at the start of a new chunk.
+    fn read_new_chunks(&mut self) -> Result<Bytes> {
         if self.is_block_boundary(self.pos) {
             self.read_from_boundary()
         } else {
             self.read_from_within()
         }
+    }
+
+    fn read_from_header_with_check(&mut self, header: &BlockHeader) -> Result<Bytes> {
+        self.verify_expected_previous_chunk(header)?;
+        self.read_from_header(header)
+    }
+
+    fn verify_expected_previous_chunk(&mut self, header: &BlockHeader) -> Result<()> {
+        let expected_previous_chunk = self.pos - BLOCK_HEADER_SIZE - self.chunk_begin;
+        if header.previous_chunk != expected_previous_chunk {
+            self.state = BlockReaderState::ReadHeaderPreviousChunkInconsistency(header.clone());
+            return Err(DiskyError::Corruption(format!(
+                "Block header previous_chunk value mismatch: expected {}, got {}",
+                expected_previous_chunk, header.previous_chunk
+            )));
+        }
+        Ok(())
+    }
+
+    /// Read from right after a block header
+    fn read_from_header(&mut self, header: &BlockHeader) -> Result<Bytes> {
+        // We can't reliably check `expected_previous_chunk` here, since there
+        // may have been > 1 chunk read up until this point.
+
+        // Check if this is a continuation of an existing chunk or the start of a new chunk
+        // If previous_chunk is 0, this is the start of a new chunk
+        // otherwise, it's a continuation of the current chunk
+        let is_continuation = header.previous_chunk > 0;
+
+        // If we already have data in the buffer and this header indicates a new chunk,
+        // return the data we have so far without reading further
+        if !self.buffer.is_empty() && !is_continuation {
+            // Set current state to being [ReadHeader] so that we resume
+            // from that next time.
+            self.state = BlockReaderState::ReadHeader(header.clone());
+            // We've completed a chunk that ended exactly at a block boundary,
+            // and the next block contains a new chunk
+            return Ok(self.buffer.split().freeze());
+        }
+
+        // Determine the size remaining of the chunk.
+        let chunk_size = header.next_chunk - BLOCK_HEADER_SIZE;
+
+        // Read the chunk data, handling any additional headers
+        self.read_complete_chunk_data(chunk_size)?;
+
+        // Return the completed chunk
+        Ok(self.buffer.split().freeze())
     }
 
     /// Reads chunks starting at a block boundary.
@@ -264,30 +389,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         // Read the block header
         let header = self.read_block_header()?;
 
-        // We can't reliably check `expected_previous_chunk` here, since there 
-        // may have been > 1 chunk read up until this point.
-
-        // Check if this is a continuation of an existing chunk or the start of a new chunk
-        // If previous_chunk is 0, this is the start of a new chunk
-        // otherwise, it's a continuation of the current chunk
-        let is_continuation = header.previous_chunk > 0;
-        
-        // If we already have data in the buffer and this header indicates a new chunk,
-        // return the data we have so far without reading further
-        if !self.buffer.is_empty() && !is_continuation {
-            // We've completed a chunk that ended exactly at a block boundary,
-            // and the next block contains a new chunk
-            return Ok(self.buffer.split().freeze());
-        }
-
-        // Determine the size remaining of the chunk.
-        let chunk_size = header.next_chunk - BLOCK_HEADER_SIZE;
-
-        // Read the chunk data, handling any additional headers
-        self.read_complete_chunk_data(chunk_size)?;
-
-        // Return the completed chunk
-        Ok(self.buffer.split().freeze())
+        self.read_from_header(&header)
     }
 
     /// Reads chunks when we're within a block.
@@ -306,6 +408,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         if bytes_read == 0 {
             if self.buffer.is_empty() {
+                self.state = BlockReaderState::EOF;
                 return Err(DiskyError::UnexpectedEof);
             }
             return Ok(self.buffer.split().freeze());
@@ -315,6 +418,9 @@ impl<Source: Read + Seek> BlockReader<Source> {
         if self.is_block_boundary(self.pos) {
             return self.read_from_boundary();
         }
+
+        // Indicate successful read of complete chunks.
+        self.state = BlockReaderState::Fresh;
 
         // Return the completed chunk
         Ok(self.buffer.split().freeze())
@@ -337,13 +443,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 let header = self.read_block_header()?;
 
                 // Verify the previous_chunk value is consistent
-                let expected_previous_chunk = self.pos - BLOCK_HEADER_SIZE - self.chunk_begin;
-                if header.previous_chunk != expected_previous_chunk {
-                    return Err(DiskyError::Corruption(format!(
-                        "Block header previous_chunk value mismatch: expected {}, got {}",
-                        expected_previous_chunk, header.previous_chunk
-                    )));
-                }
+                self.verify_expected_previous_chunk(&header)?;
 
                 // Update remaining size based on next_chunk if needed
                 remaining_size = header.next_chunk - BLOCK_HEADER_SIZE;
@@ -356,6 +456,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
             if bytes_read == 0 {
                 // End of file reached unexpectedly
+                self.state = BlockReaderState::EOF;
                 return Err(DiskyError::UnexpectedEof);
             }
 
@@ -363,24 +464,30 @@ impl<Source: Read + Seek> BlockReader<Source> {
             remaining_size -= bytes_read as u64;
         }
 
+        self.state = BlockReaderState::Fresh;
         Ok(())
     }
 
-    /// Skips the current chunks and moves to the beginning of the next block section.
-    ///
-    /// This is useful for error recovery when chunks are corrupted.
-    pub fn skip_chunks(&mut self) -> Result<()> {
-        // Read the current chunks to determine their end position
-        let _chunks = self.read_chunks()?;
+    /// Attempt to recover from a corrupted state. We will attempt to transition
+    /// to a non-corruped reader state.
+    pub fn recover(&mut self) -> Result<()> {
+        let state = self.state.clone();
 
-        // Clear the buffer for the next chunk
-        self.buffer.clear();
+        match &state {
+            // We are not corrupted, recover is no-op.
+            BlockReaderState::Fresh => Ok(()),
+            // We are not corrupted, recover is no-op.
+            BlockReaderState::ReadHeader(_block_header) => Ok(()),
+            BlockReaderState::ReadCorruptedHeader(_block_header) => todo!(),
+            BlockReaderState::ReadHeaderPreviousChunkInconsistency(_block_header) => todo!(),
+            BlockReaderState::EOF => Err(DiskyError::Other("Cannot recover from `EOF`.".to_string())),
 
-        // Start fresh at current position
-        self.update_position()?;
-        self.chunk_begin = self.pos;
-
-        Ok(())
+            // We do not know how to recover from this. Please look in logs to see how we ended up
+            // trying to recover during active reading, maybe a race condition?
+            BlockReaderState::Active => Err(DiskyError::UnrecoverableCorruption(
+                "Cannot recover from `Active` reading state.".to_string(),
+            )),
+        }
     }
 
     /// Returns the current position in the file.
@@ -408,4 +515,3 @@ impl<Source: Read + Seek> BlockReader<Source> {
         self.source
     }
 }
-

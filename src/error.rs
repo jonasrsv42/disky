@@ -44,6 +44,10 @@ pub enum DiskyError {
     #[error("File corruption: {0}")]
     Corruption(String),
 
+    /// The file is corrupt and cannot be recovered.
+    #[error("Unrecoverable file corruption: {0}")]
+    UnrecoverableCorruption(String),
+
     /// Unsupported compression type.
     #[error("Unsupported compression type: {0}")]
     UnsupportedCompressionType(u8),

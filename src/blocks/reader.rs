@@ -285,7 +285,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         match &state {
             BlockReaderState::Fresh | BlockReaderState::ReadHeader(_) => {
-                // Set state that we are now actively reading active reading.
+                // Set state that we are now actively reading.
                 self.state = BlockReaderState::Active;
                 // Clear buffer to make space for new chunks.
                 self.buffer.clear();
@@ -310,19 +310,19 @@ impl<Source: Read + Seek> BlockReader<Source> {
             // Need to call `recover` before trying to read again.
             BlockReaderState::ReadCorruptedHeader(_) | BlockReaderState::ReadHeaderPreviousChunkInconsistency(_) => Err(
                 DiskyError::Corruption(
-                    "Attemping to `read_chunks` on a corrupted reader. Try to call `recover` before reading again. This is likely a bug in `disky` if observed.".to_string()
+                    "Attemping to `read_chunks` on a corrupted reader. Try to call `recover` before reading again.".to_string()
                     )
                 ),
 
             BlockReaderState::EOF => Err(DiskyError::Other("Cannot read after EOF.".to_string())),
             BlockReaderState::ReadInvalidHeader => Err(DiskyError::UnrecoverableCorruption(
-                    "Cannot `read_chunks` after having read an invalid header. Look in logs, must be some bug in the writer.".to_string())),
+                    "Cannot `read_chunks` after having read an invalid header.".to_string())),
 
             // We do not know how to recover from this. Please look in logs to see how we ended up
             // trying to read again while we're in an active reading stage.
             // Maybe a race condition?
-            BlockReaderState::Active => Err(DiskyError::UnrecoverableCorruption(
-                "Unrecoverable, how did you get here? This could be a race-condition or bug in disky, note that the base disky reader is not thread-safe on its own.".to_string(),
+            BlockReaderState::Active => Err(DiskyError::Other(
+                "Unrecoverable, how did you get here? This could be a race-condition, note that the base disky reader is not thread-safe on its own.".to_string(),
             )),
         }
     }
@@ -481,11 +481,13 @@ impl<Source: Read + Seek> BlockReader<Source> {
         let state = self.state.clone();
 
         match &state {
-            // We are not corrupted, recover is no-op.
+            // We are not corrupted, recover is invalid call here. We consider
+            // this an error to make it easy to catch logic errors causing this call.
             BlockReaderState::Fresh => Err(DiskyError::Other(
                 "Attempted to recover from a `Fresh` state.".to_string(),
             )),
-            // We are not corrupted, recover is no-op.
+            // We are not corrupted, recover is invalid call here. We consider
+            // this an error to make it easy to catch logic errors causing this call.
             BlockReaderState::ReadHeader(_block_header) => Err(DiskyError::Other(
                 "Attempted to recover from `ReadHeader` state".to_string(),
             )),
@@ -493,14 +495,15 @@ impl<Source: Read + Seek> BlockReader<Source> {
             BlockReaderState::ReadHeaderPreviousChunkInconsistency(_block_header) => todo!(),
             BlockReaderState::EOF => {
                 Err(DiskyError::Other("Cannot recover from `EOF`.".to_string()))
-            },
+            }
 
             BlockReaderState::ReadInvalidHeader => Err(DiskyError::UnrecoverableCorruption(
-                    "Cannot `recover` from an invalid header. Look in logs, must be some bug in the writer.".to_string())),
+                "Cannot `recover` from an invalid header.".to_string(),
+            )),
 
             // We do not know how to recover from this. Please look in logs to see how we ended up
             // trying to recover during active reading, maybe a race condition?
-            BlockReaderState::Active => Err(DiskyError::UnrecoverableCorruption(
+            BlockReaderState::Active => Err(DiskyError::Other(
                 "Cannot recover from `Active` reading state.".to_string(),
             )),
         }

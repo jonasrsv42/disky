@@ -65,6 +65,8 @@ enum BlockReaderState {
     /// and assume that the new chunk indeed begins where it indicates.
     ReadHeaderPreviousChunkInconsistency(BlockHeader),
 
+    ReadInvalidHeader,
+
     /// We have reached EOF.
     EOF,
     /// Actively reading a section of chunks.
@@ -224,14 +226,17 @@ impl<Source: Read + Seek> BlockReader<Source> {
             return Err(DiskyError::BlockHeaderHashMismatch);
         }
 
-        // Validate header values
-        utils::validate_header_values(
+        match utils::validate_header_values(
             block_header.previous_chunk,
             block_header.next_chunk,
             self.config.block_size,
-        )?;
-
-        Ok(block_header)
+        ) {
+            Ok(_) => Ok(block_header),
+            Err(err) => {
+                self.state = BlockReaderState::ReadInvalidHeader;
+                Err(err)
+            }
+        }
     }
 
     /// Reads a block of data up to the next block boundary or specified limit.
@@ -310,6 +315,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 ),
 
             BlockReaderState::EOF => Err(DiskyError::Other("Cannot read after EOF.".to_string())),
+            BlockReaderState::ReadInvalidHeader => Err(DiskyError::UnrecoverableCorruption(
+                    "Cannot `read_chunks` after having read an invalid header. Look in logs, must be some bug in the writer.".to_string())),
 
             // We do not know how to recover from this. Please look in logs to see how we ended up
             // trying to read again while we're in an active reading stage.
@@ -475,12 +482,21 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         match &state {
             // We are not corrupted, recover is no-op.
-            BlockReaderState::Fresh => Ok(()),
+            BlockReaderState::Fresh => Err(DiskyError::Other(
+                "Attempted to recover from a `Fresh` state.".to_string(),
+            )),
             // We are not corrupted, recover is no-op.
-            BlockReaderState::ReadHeader(_block_header) => Ok(()),
+            BlockReaderState::ReadHeader(_block_header) => Err(DiskyError::Other(
+                "Attempted to recover from `ReadHeader` state".to_string(),
+            )),
             BlockReaderState::ReadCorruptedHeader(_block_header) => todo!(),
             BlockReaderState::ReadHeaderPreviousChunkInconsistency(_block_header) => todo!(),
-            BlockReaderState::EOF => Err(DiskyError::Other("Cannot recover from `EOF`.".to_string())),
+            BlockReaderState::EOF => {
+                Err(DiskyError::Other("Cannot recover from `EOF`.".to_string()))
+            },
+
+            BlockReaderState::ReadInvalidHeader => Err(DiskyError::UnrecoverableCorruption(
+                    "Cannot `recover` from an invalid header. Look in logs, must be some bug in the writer.".to_string())),
 
             // We do not know how to recover from this. Please look in logs to see how we ended up
             // trying to recover during active reading, maybe a race condition?

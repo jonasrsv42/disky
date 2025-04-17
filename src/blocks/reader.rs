@@ -3,7 +3,7 @@ use crate::error::{DiskyError, Result};
 use crate::hash::highway_hash;
 use bytes::{Bytes, BytesMut};
 use std::cmp::min;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 
 /// Configuration options for BlockReader.
 #[derive(Debug, Clone)]
@@ -114,7 +114,7 @@ pub struct BlockReader<Source: Read + Seek> {
     config: BlockReaderConfig,
 
     /// Current position in file.
-    pos: u64,
+    file_position: u64,
 
     /// Current chunk start position (used for calculating chunk boundaries)
     chunk_begin: u64,
@@ -134,13 +134,13 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
     /// Creates a new BlockReader with custom configuration.
     pub fn with_config(mut source: Source, config: BlockReaderConfig) -> Result<Self> {
-        let pos = source.stream_position()?;
+        let file_position = source.stream_position()?;
 
         Ok(Self {
             source,
             config,
-            pos,
-            chunk_begin: pos,
+            file_position,
+            chunk_begin: file_position,
             buffer: BytesMut::new(),
             state: BlockReaderState::Fresh,
         })
@@ -148,13 +148,13 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
     /// Updates the current position from the underlying source and returns it.
     fn update_position(&mut self) -> Result<u64> {
-        self.pos = self.source.stream_position()?;
-        Ok(self.pos)
+        self.file_position = self.source.stream_position()?;
+        Ok(self.file_position)
     }
 
     /// Checks if a position falls on a block boundary.
-    fn is_block_boundary(&self, pos: u64) -> bool {
-        utils::is_block_boundary(pos, self.config.block_size)
+    fn is_block_boundary(&self, file_position: u64) -> bool {
+        utils::is_block_boundary(file_position, self.config.block_size)
     }
 
     /// Reads a block header from the current position.
@@ -210,7 +210,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         ]);
 
         // Update position
-        self.pos += BLOCK_HEADER_SIZE;
+        self.file_position += BLOCK_HEADER_SIZE;
 
         // Verify header hash
         let content = &header_bytes[8..24];
@@ -250,7 +250,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
     /// * `Result<usize>` - Number of bytes read, or an error
     fn read_data_block(&mut self, max_bytes: u64) -> Result<usize> {
         // Calculate how much data we can read before the next block boundary
-        let to_next_boundary = utils::remaining_in_block(self.pos, self.config.block_size);
+        let to_next_boundary =
+            utils::remaining_in_block(self.file_position, self.config.block_size);
         let to_read = min(max_bytes, to_next_boundary) as usize;
 
         if to_read == 0 {
@@ -264,7 +265,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         if bytes_read > 0 {
             // Add to our buffer and update position
             self.buffer.extend_from_slice(&buf[..bytes_read]);
-            self.pos += bytes_read as u64;
+            self.file_position += bytes_read as u64;
         }
 
         Ok(bytes_read)
@@ -298,13 +299,13 @@ impl<Source: Read + Seek> BlockReader<Source> {
         match &state {
             BlockReaderState::Fresh => {
 
-                self.chunk_begin = self.pos;
+                self.chunk_begin = self.file_position;
                 self.read_new_chunks()
             }
             BlockReaderState::ReadHeader(block_header) => {
                 // We previously read a block header delimiting a new chunk. 
                 // Now we read that new chunk which began BLOCK_HEADER_SIZE ago.
-                self.chunk_begin = self.pos - BLOCK_HEADER_SIZE;
+                self.chunk_begin = self.file_position - BLOCK_HEADER_SIZE;
                 self.read_from_header_with_check(block_header)
             }
             // Need to call `recover` before trying to read again.
@@ -329,7 +330,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
     /// Read as if we're at the start of a new chunk.
     fn read_new_chunks(&mut self) -> Result<Bytes> {
-        if self.is_block_boundary(self.pos) {
+        if self.is_block_boundary(self.file_position) {
             self.read_from_boundary()
         } else {
             self.read_from_within()
@@ -342,7 +343,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
     }
 
     fn verify_expected_previous_chunk(&mut self, header: &BlockHeader) -> Result<()> {
-        let expected_previous_chunk = self.pos - BLOCK_HEADER_SIZE - self.chunk_begin;
+        let expected_previous_chunk = self.file_position - BLOCK_HEADER_SIZE - self.chunk_begin;
         if header.previous_chunk != expected_previous_chunk {
             self.state = BlockReaderState::ReadHeaderPreviousChunkInconsistency(header.clone());
             return Err(DiskyError::Corruption(format!(
@@ -410,7 +411,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
     /// * `Result<Bytes>` - The complete chunk data, or an error
     fn read_from_within(&mut self) -> Result<Bytes> {
         // Read until the next block boundary
-        let remaining_in_block = utils::remaining_in_block(self.pos, self.config.block_size);
+        let remaining_in_block =
+            utils::remaining_in_block(self.file_position, self.config.block_size);
         let bytes_read = self.read_data_block(remaining_in_block)?;
 
         if bytes_read == 0 {
@@ -422,7 +424,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         }
 
         // If we're at a block boundary, we read from the boundary.
-        if self.is_block_boundary(self.pos) {
+        if self.is_block_boundary(self.file_position) {
             return self.read_from_boundary();
         }
 
@@ -445,7 +447,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
     fn read_complete_chunk_data(&mut self, mut remaining_size: u64) -> Result<()> {
         while remaining_size > 0 {
             // Check if we're at a block boundary
-            if self.is_block_boundary(self.pos) {
+            if self.is_block_boundary(self.file_position) {
                 // Read the block header
                 let header = self.read_block_header()?;
 
@@ -492,7 +494,21 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 "Attempted to recover from `ReadHeader` state".to_string(),
             )),
             BlockReaderState::ReadCorruptedHeader(_block_header) => todo!(),
-            BlockReaderState::ReadHeaderPreviousChunkInconsistency(_block_header) => todo!(),
+            BlockReaderState::ReadHeaderPreviousChunkInconsistency(block_header) => {
+                // Seek back to start of prervious chunk assuming the currrent one
+                // was corruped and that the new block is valid.
+                let seek_offset: i64 = block_header.previous_chunk.try_into().map_err(
+                    |e| DiskyError::Other(
+                        format!(
+                            "Overflow when seeking during recovery of previous chunk inconsistency {:?}", 
+                            e
+                            )
+                        )
+                    )?;
+                self.source.seek(SeekFrom::Current(-seek_offset))?;
+
+                Ok(())
+            }
             BlockReaderState::EOF => {
                 Err(DiskyError::Other("Cannot recover from `EOF`.".to_string()))
             }
@@ -509,9 +525,10 @@ impl<Source: Read + Seek> BlockReader<Source> {
         }
     }
 
+
     /// Returns the current position in the file.
-    pub fn position(&self) -> u64 {
-        self.pos
+    pub fn file_position(&self) -> u64 {
+        self.file_position
     }
 
     /// Returns the current chunk beginning position.

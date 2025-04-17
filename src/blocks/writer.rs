@@ -372,4 +372,12 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     pub fn get_mut(&mut self) -> &mut Sink {
         &mut self.sink
     }
+    
+    /// Returns the current position in the underlying sink.
+    /// 
+    /// This is primarily intended for testing purposes.
+    #[cfg(test)]
+    pub fn current_position(&mut self) -> Result<u64> {
+        self.sink.stream_position().map_err(|e| crate::error::DiskyError::Io(e))
+    }
 }

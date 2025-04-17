@@ -7,6 +7,7 @@ mod edge_case_boundary_tests;
 mod edge_case_chunk_boundary_bug;
 mod reader_tests;
 mod corruption_recovery_tests;
+mod reader_edge_cases;
 
 // Helper re-exports for tests
 #[doc(hidden)]

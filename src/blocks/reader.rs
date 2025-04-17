@@ -505,9 +505,11 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 Ok(())
             }
             BlockReaderState::ReadHeaderPreviousChunkInconsistency(block_header) => {
+                // We must seek back to the start of previous chunk.
+                let previous_chunk = block_header.previous_chunk + BLOCK_HEADER_SIZE;
                 // Seek back to start of prervious chunk assuming the currrent one
                 // was corruped and that the new block is valid.
-                let seek_offset: i64 = block_header.previous_chunk.try_into().map_err(
+                let seek_offset: i64 = previous_chunk.try_into().map_err(
                     |e| DiskyError::Other(
                         format!(
                             "Overflow when seeking during recovery of `previous chunk inconsistency` {:?}", 
@@ -515,7 +517,11 @@ impl<Source: Read + Seek> BlockReader<Source> {
                             )
                         )
                     )?;
+
                 self.source.seek(SeekFrom::Current(-seek_offset))?;
+
+                // Reset state to Fresh to start reading from the next valid chunk
+                self.state = BlockReaderState::Fresh;
 
                 Ok(())
             }

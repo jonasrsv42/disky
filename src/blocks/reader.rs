@@ -500,7 +500,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 let seek_offset: i64 = block_header.previous_chunk.try_into().map_err(
                     |e| DiskyError::Other(
                         format!(
-                            "Overflow when seeking during recovery of previous chunk inconsistency {:?}", 
+                            "Overflow when seeking during recovery of `previous chunk inconsistency` {:?}", 
                             e
                             )
                         )
@@ -524,7 +524,6 @@ impl<Source: Read + Seek> BlockReader<Source> {
             )),
         }
     }
-
 
     /// Returns the current position in the file.
     pub fn file_position(&self) -> u64 {

@@ -493,7 +493,16 @@ impl<Source: Read + Seek> BlockReader<Source> {
             BlockReaderState::ReadHeader(_block_header) => Err(DiskyError::Other(
                 "Attempted to recover from `ReadHeader` state".to_string(),
             )),
-            BlockReaderState::ReadCorruptedHeader(_block_header) => todo!(),
+            BlockReaderState::ReadCorruptedHeader(_block_header) => {
+                // Find the next valid chunk by seeking to the next block boundary
+                // and reading its header
+                self.find_next_valid_chunk()?;
+                
+                // Reset state to Fresh to start reading from the next valid chunk
+                self.state = BlockReaderState::Fresh;
+                
+                Ok(())
+            },
             BlockReaderState::ReadHeaderPreviousChunkInconsistency(block_header) => {
                 // Seek back to start of prervious chunk assuming the currrent one
                 // was corruped and that the new block is valid.
@@ -548,5 +557,46 @@ impl<Source: Read + Seek> BlockReader<Source> {
     /// Returns the underlying source, consuming self.
     pub fn into_inner(self) -> Source {
         self.source
+    }
+    
+    /// Seeks to the next block boundary and tries to find a valid chunk.
+    /// If the header at the next block boundary is also corrupted, continues
+    /// looking at subsequent block boundaries until a valid header is found.
+    fn find_next_valid_chunk(&mut self) -> Result<()> {
+        // Calculate offset to next block boundary
+        let offset_to_next_boundary = utils::remaining_in_block(self.file_position, self.config.block_size);
+        
+        // Seek to the next block boundary
+        self.source.seek(SeekFrom::Current(offset_to_next_boundary as i64))?;
+        self.update_position()?;
+        
+        // Try reading headers at block boundaries until we find a valid one or reach EOF
+        loop {
+            // Save position at start of potential header
+            let header_start_pos = self.file_position;
+            
+            // Try to read and validate a block header using existing method
+            match self.read_block_header() {
+                Ok(header) => {
+                    // We found a valid header! Seek to the end of this chunk
+                    // using the next_chunk offset from header
+                    let start_of_next_chunk = header_start_pos + header.next_chunk;
+                    self.source.seek(SeekFrom::Start(start_of_next_chunk))?;
+                    self.file_position = start_of_next_chunk;
+                    return Ok(());
+                }
+                Err(DiskyError::UnexpectedEof) => {
+                    // Reached EOF, no more valid chunks
+                    return Err(DiskyError::UnexpectedEof);
+                }
+                Err(_) => {
+                    // This header was also corrupted
+                    // Since read_block_header already updated file_position, just need to seek to next block
+                    let to_next_boundary = utils::remaining_in_block(self.file_position, self.config.block_size);
+                    self.source.seek(SeekFrom::Current(to_next_boundary as i64))?;
+                    self.update_position()?;
+                }
+            }
+        }
     }
 }

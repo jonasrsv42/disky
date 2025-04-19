@@ -138,7 +138,8 @@ impl ChunkWriter for SignatureWriter {
 
 #[cfg(test)]
 mod tests {
-    use crate::chunks::header_writer::{ChunkType, write_chunk_header};
+    use crate::chunks::header::{ChunkHeader, ChunkType};
+use crate::chunks::header_writer::write_chunk_header;
     use crate::chunks::signature_writer::{SignatureWriter, FILE_SIGNATURE_HEADER};
     use crate::error::DiskyError;
     use crate::hash::highway_hash;
@@ -199,13 +200,14 @@ mod tests {
         
         // Create a signature header using header_writer
         let data_hash = highway_hash(&[]);
-        let generated_header = write_chunk_header(
+        let header = ChunkHeader::new(
             0,                    // data_size (no data for signature chunk)
             data_hash,            // hash of empty data
             ChunkType::Signature, // signature chunk type ('s')
             0,                    // num_records (no records in signature)
             0                     // decoded_data_size (no records)
-        ).unwrap();
+        );
+        let generated_header = write_chunk_header(&header).unwrap();
         
         // Print both headers for comparison
         println!("FILE_SIGNATURE_HEADER constant bytes:");

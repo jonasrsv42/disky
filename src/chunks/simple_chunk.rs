@@ -1,5 +1,6 @@
 use crate::chunks::{ChunkWriter, RecordsSize};
-use crate::chunks::header_writer::{ChunkType, write_chunk_header};
+use crate::chunks::header::{ChunkHeader, ChunkType};
+use crate::chunks::header_writer::write_chunk_header;
 use crate::compression::core::CompressionType;
 use crate::error::Result;
 use crate::hash::highway_hash;
@@ -63,17 +64,18 @@ impl ChunkWriter for SimpleChunkWriter {
         let data_hash = highway_hash(&chunk_data);
         
         // Create the chunk header
-        let header = write_chunk_header(
+        let header = ChunkHeader::new(
             chunk_data.len() as u64,        // data_size - size of the entire chunk data
             data_hash,                      // data_hash - hash of chunk data
             ChunkType::SimpleRecords,       // chunk_type - 'r' for simple records
             self.num_records,               // num_records - number of records in the chunk
             self.records.len() as u64,      // decoded_data_size - sum of all record sizes (uncompressed)
-        )?;
+        );
+        let header_bytes = write_chunk_header(&header)?;
         
         // Combine the header and data into the final chunk
-        let mut final_chunk = BytesMut::with_capacity(header.len() + chunk_data.len());
-        final_chunk.extend_from_slice(&header);
+        let mut final_chunk = BytesMut::with_capacity(header_bytes.len() + chunk_data.len());
+        final_chunk.extend_from_slice(&header_bytes);
         final_chunk.extend_from_slice(&chunk_data);
         
         // Reset state for next chunk
@@ -110,7 +112,7 @@ mod tests {
     use super::*;
     use crate::varint;
     use bytes::Buf;
-    use crate::chunks::header_writer::CHUNK_HEADER_SIZE;
+    use crate::chunks::header::CHUNK_HEADER_SIZE;
 
     #[test]
     fn test_simple_chunk_writer_construction() {

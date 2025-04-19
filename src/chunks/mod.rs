@@ -8,6 +8,7 @@ pub mod header_parser;
 pub mod header;
 pub mod simple_chunk_writer;
 pub mod simple_chunk_parser;
+pub mod chunks_parser;
 
 #[cfg(test)]
 pub mod tests;
@@ -21,3 +22,4 @@ pub use signature_parser::validate_signature;
 pub use header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 pub use header_writer::write_chunk_header;
 pub use header_parser::parse_chunk_header;
+pub use chunks_parser::{ChunksParser, Chunk, SimpleChunk, SimpleChunkIterator};

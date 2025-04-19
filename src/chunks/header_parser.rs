@@ -34,13 +34,13 @@ use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 ///
 /// # Arguments
 ///
-/// * `bytes` - Bytes object containing the chunk header and potentially more data
+/// * `bytes` - Mutable reference to a Bytes object containing the chunk header and potentially more data.
+///             The buffer will be advanced past the header after parsing.
 ///
 /// # Returns
 ///
-/// A `Result` containing a tuple of:
-/// - The parsed `ChunkHeader`
-/// - The remaining bytes after the header
+/// A `Result` containing the parsed `ChunkHeader`. The bytes buffer position will be advanced 
+/// past the header, so it will only contain the data after the header when this function returns.
 ///
 /// # Errors
 ///
@@ -71,43 +71,42 @@ use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 /// let mut full_bytes = Vec::new();
 /// full_bytes.extend_from_slice(&header_bytes);
 /// full_bytes.extend_from_slice(b"some data");
-/// let bytes = Bytes::from(full_bytes);
+/// let mut bytes = Bytes::from(full_bytes);
 ///
-/// // Parse the header
-/// let (parsed_header, remaining) = parse_chunk_header(bytes).unwrap();
+/// // Parse the header - this will advance the bytes buffer past the header
+/// let parsed_header = parse_chunk_header(&mut bytes).unwrap();
 ///
-/// // Now you can use the parsed header and remaining bytes
+/// // Now bytes only contains data after the header
 /// assert_eq!(parsed_header.data_size, 100);
 /// assert_eq!(parsed_header.num_records, 5);
-/// assert_eq!(remaining, Bytes::from_static(b"some data"));
+/// assert_eq!(bytes, Bytes::from_static(b"some data"));
 /// ```
-pub fn parse_chunk_header(bytes: Bytes) -> Result<(ChunkHeader, Bytes)> {
+pub fn parse_chunk_header(bytes: &mut Bytes) -> Result<ChunkHeader> {
     // Ensure we have enough bytes for a complete header
-    if bytes.len() < CHUNK_HEADER_SIZE {
+    if bytes.remaining() < CHUNK_HEADER_SIZE {
         return Err(DiskyError::UnexpectedEof);
     }
 
-    // Create a slice of the header portion to work with
-    let header_slice = bytes.slice(0..CHUNK_HEADER_SIZE);
-    let mut header_reader = header_slice.clone();
-
+    // Make a copy of the header portion for hash verification
+    let header_copy = bytes.slice(0..CHUNK_HEADER_SIZE);
+    
     // Extract header_hash (first 8 bytes)
-    let header_hash = header_reader.get_u64_le();
+    let header_hash = bytes.get_u64_le();
 
     // Calculate the hash of the rest of the header for verification
-    let calculated_hash = highway_hash(&header_slice[8..]);
+    let calculated_hash = highway_hash(&header_copy[8..]);
     if calculated_hash != header_hash {
         return Err(DiskyError::ChunkHeaderHashMismatch);
     }
 
     // Extract data_size (8 bytes)
-    let data_size = header_reader.get_u64_le();
+    let data_size = bytes.get_u64_le();
 
     // Extract data_hash (8 bytes)
-    let data_hash = header_reader.get_u64_le();
+    let data_hash = bytes.get_u64_le();
 
     // Extract chunk_type (1 byte)
-    let chunk_type_byte = header_reader.get_u8();
+    let chunk_type_byte = bytes.get_u8();
     let chunk_type = match ChunkType::from_byte(chunk_type_byte) {
         Some(ct) => ct,
         None => return Err(DiskyError::UnknownChunkType(chunk_type_byte)),
@@ -116,11 +115,11 @@ pub fn parse_chunk_header(bytes: Bytes) -> Result<(ChunkHeader, Bytes)> {
     // Extract num_records (7 bytes in little-endian order)
     let mut num_records: u64 = 0;
     for i in 0..7 {
-        num_records |= (header_reader.get_u8() as u64) << (i * 8);
+        num_records |= (bytes.get_u8() as u64) << (i * 8);
     }
 
     // Extract decoded_data_size (8 bytes)
-    let decoded_data_size = header_reader.get_u64_le();
+    let decoded_data_size = bytes.get_u64_le();
 
     // Create the ChunkHeader structure
     let header = ChunkHeader::new(
@@ -131,14 +130,8 @@ pub fn parse_chunk_header(bytes: Bytes) -> Result<(ChunkHeader, Bytes)> {
         decoded_data_size,
     );
 
-    // Return the header and the remaining bytes after the header
-    let remaining = if bytes.len() > CHUNK_HEADER_SIZE {
-        bytes.slice(CHUNK_HEADER_SIZE..)
-    } else {
-        Bytes::new() // Empty bytes if there's nothing after the header
-    };
-
-    Ok((header, remaining))
+    // At this point, bytes has been advanced past the header
+    Ok(header)
 }
 
 #[cfg(test)]
@@ -164,16 +157,16 @@ mod tests {
         let mut bytes = BytesMut::with_capacity(header_bytes.len() + 10);
         bytes.extend_from_slice(&header_bytes);
         bytes.extend_from_slice(b"extradata");
-        let bytes = bytes.freeze();
+        let mut bytes = bytes.freeze();
         
         // Parse the header
-        let (parsed_header, remaining) = parse_chunk_header(bytes).unwrap();
+        let parsed_header = parse_chunk_header(&mut bytes).unwrap();
         
         // Verify the parsed fields match the original values
         assert_eq!(parsed_header, original_header);
         
-        // Verify the remaining bytes are correct
-        assert_eq!(remaining, Bytes::from_static(b"extradata"));
+        // Verify the remaining bytes are correct (bytes now only contains data after the header)
+        assert_eq!(bytes, Bytes::from_static(b"extradata"));
     }
     
     #[test]
@@ -181,10 +174,10 @@ mod tests {
         // Create a header but truncate it
         let header = ChunkHeader::new(1, 2, ChunkType::SimpleRecords, 3, 4);
         let header_bytes = write_chunk_header(&header).unwrap();
-        let truncated = header_bytes.slice(0..CHUNK_HEADER_SIZE - 1);
+        let mut truncated = header_bytes.slice(0..CHUNK_HEADER_SIZE - 1);
         
         // Parsing should fail with UnexpectedEof
-        let result = parse_chunk_header(truncated);
+        let result = parse_chunk_header(&mut truncated);
         assert!(matches!(result, Err(DiskyError::UnexpectedEof)));
     }
     
@@ -199,10 +192,10 @@ mod tests {
         corrupted.extend_from_slice(&header_bytes[0..9]); // Include hash and one more byte
         corrupted.put_u8(header_bytes[9] ^ 0x01); // Flip one bit
         corrupted.extend_from_slice(&header_bytes[10..]); // Add the rest
-        let corrupted = corrupted.freeze();
+        let mut corrupted = corrupted.freeze();
         
         // Parsing should fail with ChunkHeaderHashMismatch
-        let result = parse_chunk_header(corrupted);
+        let result = parse_chunk_header(&mut corrupted);
         assert!(matches!(result, Err(DiskyError::ChunkHeaderHashMismatch)));
     }
     
@@ -225,10 +218,10 @@ mod tests {
         let mut final_bytes = BytesMut::with_capacity(CHUNK_HEADER_SIZE);
         final_bytes.put_u64_le(header_hash);
         final_bytes.extend_from_slice(&corrupted[8..]);
-        let final_bytes = final_bytes.freeze();
+        let mut final_bytes = final_bytes.freeze();
         
         // Parsing should fail with UnknownChunkType
-        let result = parse_chunk_header(final_bytes);
+        let result = parse_chunk_header(&mut final_bytes);
         assert!(matches!(result, Err(DiskyError::UnknownChunkType(0xFF))));
     }
     
@@ -244,8 +237,9 @@ mod tests {
         for expected_type in types {
             let original_header = ChunkHeader::new(1, 2, expected_type, 3, 4);
             let header_bytes = write_chunk_header(&original_header).unwrap();
+            let mut header_bytes = header_bytes.clone();
             
-            let (parsed_header, _) = parse_chunk_header(header_bytes).unwrap();
+            let parsed_header = parse_chunk_header(&mut header_bytes).unwrap();
             assert_eq!(parsed_header.chunk_type, expected_type);
         }
     }
@@ -258,8 +252,9 @@ mod tests {
         
         assert_eq!(header_bytes.len(), CHUNK_HEADER_SIZE);
         
-        // Parse should succeed and return empty remaining bytes
-        let (_, remaining) = parse_chunk_header(header_bytes).unwrap();
-        assert_eq!(remaining.len(), 0);
+        // Parse should succeed and consume all bytes
+        let mut header_bytes_clone = header_bytes.clone();
+        let _ = parse_chunk_header(&mut header_bytes_clone).unwrap();
+        assert_eq!(header_bytes_clone.len(), 0);
     }
 }

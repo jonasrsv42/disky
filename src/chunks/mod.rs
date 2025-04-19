@@ -6,8 +6,11 @@ pub mod signature;
 pub mod header_writer;
 pub mod header_parser;
 pub mod header;
+pub mod simple_chunk_writer;
+pub mod simple_chunk_reader;
 
-pub use simple_chunk::SimpleChunkWriter;
+pub use simple_chunk_writer::SimpleChunkWriter;
+pub use simple_chunk_reader::{SimpleChunkReader, RecordResult};
 pub use writer::{ChunkWriter, RecordsSize};
 pub use signature_writer::SignatureWriter;
 pub use signature::{FILE_SIGNATURE_HEADER, SIGNATURE_HEADER_SIZE};

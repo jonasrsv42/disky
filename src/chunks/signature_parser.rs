@@ -16,7 +16,7 @@
 //!
 //! This module provides functionality for validating Riegeli file signatures.
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use crate::error::{Result, DiskyError};
 use crate::chunks::signature::SIGNATURE_HEADER_SIZE;
 use crate::chunks::header::ChunkType;
@@ -32,13 +32,13 @@ use crate::chunks::header_parser::parse_chunk_header;
 ///
 /// # Arguments
 ///
-/// * `bytes` - Bytes object containing the signature chunk and potentially more data
+/// * `bytes` - Mutable reference to a Bytes object containing the signature chunk and potentially more data.
+///             The buffer will be advanced past the signature header after validation.
 ///
 /// # Returns
 ///
-/// A `Result` containing a tuple of:
-/// - A unit value () indicating success
-/// - The remaining bytes after the signature header
+/// A `Result<()>` indicating success. The bytes buffer will be advanced past the signature
+/// header, so it will only contain the data after the signature when this function returns.
 ///
 /// # Errors
 ///
@@ -58,22 +58,22 @@ use crate::chunks::header_parser::parse_chunk_header;
 /// let mut data = Vec::new();
 /// data.extend_from_slice(&FILE_SIGNATURE_HEADER);
 /// data.extend_from_slice(b"some extra data");
-/// let bytes = Bytes::from(data);
+/// let mut bytes = Bytes::from(data);
 ///
-/// // Validate the signature
-/// let ((), remaining) = validate_signature(bytes).unwrap();
+/// // Validate the signature - this will advance the bytes buffer past the signature
+/// validate_signature(&mut bytes).unwrap();
 ///
-/// // If validation succeeds, we can use the remaining bytes
-/// assert_eq!(remaining, Bytes::from_static(b"some extra data"));
+/// // If validation succeeds, bytes will only contain data after the signature
+/// assert_eq!(bytes, Bytes::from_static(b"some extra data"));
 /// ```
-pub fn validate_signature(bytes: Bytes) -> Result<((), Bytes)> {
+pub fn validate_signature(bytes: &mut Bytes) -> Result<()> {
     // Make sure we have enough bytes
-    if bytes.len() < SIGNATURE_HEADER_SIZE {
+    if bytes.remaining() < SIGNATURE_HEADER_SIZE {
         return Err(DiskyError::UnexpectedEof);
     }
     
     // Use the header parser to parse the header
-    let (header, remaining) = parse_chunk_header(bytes)?;
+    let header = parse_chunk_header(bytes)?;
     
     // Verify this is a signature chunk
     if header.chunk_type != ChunkType::Signature {
@@ -108,7 +108,7 @@ pub fn validate_signature(bytes: Bytes) -> Result<((), Bytes)> {
     }
     
     // If we reach here, the signature is valid
-    Ok(((), remaining))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -124,11 +124,13 @@ mod tests {
         let mut data = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE + 10);
         data.extend_from_slice(&FILE_SIGNATURE_HEADER);
         data.extend_from_slice(b"extra data");
-        let bytes = data.freeze();
+        let mut bytes = data.freeze();
         
         // Validate the signature
-        let ((), remaining) = validate_signature(bytes).unwrap();
-        assert_eq!(remaining, Bytes::from_static(b"extra data"));
+        validate_signature(&mut bytes).unwrap();
+        
+        // The bytes buffer should now only contain the extra data
+        assert_eq!(bytes, Bytes::from_static(b"extra data"));
     }
     
     #[test]
@@ -138,10 +140,10 @@ mod tests {
         invalid_sig.extend_from_slice(&FILE_SIGNATURE_HEADER);
         // Modify a byte in the signature
         invalid_sig[10] ^= 0x01;
-        let bytes = invalid_sig.freeze();
+        let mut bytes = invalid_sig.freeze();
         
         // Validation should fail with ChunkHeaderHashMismatch
-        let result = validate_signature(bytes);
+        let result = validate_signature(&mut bytes);
         assert!(matches!(result, Err(DiskyError::ChunkHeaderHashMismatch)));
     }
     
@@ -161,10 +163,10 @@ mod tests {
         let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
         final_bytes.put_u64_le(header_hash);
         final_bytes.extend_from_slice(&invalid_sig[8..]);
-        let bytes = final_bytes.freeze();
+        let mut bytes = final_bytes.freeze();
         
         // Validation should fail with InvalidFileSignature mentioning wrong chunk type
-        let result = validate_signature(bytes);
+        let result = validate_signature(&mut bytes);
         if let Err(DiskyError::InvalidFileSignature(msg)) = result {
             assert!(msg.contains("Expected chunk type 's'"));
             assert!(msg.contains("got 'r'"));
@@ -189,10 +191,10 @@ mod tests {
         let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
         final_bytes.put_u64_le(header_hash);
         final_bytes.extend_from_slice(&invalid_sig[8..]);
-        let bytes = final_bytes.freeze();
+        let mut bytes = final_bytes.freeze();
         
         // Validation should fail with InvalidFileSignature mentioning wrong data_size
-        let result = validate_signature(bytes);
+        let result = validate_signature(&mut bytes);
         if let Err(DiskyError::InvalidFileSignature(msg)) = result {
             assert!(msg.contains("Expected data_size to be 0"));
             assert!(msg.contains("got 42"));
@@ -217,10 +219,10 @@ mod tests {
         let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
         final_bytes.put_u64_le(header_hash);
         final_bytes.extend_from_slice(&invalid_sig[8..]);
-        let bytes = final_bytes.freeze();
+        let mut bytes = final_bytes.freeze();
         
         // Validation should fail with InvalidFileSignature mentioning wrong num_records
-        let result = validate_signature(bytes);
+        let result = validate_signature(&mut bytes);
         if let Err(DiskyError::InvalidFileSignature(msg)) = result {
             assert!(msg.contains("Expected num_records to be 0"));
             assert!(msg.contains("got 5"));
@@ -245,10 +247,10 @@ mod tests {
         let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
         final_bytes.put_u64_le(header_hash);
         final_bytes.extend_from_slice(&invalid_sig[8..]);
-        let bytes = final_bytes.freeze();
+        let mut bytes = final_bytes.freeze();
         
         // Validation should fail with InvalidFileSignature mentioning wrong decoded_data_size
-        let result = validate_signature(bytes);
+        let result = validate_signature(&mut bytes);
         if let Err(DiskyError::InvalidFileSignature(msg)) = result {
             assert!(msg.contains("Expected decoded_data_size to be 0"));
             assert!(msg.contains("got 100"));
@@ -260,20 +262,20 @@ mod tests {
     #[test]
     fn test_validate_not_enough_bytes() {
         // Create a truncated signature
-        let truncated = Bytes::from(&FILE_SIGNATURE_HEADER[0..SIGNATURE_HEADER_SIZE - 1]);
+        let mut truncated = Bytes::from(&FILE_SIGNATURE_HEADER[0..SIGNATURE_HEADER_SIZE - 1]);
         
         // Validation should fail with UnexpectedEof
-        let result = validate_signature(truncated);
+        let result = validate_signature(&mut truncated);
         assert!(matches!(result, Err(DiskyError::UnexpectedEof)));
     }
     
     #[test]
     fn test_validate_exact_size() {
         // Create a signature with exactly the header size
-        let bytes = Bytes::from_static(&FILE_SIGNATURE_HEADER);
+        let mut bytes = Bytes::from_static(&FILE_SIGNATURE_HEADER);
         
-        // Validation should succeed with empty remaining bytes
-        let ((), remaining) = validate_signature(bytes).unwrap();
-        assert_eq!(remaining.len(), 0);
+        // Validation should succeed and consume all bytes
+        validate_signature(&mut bytes).unwrap();
+        assert_eq!(bytes.len(), 0);
     }
 }

@@ -9,6 +9,9 @@ pub mod header;
 pub mod simple_chunk_writer;
 pub mod simple_chunk_parser;
 
+#[cfg(test)]
+pub mod tests;
+
 pub use simple_chunk_writer::SimpleChunkWriter;
 pub use simple_chunk_parser::{SimpleChunkParser, RecordResult};
 pub use writer::{ChunkWriter, RecordsSize};

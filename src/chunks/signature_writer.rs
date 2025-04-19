@@ -32,29 +32,8 @@
 use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::chunks::ChunkWriter;
+use crate::chunks::signature::FILE_SIGNATURE_HEADER;
 use crate::error::{Result, DiskyError};
-
-/// The chunk header portion of the Riegeli file signature (40 bytes).
-///
-/// This represents only the chunk header portion of the complete Riegeli file signature.
-/// According to the Riegeli specification, the first 64 bytes of a Riegeli file consist of:
-///
-/// 1. A 24-byte block header
-/// 2. A 40-byte chunk header
-///
-/// To maintain proper separation of concerns, this module only handles the 40-byte chunk header.
-/// The blocks/writer module is responsible for adding the 24-byte block header when writing 
-/// a complete 64-byte signature to a file.
-///
-/// Note: If you're looking at the Riegeli specification's documentation of the file signature 
-/// (which shows a complete 64-byte sequence), this constant contains only the latter 40 bytes 
-/// of that signature, corresponding to the chunk header.
-pub const FILE_SIGNATURE_HEADER: [u8; 40] = [
-    // Chunk header (40 bytes)
-    0x91, 0xba, 0xc2, 0x3c, 0x92, 0x87, 0xe1, 0xa9, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0xe1, 0x9f, 0x13, 0xc0, 0xe9, 0xb1, 0xc3, 0x72, 0x73, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
 
 /// A writer for the Riegeli file signature chunk header.
 ///
@@ -139,8 +118,9 @@ impl ChunkWriter for SignatureWriter {
 #[cfg(test)]
 mod tests {
     use crate::chunks::header::{ChunkHeader, ChunkType};
-use crate::chunks::header_writer::write_chunk_header;
-    use crate::chunks::signature_writer::{SignatureWriter, FILE_SIGNATURE_HEADER};
+    use crate::chunks::header_writer::write_chunk_header;
+    use crate::chunks::signature::FILE_SIGNATURE_HEADER;
+    use crate::chunks::signature_writer::SignatureWriter;
     use crate::error::DiskyError;
     use crate::hash::highway_hash;
 

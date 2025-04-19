@@ -45,12 +45,12 @@ enum ReaderState {
     Error,
 }
 
-/// Reader for Riegeli simple chunks with records.
+/// Parser for Riegeli simple chunks with records.
 ///
-/// This reader processes the data of a simple chunk (after the 40-byte header)
+/// This parser processes the data of a simple chunk (after the 40-byte header)
 /// and allows reading records one by one. When there are no more records,
 /// it returns any remaining bytes that might contain additional chunks.
-pub struct SimpleChunkReader {
+pub struct SimpleChunkParser {
     /// The current state of the reader
     state: ReaderState,
     
@@ -75,8 +75,8 @@ pub struct SimpleChunkReader {
     remaining_bytes: Bytes,
 }
 
-impl SimpleChunkReader {
-    /// Creates a new SimpleChunkReader from a chunk header and data.
+impl SimpleChunkParser {
+    /// Creates a new SimpleChunkParser from a chunk header and data.
     ///
     /// # Arguments
     ///
@@ -85,7 +85,7 @@ impl SimpleChunkReader {
     ///
     /// # Returns
     ///
-    /// A Result containing the reader or an error if the data could not be parsed
+    /// A Result containing the parser or an error if the data could not be parsed
     pub fn new(header: ChunkHeader, chunk_data: Bytes) -> Result<Self> {
         // Verify this is a simple records chunk
         if header.chunk_type != ChunkType::SimpleRecords {
@@ -180,7 +180,7 @@ impl SimpleChunkReader {
             },
         };
         
-        Ok(SimpleChunkReader {
+        Ok(SimpleChunkParser {
             state: ReaderState::Ready,
             header,
             compression_type,
@@ -328,8 +328,8 @@ mod tests {
         let mut chunk_data = serialized_chunk.clone();
         let header = parse_chunk_header(&mut chunk_data).unwrap();
         
-        // Create a reader
-        let mut reader = SimpleChunkReader::new(header, chunk_data).unwrap();
+        // Create a parser
+        let mut reader = SimpleChunkParser::new(header, chunk_data).unwrap();
         
         // Check initial state
         assert_eq!(reader.records_read(), 0);
@@ -386,8 +386,8 @@ mod tests {
         // Parse the first chunk header and data
         let header1 = parse_chunk_header(&mut combined_chunks).unwrap();
         
-        // Create reader for the first chunk
-        let mut reader1 = SimpleChunkReader::new(header1, combined_chunks).unwrap();
+        // Create parser for the first chunk
+        let mut reader1 = SimpleChunkParser::new(header1, combined_chunks).unwrap();
         
         // Read records from first chunk
         let record1 = match reader1.next().unwrap() {
@@ -414,8 +414,8 @@ mod tests {
         // Parse the second chunk header and data
         let header2 = parse_chunk_header(&mut remaining_bytes).unwrap();
         
-        // Create reader for the second chunk
-        let mut reader2 = SimpleChunkReader::new(header2, remaining_bytes).unwrap();
+        // Create parser for the second chunk
+        let mut reader2 = SimpleChunkParser::new(header2, remaining_bytes).unwrap();
         
         // Read records from second chunk
         let record1 = match reader2.next().unwrap() {

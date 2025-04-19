@@ -21,7 +21,7 @@ use crate::chunks::header::{ChunkHeader, ChunkType};
 use crate::compression::core::CompressionType;
 use crate::error::{DiskyError, Result};
 use crate::varint;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 
 /// The possible states of record iteration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,9 +228,8 @@ impl<'a> SimpleChunkParser<'a> {
             )));
         }
         
-        // Copy the record data into a new BytesMut buffer
-        let mut record_data = BytesMut::with_capacity(record_size);
-        record_data.put(&self.records_data[..record_size]);
+        // Get a slice of the record data without copying
+        let record_data = self.records_data.slice(0..record_size);
         
         // Advance the internal position of the Bytes buffer
         self.records_data.advance(record_size);
@@ -238,7 +237,7 @@ impl<'a> SimpleChunkParser<'a> {
         // Update record counter
         self.records_read += 1;
         
-        Ok(record_data.freeze())
+        Ok(record_data)
     }
     
     /// Returns the next record or indicates that there are no more records.

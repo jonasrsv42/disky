@@ -28,8 +28,8 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 pub enum RecordResult {
     /// A record was found
     Record(Bytes),
-    /// No more records in this chunk, contains remaining bytes
-    Done(Bytes),
+    /// No more records in this chunk, buffer has been advanced to after the chunk
+    EndOfChunk,
 }
 
 /// Represents the state of a SimpleChunkReader during processing.
@@ -39,7 +39,7 @@ enum ReaderState {
     Ready,
     /// The reader is actively reading records
     Reading,
-    /// The reader has reached the end of the current chunk
+    /// The reader has reached the end of the current chunk and returned Done
     EndOfChunk,
     /// The reader has encountered an error and cannot continue
     Error,
@@ -49,8 +49,8 @@ enum ReaderState {
 ///
 /// This parser processes the data of a simple chunk (after the 40-byte header)
 /// and allows reading records one by one. When there are no more records,
-/// it returns any remaining bytes that might contain additional chunks.
-pub struct SimpleChunkParser {
+/// it returns EndOfChunk and advances the input buffer past this chunk.
+pub struct SimpleChunkParser<'a> {
     /// The current state of the reader
     state: ReaderState,
     
@@ -71,22 +71,26 @@ pub struct SimpleChunkParser {
     /// Number of records read so far
     records_read: u64,
     
-    /// The remaining bytes after this chunk (may contain additional chunks)
-    remaining_bytes: Bytes,
+    /// The original input buffer that will be advanced when done
+    input_buffer: &'a mut Bytes,
+    
+    /// The total size of the chunk data
+    chunk_size: usize,
 }
 
-impl SimpleChunkParser {
-    /// Creates a new SimpleChunkParser from a chunk header and data.
+impl<'a> SimpleChunkParser<'a> {
+    /// Creates a new SimpleChunkParser from a chunk header and mutable data reference.
     ///
     /// # Arguments
     ///
     /// * `header` - The parsed chunk header
-    /// * `chunk_data` - The chunk data (after the 40-byte header)
+    /// * `chunk_data` - Mutable reference to the buffer containing chunk data (after the 40-byte header)
     ///
     /// # Returns
     ///
-    /// A Result containing the parser or an error if the data could not be parsed
-    pub fn new(header: ChunkHeader, chunk_data: Bytes) -> Result<Self> {
+    /// A Result containing the parser or an error if the data could not be parsed.
+    /// When the parser is done reading records, it will advance the buffer past this chunk.
+    pub fn new(header: ChunkHeader, chunk_data: &'a mut Bytes) -> Result<Self> {
         // Verify this is a simple records chunk
         if header.chunk_type != ChunkType::SimpleRecords {
             return Err(DiskyError::Other(format!(
@@ -95,26 +99,20 @@ impl SimpleChunkParser {
             )));
         }
         
-        // Calculate how many bytes are part of this chunk vs remaining
+        // Calculate how many bytes are part of this chunk
         let expected_chunk_size = header.data_size as usize;
         
         // Check if we have enough data for this chunk
-        if chunk_data.len() < expected_chunk_size {
+        if chunk_data.remaining() < expected_chunk_size {
             return Err(DiskyError::Other(format!(
                 "Chunk data incomplete: expected {} bytes, got {}",
                 expected_chunk_size, 
-                chunk_data.len()
+                chunk_data.remaining()
             )));
         }
         
-        // Extract this chunk's data and any remaining bytes
-        let (this_chunk_data, remaining) = if chunk_data.len() > expected_chunk_size {
-            // Take the expected chunk size and leave the rest as remaining bytes
-            (chunk_data.slice(0..expected_chunk_size), chunk_data.slice(expected_chunk_size..))
-        } else {
-            // Use all the data and no remaining bytes
-            (chunk_data, Bytes::new())
-        };
+        // Take a slice of the current chunk data without advancing yet
+        let this_chunk_data = chunk_data.slice(0..expected_chunk_size);
         
         // Prepare to parse the chunk's internal format
         let mut data = if this_chunk_data.len() > 0 {
@@ -187,7 +185,8 @@ impl SimpleChunkParser {
             sizes_data,
             records_data,
             records_read: 0,
-            remaining_bytes: remaining,
+            input_buffer: chunk_data,
+            chunk_size: expected_chunk_size,
         })
     }
     
@@ -239,11 +238,6 @@ impl SimpleChunkParser {
         // Update record counter
         self.records_read += 1;
         
-        // Check if we've reached the end
-        if self.records_read >= self.header.num_records {
-            self.state = ReaderState::EndOfChunk;
-        }
-        
         Ok(record_data.freeze())
     }
     
@@ -252,8 +246,8 @@ impl SimpleChunkParser {
     /// # Returns
     ///
     /// - RecordResult::Record(Bytes) if a record was read
-    /// - RecordResult::Done(Bytes) if there are no more records, with any remaining bytes
-    /// - Err if an error occurred
+    /// - RecordResult::EndOfChunk if there are no more records, the input buffer has been advanced
+    /// - Err if an error occurred or if next() is called after EndOfChunk was returned
     pub fn next(&mut self) -> Result<RecordResult> {
         match self.state {
             ReaderState::Ready => {
@@ -264,8 +258,13 @@ impl SimpleChunkParser {
             ReaderState::Reading => {
                 // Check if we've reached the end of the records
                 if self.records_read >= self.header.num_records {
+                    // Advance the original buffer past this chunk
+                    self.input_buffer.advance(self.chunk_size);
+                    
+                    // Update state
                     self.state = ReaderState::EndOfChunk;
-                    return Ok(RecordResult::Done(self.remaining_bytes.clone()));
+                    
+                    return Ok(RecordResult::EndOfChunk);
                 }
                 
                 // Get the size of the next record
@@ -277,7 +276,9 @@ impl SimpleChunkParser {
                 Ok(RecordResult::Record(record))
             }
             ReaderState::EndOfChunk => {
-                Ok(RecordResult::Done(self.remaining_bytes.clone()))
+                Err(DiskyError::Other(
+                    "Cannot invoke next() after SimpleChunkParser has returned EndOfChunk".to_string(),
+                ))
             }
             ReaderState::Error => Err(DiskyError::Other(
                 "Cannot read from an errored chunk".to_string(),

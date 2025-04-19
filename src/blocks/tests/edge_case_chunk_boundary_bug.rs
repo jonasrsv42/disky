@@ -21,18 +21,14 @@ fn test_bug_chunk_ends_at_block_boundary() {
     // Use a small block size to make the test case easier to construct and debug
     let block_size = 100u64;
     
-    // Create a buffer
+    // Create a buffer and a writer starting at a specific offset
     let buffer = Cursor::new(Vec::new());
-    let mut writer = BlockWriter::with_config(
+    let initial_offset = 30u64; // Start 30 bytes into the file
+    let mut writer = BlockWriter::for_append_with_config(
         buffer,
+        initial_offset,
         BlockWriterConfig { block_size },
     ).unwrap();
-    
-    // We'll construct a specific scenario:
-    // 1. First, write some initial data that doesn't start at a block boundary
-    let initial_offset = 30u64; // Start 30 bytes into the file
-    writer.get_mut().set_position(initial_offset);
-    writer.update_position().unwrap();
     
     // 2. Create a first chunk that will end exactly at the next block boundary
     // Need to fill: 100 - 30 = 70 bytes (to reach the block boundary)
@@ -104,15 +100,12 @@ fn test_read_starting_within_block_crossing_boundary() {
     let block_size = 100u64;
     let buffer = Cursor::new(Vec::new());
     
-    // Create a writer
-    let mut writer = BlockWriter::with_config(
+    // Create a writer starting at position 30
+    let mut writer = BlockWriter::for_append_with_config(
         buffer,
+        30, // Start writing at position 30
         BlockWriterConfig { block_size },
     ).unwrap();
-    
-    // Start writing at position 30
-    writer.get_mut().set_position(30);
-    writer.update_position().unwrap();
     
     // Write a chunk that will cross the block boundary
     // First block: 30 to 100 = 70 bytes

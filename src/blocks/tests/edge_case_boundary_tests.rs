@@ -89,7 +89,7 @@ fn test_chunk_starting_near_block_boundary() {
     
     // Now write a chunk that will cross the block boundary
     // Our position should be 63 (1 byte before block boundary)
-    let position = writer.update_position().unwrap();
+    let position = writer.position();
     assert_eq!(position, 63, "Position should be 1 byte before block boundary");
     
     // Write a chunk that will cross the boundary

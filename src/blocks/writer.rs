@@ -1,9 +1,120 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use std::io::{Seek, Write};
+use std::io::{Result as IoResult, Seek, SeekFrom, Write};
 
 use crate::blocks::utils::{self, BLOCK_HEADER_SIZE, DEFAULT_BLOCK_SIZE};
 use crate::error::Result;
 use crate::hash::highway_hash;
+
+/// A wrapper around any `Write + Seek` sink that tracks the current position.
+/// 
+/// This tracks the current position automatically as writes and seeks occur,
+/// eliminating the need to call `stream_position()` frequently or manually
+/// maintain a position counter.
+pub struct WritePositionTracker<Sink: Write + Seek> {
+    /// The underlying sink to write to
+    sink: Sink,
+    
+    /// The current position in the sink
+    position: u64,
+}
+
+impl<Sink: Write + Seek> WritePositionTracker<Sink> {
+    /// Create a new WritePositionTracker wrapping the given sink.
+    pub fn new(mut sink: Sink) -> IoResult<Self> {
+        // Get the initial position from the sink
+        let position = sink.stream_position()?;
+        
+        Ok(Self {
+            sink,
+            position,
+        })
+    }
+    
+    /// Create a new WritePositionTracker at a specific position.
+    /// 
+    /// This is primarily intended for test use.
+    #[cfg(test)]
+    pub fn at_position(mut sink: Sink, position: u64) -> IoResult<Self> {
+        // Set the position in the sink
+        sink.seek(SeekFrom::Start(position))?;
+        
+        Ok(Self {
+            sink,
+            position,
+        })
+    }
+    
+    /// Returns the current position in the sink.
+    pub fn position(&self) -> u64 {
+        self.position
+    }
+    
+    /// Returns a reference to the underlying sink.
+    /// 
+    /// # Warning
+    /// 
+    /// This method is intended for test use only. It exposes the internal state
+    /// of the tracker which can lead to inconsistencies if not used carefully.
+    #[cfg(test)]
+    pub fn get_ref(&self) -> &Sink {
+        &self.sink
+    }
+    
+    /// Returns a mutable reference to the underlying sink.
+    /// 
+    /// # Warning
+    /// 
+    /// This method is intended for test use only. It exposes the internal state
+    /// of the tracker which can lead to inconsistencies if not used carefully.
+    /// 
+    /// Directly manipulating the position of the underlying sink (e.g., using `seek()`)
+    /// will cause the position tracking to become out of sync and can lead to data
+    /// corruption or incorrect behavior.
+    #[cfg(test)]
+    pub fn get_mut(&mut self) -> &mut Sink {
+        &mut self.sink
+    }
+    
+    /// Returns the underlying sink, consuming self.
+    /// 
+    /// # Warning
+    /// 
+    /// This method is intended for test use only. It exposes the internal state
+    /// of the tracker which can lead to inconsistencies if not used carefully.
+    #[cfg(test)]
+    pub fn into_inner(self) -> Sink {
+        self.sink
+    }
+}
+
+impl<Sink: Write + Seek> Write for WritePositionTracker<Sink> {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        let bytes_written = self.sink.write(buf)?;
+        self.position += bytes_written as u64;
+        Ok(bytes_written)
+    }
+    
+    fn flush(&mut self) -> IoResult<()> {
+        self.sink.flush()
+    }
+}
+
+impl<Sink: Write + Seek> Seek for WritePositionTracker<Sink> {
+    fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
+        // Forward seek call to the sink
+        let new_pos = self.sink.seek(pos)?;
+        
+        // Update our tracked position
+        self.position = new_pos;
+        
+        Ok(new_pos)
+    }
+    
+    fn stream_position(&mut self) -> IoResult<u64> {
+        // We can return our tracked position directly without a system call
+        Ok(self.position)
+    }
+}
 
 /// Configuration options for BlockWriter.
 #[derive(Debug, Clone)]
@@ -80,10 +191,8 @@ impl BlockWriterConfig {
 /// writer.flush().unwrap();
 /// ```
 pub struct BlockWriter<Sink: Write + Seek> {
-    /// The underlying writer.
-    sink: Sink,
-    /// Current position in the file.
-    pos: u64,
+    /// The underlying writer, wrapped in a position tracker.
+    sink: WritePositionTracker<Sink>,
     /// Configuration options.
     pub config: BlockWriterConfig,
 }
@@ -95,12 +204,14 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     }
 
     /// Creates a new BlockWriter with custom configuration.
-    pub fn with_config(mut sink: Sink, config: BlockWriterConfig) -> Result<Self> {
+    pub fn with_config(sink: Sink, config: BlockWriterConfig) -> Result<Self> {
         // Validate the configuration - ensure block size is reasonable
         utils::validate_block_size(config.block_size)?;
 
-        let pos = sink.stream_position()?;
-        Ok(Self { sink, pos, config })
+        let sink = WritePositionTracker::new(sink)
+            .map_err(|e| crate::error::DiskyError::Io(e))?;
+            
+        Ok(Self { sink, config })
     }
 
     /// Creates a new BlockWriter with default configuration, for appending to existing data.
@@ -135,25 +246,26 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         // Verify the sink position matches the expected position
         let actual_pos = sink.stream_position()?;
         if actual_pos != pos {
-            sink.seek(std::io::SeekFrom::Start(pos))?;
+            sink.seek(SeekFrom::Start(pos))?;
         }
 
-        Ok(Self { sink, pos, config })
+        // Create the position tracker at the correct position
+        let sink = WritePositionTracker::new(sink)
+            .map_err(|e| crate::error::DiskyError::Io(e))?;
+
+        Ok(Self { sink, config })
     }
 
-    /// Updates the current position from the underlying sink and returns it.
+    /// Returns the current position in the underlying sink.
     ///
-    /// This method synchronizes the internal position tracking with the actual position
-    /// in the underlying sink, which may be necessary if other operations have been
-    /// performed directly on the sink.
+    /// The position is automatically tracked by the WritePositionTracker, so this
+    /// method simply returns the current position without making a system call.
     ///
     /// # Returns
     ///
-    /// * `Result<u64>` - The current position in the sink, or an error if the sink's
-    ///   position could not be determined.
-    pub fn update_position(&mut self) -> Result<u64> {
-        self.pos = self.sink.stream_position()?;
-        Ok(self.pos)
+    /// * `u64` - The current position in the sink.
+    pub fn position(&self) -> u64 {
+        self.sink.position()
     }
 
     /// Writes a block header at the current position.
@@ -185,8 +297,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         // Write the header
         self.sink.write_all(&header)?;
 
-        // Update position
-        self.pos += BLOCK_HEADER_SIZE;
+        // Position is automatically tracked by WritePositionTracker
 
         Ok(())
     }
@@ -287,19 +398,16 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
             return Ok(());
         }
 
-        // Update position to ensure it's current
-        self.update_position()?;
-
         // Each call to write_chunk begins a new chunk
-        let chunk_begin = self.pos;
+        let chunk_begin = self.position();
 
         // Write the chunk data with block header interruptions as needed
         let mut data_pos = 0;
         while data_pos < chunk_data.len() {
             // Check if we're at a block boundary
-            if self.is_block_boundary(self.pos) {
+            if self.is_block_boundary(self.position()) {
                 // We're at a block boundary - write a block header
-                let previous_chunk = self.pos - chunk_begin;
+                let previous_chunk = self.position() - chunk_begin;
 
                 // next_chunk should be the distance from the beginning of the current block
                 // to the end of the chunk, according to the Riegeli specification:
@@ -309,14 +417,14 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
                 let chunk_end = self.compute_chunk_end(chunk_begin, chunk_data.len() as u64);
 
                 // Then calculate the distance from the current block to that end position
-                let next_chunk = chunk_end - self.pos;
+                let next_chunk = chunk_end - self.position();
 
                 self.write_block_header(previous_chunk, next_chunk)?;
                 continue;
             }
 
             // Calculate how much data we can write before the next block boundary
-            let remaining = self.remaining_in_block(self.pos);
+            let remaining = self.remaining_in_block(self.position());
 
             // Write as much data as fits before the next block boundary
             let bytes_to_write =
@@ -325,7 +433,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
 
             self.sink.write_all(&chunk_data[data_pos..end_pos])?;
             data_pos = end_pos;
-            self.pos += bytes_to_write as u64;
+            // Position is automatically tracked by WritePositionTracker
         }
 
         Ok(())
@@ -359,25 +467,48 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     }
 
     /// Returns the underlying sink, consuming self.
+    /// 
+    /// # Warning
+    /// 
+    /// This method is intended for test use only. It exposes the internal state
+    /// of the writer which can lead to inconsistencies if not used carefully.
+    #[cfg(test)]
     pub fn into_inner(self) -> Sink {
-        self.sink
+        self.sink.into_inner()
     }
 
     /// Gets a reference to the underlying sink.
+    /// 
+    /// # Warning
+    /// 
+    /// This method is intended for test use only. It exposes the internal state
+    /// of the writer which can lead to inconsistencies if not used carefully.
+    #[cfg(test)]
     pub fn get_ref(&self) -> &Sink {
-        &self.sink
+        self.sink.get_ref()
     }
 
     /// Gets a mutable reference to the underlying sink.
+    /// 
+    /// # Warning
+    /// 
+    /// This method is intended for test use only. It exposes the internal state
+    /// of the writer which can lead to inconsistencies if not used carefully.
+    /// 
+    /// Directly manipulating the position of the underlying sink (e.g., using `seek()`)
+    /// will cause the position tracking to become out of sync. If you need to change
+    /// the position, use `BlockWriter::for_append_with_config()` to create a new writer
+    /// at the desired position, rather than manipulating the sink directly.
+    #[cfg(test)]
     pub fn get_mut(&mut self) -> &mut Sink {
-        &mut self.sink
+        self.sink.get_mut()
     }
     
     /// Returns the current position in the underlying sink.
     /// 
     /// This is primarily intended for testing purposes.
     #[cfg(test)]
-    pub fn current_position(&mut self) -> Result<u64> {
-        self.sink.stream_position().map_err(|e| crate::error::DiskyError::Io(e))
+    pub fn current_position(&self) -> u64 {
+        self.position()
     }
 }

@@ -80,7 +80,7 @@ fn test_file_boundary_edge_cases() {
     writer.write_chunk(Bytes::from(padding.clone())).unwrap();
     
     // Verify we're at a block boundary
-    let pos = writer.current_position().unwrap();
+    let pos = writer.current_position();
     assert_eq!(pos % block_size, 0, 
                "Not at block boundary: position {} not divisible by block_size {}", 
                pos, block_size);
@@ -90,7 +90,7 @@ fn test_file_boundary_edge_cases() {
     writer.write_chunk(Bytes::from(one_block_chunk.clone())).unwrap();
     
     // Verify we're at a block boundary again
-    let pos = writer.current_position().unwrap();
+    let pos = writer.current_position();
     assert_eq!(pos % block_size, 0, 
                "Not at block boundary: position {} not divisible by block_size {}", 
                pos, block_size);

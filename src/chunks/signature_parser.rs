@@ -77,14 +77,34 @@ pub fn validate_signature(bytes: Bytes) -> Result<((), Bytes)> {
     
     // Verify this is a signature chunk
     if header.chunk_type != ChunkType::Signature {
-        return Err(DiskyError::InvalidFileSignature);
+        return Err(DiskyError::InvalidFileSignature(
+            format!("Expected chunk type 's' (Signature), got '{}'", 
+                    header.chunk_type as u8 as char)
+        ));
     }
     
-    // Verify other signature properties
-    if header.data_size != 0 || 
-       header.num_records != 0 || 
-       header.decoded_data_size != 0 {
-        return Err(DiskyError::InvalidFileSignature);
+    // Verify data_size is 0
+    if header.data_size != 0 {
+        return Err(DiskyError::InvalidFileSignature(
+            format!("Expected data_size to be 0, got {}", 
+                    header.data_size)
+        ));
+    }
+    
+    // Verify num_records is 0
+    if header.num_records != 0 {
+        return Err(DiskyError::InvalidFileSignature(
+            format!("Expected num_records to be 0, got {}", 
+                    header.num_records)
+        ));
+    }
+    
+    // Verify decoded_data_size is 0
+    if header.decoded_data_size != 0 {
+        return Err(DiskyError::InvalidFileSignature(
+            format!("Expected decoded_data_size to be 0, got {}", 
+                    header.decoded_data_size)
+        ));
     }
     
     // If we reach here, the signature is valid
@@ -94,8 +114,9 @@ pub fn validate_signature(bytes: Bytes) -> Result<((), Bytes)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::BytesMut;
-    use crate::chunks::FILE_SIGNATURE_HEADER;
+    use bytes::{BytesMut, BufMut};
+    use crate::chunks::{FILE_SIGNATURE_HEADER, ChunkType};
+    use crate::hash::highway_hash;
     
     #[test]
     fn test_validate_valid_signature() {
@@ -119,8 +140,121 @@ mod tests {
         invalid_sig[10] ^= 0x01;
         let bytes = invalid_sig.freeze();
         
-        // Validation should fail
-        assert!(validate_signature(bytes).is_err());
+        // Validation should fail with ChunkHeaderHashMismatch
+        let result = validate_signature(bytes);
+        assert!(matches!(result, Err(DiskyError::ChunkHeaderHashMismatch)));
+    }
+    
+    #[test]
+    fn test_validate_wrong_chunk_type() {
+        // Create a valid header bytes
+        let mut invalid_sig = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        invalid_sig.extend_from_slice(&FILE_SIGNATURE_HEADER);
+        
+        // Modify the chunk type byte (position 24) to 'r' (SimpleRecords)
+        invalid_sig[24] = ChunkType::SimpleRecords as u8;
+        
+        // Recalculate header hash after modification
+        let header_hash = highway_hash(&invalid_sig[8..]);
+        
+        // Put the new header hash at the beginning
+        let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        final_bytes.put_u64_le(header_hash);
+        final_bytes.extend_from_slice(&invalid_sig[8..]);
+        let bytes = final_bytes.freeze();
+        
+        // Validation should fail with InvalidFileSignature mentioning wrong chunk type
+        let result = validate_signature(bytes);
+        if let Err(DiskyError::InvalidFileSignature(msg)) = result {
+            assert!(msg.contains("Expected chunk type 's'"));
+            assert!(msg.contains("got 'r'"));
+        } else {
+            panic!("Expected InvalidFileSignature with message, got: {:?}", result);
+        }
+    }
+    
+    #[test]
+    fn test_validate_wrong_data_size() {
+        // Create a header with non-zero data_size
+        let mut invalid_sig = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        invalid_sig.extend_from_slice(&FILE_SIGNATURE_HEADER);
+        
+        // Change data_size to 42 (bytes 8-15)
+        invalid_sig[8] = 42;  // Set first byte to 42, rest remain 0
+        
+        // Recalculate header hash after modification
+        let header_hash = highway_hash(&invalid_sig[8..]);
+        
+        // Put the new header hash at the beginning
+        let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        final_bytes.put_u64_le(header_hash);
+        final_bytes.extend_from_slice(&invalid_sig[8..]);
+        let bytes = final_bytes.freeze();
+        
+        // Validation should fail with InvalidFileSignature mentioning wrong data_size
+        let result = validate_signature(bytes);
+        if let Err(DiskyError::InvalidFileSignature(msg)) = result {
+            assert!(msg.contains("Expected data_size to be 0"));
+            assert!(msg.contains("got 42"));
+        } else {
+            panic!("Expected InvalidFileSignature with message, got: {:?}", result);
+        }
+    }
+    
+    #[test]
+    fn test_validate_wrong_num_records() {
+        // Create a header with non-zero num_records
+        let mut invalid_sig = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        invalid_sig.extend_from_slice(&FILE_SIGNATURE_HEADER);
+        
+        // Change num_records to 5 (bytes 25-31)
+        invalid_sig[25] = 5;  // Set first byte to 5, rest remain 0
+        
+        // Recalculate header hash after modification
+        let header_hash = highway_hash(&invalid_sig[8..]);
+        
+        // Put the new header hash at the beginning
+        let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        final_bytes.put_u64_le(header_hash);
+        final_bytes.extend_from_slice(&invalid_sig[8..]);
+        let bytes = final_bytes.freeze();
+        
+        // Validation should fail with InvalidFileSignature mentioning wrong num_records
+        let result = validate_signature(bytes);
+        if let Err(DiskyError::InvalidFileSignature(msg)) = result {
+            assert!(msg.contains("Expected num_records to be 0"));
+            assert!(msg.contains("got 5"));
+        } else {
+            panic!("Expected InvalidFileSignature with message, got: {:?}", result);
+        }
+    }
+    
+    #[test]
+    fn test_validate_wrong_decoded_data_size() {
+        // Create a header with non-zero decoded_data_size
+        let mut invalid_sig = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        invalid_sig.extend_from_slice(&FILE_SIGNATURE_HEADER);
+        
+        // Change decoded_data_size to 100 (bytes 32-39)
+        invalid_sig[32] = 100;  // Set first byte to 100, rest remain 0
+        
+        // Recalculate header hash after modification
+        let header_hash = highway_hash(&invalid_sig[8..]);
+        
+        // Put the new header hash at the beginning
+        let mut final_bytes = BytesMut::with_capacity(SIGNATURE_HEADER_SIZE);
+        final_bytes.put_u64_le(header_hash);
+        final_bytes.extend_from_slice(&invalid_sig[8..]);
+        let bytes = final_bytes.freeze();
+        
+        // Validation should fail with InvalidFileSignature mentioning wrong decoded_data_size
+        let result = validate_signature(bytes);
+        if let Err(DiskyError::InvalidFileSignature(msg)) = result {
+            assert!(msg.contains("Expected decoded_data_size to be 0"));
+            assert!(msg.contains("got 100"));
+        } else {
+            panic!("Expected InvalidFileSignature with message, got: {:?}", result);
+        }
     }
     
     #[test]

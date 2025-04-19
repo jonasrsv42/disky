@@ -25,8 +25,8 @@ pub enum DiskyError {
     Io(#[from] io::Error),
 
     /// The file does not have a valid Disky file signature.
-    #[error("Invalid file signature")]
-    InvalidFileSignature,
+    #[error("Invalid file signature: {0}")]
+    InvalidFileSignature(String),
 
     /// A block header hash does not match.
     #[error("Block header hash mismatch")]

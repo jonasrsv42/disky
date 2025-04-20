@@ -40,10 +40,6 @@ pub enum DiskyError {
     #[error("Chunk data hash mismatch")]
     ChunkDataHashMismatch,
 
-    /// The file is corrupt and cannot be read.
-    #[error("File corruption: {0}")]
-    Corruption(String),
-
     /// Reached an unexpected end of chunk when
     /// trying to parse it.
     #[error("UnexpectedEndOfChunk corruption: {0}")]
@@ -52,6 +48,18 @@ pub enum DiskyError {
     /// Reached an unexpected end while parsing chunk header.
     #[error("UnexpectedEndOfChunkHeader corruption: {0}")]
     UnexpectedEndOfChunkHeader(String),
+
+    /// Reached an unexpected end while parsing chunk header.
+    #[error("BlockHeaderInconsistency: {0}")]
+    BlockHeaderInconsistency(String),
+
+    /// Block header validation failed.
+    #[error("InvalidBlockHeader: {0}")]
+    InvalidBlockHeader(String),
+
+    /// Block header validation failed.
+    #[error("ReadCorruptedBlock: {0}")]
+    ReadCorruptedBlock(String),
 
     /// Failed to parse varint
     #[error("VarintParseError: {0}")]

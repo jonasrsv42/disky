@@ -109,16 +109,12 @@ impl SimpleChunkParser {
 
         // Take a slice of the current chunk data without advancing yet
         let this_chunk_data = chunk_data.slice(0..expected_chunk_size);
-        
+
         // Verify the data hash if present
         if header.data_hash != 0 {
             let computed_hash = highway_hash(&this_chunk_data);
             if computed_hash != header.data_hash {
-                return Err(DiskyError::Corruption(format!(
-                    "Chunk data hash mismatch: expected {}, computed {}",
-                    header.data_hash,
-                    computed_hash
-                )));
+                return Err(DiskyError::ChunkDataHashMismatch);
             }
         }
 
@@ -144,18 +140,11 @@ impl SimpleChunkParser {
         };
 
         // Read size of record sizes (will be a varint)
-        let sizes_len = match varint::read_vu64(&mut data) {
-            Ok(len) => len as usize,
-            Err(_) => {
-                return Err(DiskyError::Corruption(
-                    "Failed to read sizes length".to_string(),
-                ));
-            }
-        };
+        let sizes_len = varint::read_vu64(&mut data)? as usize;
 
         // Ensure sizes data is valid
         if sizes_len > data.remaining() {
-            return Err(DiskyError::Corruption(format!(
+            return Err(DiskyError::UnexpectedEndOfChunk(format!(
                 "Sizes data length ({}) exceeds available data ({})",
                 sizes_len,
                 data.remaining()

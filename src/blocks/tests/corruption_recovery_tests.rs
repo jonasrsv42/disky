@@ -237,7 +237,7 @@ fn test_recover_from_previous_chunk_inconsistency() {
     match result {
         Ok(_) => panic!("Expected corruption not OK."),
         Err(err) => match err {
-            DiskyError::Corruption(e) => assert_eq!(
+            DiskyError::BlockHeaderInconsistency(e) => assert_eq!(
                 e,
                 "Block header previous_chunk value mismatch: expected 128, got 24"
             ),

@@ -97,20 +97,20 @@ pub fn validate_header_values(
     let usable_size = usable_block_size(block_size);
     
     if previous_chunk % block_size >= usable_size {
-        return Err(DiskyError::Corruption(format!(
+        return Err(DiskyError::InvalidBlockHeader(format!(
             "Invalid previous_chunk value: {} % {} >= {}", 
             previous_chunk, block_size, usable_size
         )));
     }
     
     if next_chunk == 0 {
-        return Err(DiskyError::Corruption(
+        return Err(DiskyError::InvalidBlockHeader(
             "Invalid next_chunk value: cannot be zero".to_string()
         ));
     }
     
     if (next_chunk - 1) % block_size < BLOCK_HEADER_SIZE {
-        return Err(DiskyError::Corruption(format!(
+        return Err(DiskyError::InvalidBlockHeader(format!(
             "Invalid next_chunk value: ({} - 1) % {} < {}", 
             next_chunk, block_size, BLOCK_HEADER_SIZE
         )));

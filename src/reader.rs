@@ -32,7 +32,7 @@ use crate::error::{DiskyError, Result};
 pub enum CorruptionStrategy {
     /// Errors out on any corruption (default)
     Error,
-    
+
     /// Attempts to recover from corruption by skipping corrupted blocks and chunks
     Recover,
 }
@@ -48,7 +48,7 @@ impl Default for CorruptionStrategy {
 pub struct RecordReaderConfig {
     /// Block reader configuration
     pub block_config: BlockReaderConfig,
-    
+
     /// Strategy for handling corruption
     pub corruption_strategy: CorruptionStrategy,
 }
@@ -71,7 +71,7 @@ impl RecordReaderConfig {
             corruption_strategy: CorruptionStrategy::default(),
         })
     }
-    
+
     /// Sets the corruption strategy
     pub fn with_corruption_strategy(mut self, strategy: CorruptionStrategy) -> Self {
         self.corruption_strategy = strategy;
@@ -83,22 +83,22 @@ impl RecordReaderConfig {
 enum ReaderState {
     /// Initial state, reader is ready to start reading
     Ready,
-    
+
     /// Reading initial blocks, which should start with a signature
     ReadingInitialBlocks,
-    
+
     /// Reading subsequent blocks after signature has been verified
     ReadingSubsequentBlocks,
-    
+
     /// Expecting the initial signature chunk
     ExpectingSignature(ChunksParser),
-    
+
     /// Actively parsing chunks from previously read block data
     ParsingChunks(ChunksParser),
-    
+
     /// End of file reached, no more records
     EndOfFile,
-    
+
     /// A corrupted section was encountered that cannot be recovered
     Corrupted,
 }
@@ -115,19 +115,19 @@ enum ReaderState {
 /// ```
 /// use disky::reader::{RecordReader, RecordReaderConfig, CorruptionStrategy};
 /// use std::fs::File;
-/// 
+///
 /// # fn example() -> disky::error::Result<()> {
 /// # let file = File::open("example.riegeli")?;
-/// 
+///
 /// // Create a reader with default configuration
 /// let mut reader = RecordReader::new(file)?;
-/// 
+///
 /// // Or with custom configuration
 /// # let file = File::open("example.riegeli")?;
 /// let config = RecordReaderConfig::default()
 ///     .with_corruption_strategy(CorruptionStrategy::Recover);
 /// let mut reader = RecordReader::with_config(file, config)?;
-/// 
+///
 /// // Read all records in the file
 /// loop {
 ///     match reader.next_record() {
@@ -152,10 +152,10 @@ enum ReaderState {
 pub struct RecordReader<Source: Read + Seek> {
     /// The block-level reader for handling Riegeli blocks and headers
     block_reader: BlockReader<Source>,
-    
+
     /// Current state of the reader state machine
     state: ReaderState,
-    
+
     /// Configuration for the reader
     config: RecordReaderConfig,
 }
@@ -173,7 +173,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
     pub fn new(source: Source) -> Result<Self> {
         Self::with_config(source, RecordReaderConfig::default())
     }
-    
+
     /// Creates a new RecordReader with custom configuration.
     ///
     /// # Arguments
@@ -191,7 +191,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
             config,
         })
     }
-    
+
     /// Reads the next record from the file.
     ///
     /// This method advances the reader state machine through its various states
@@ -209,7 +209,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     // Initial state, start reading initial blocks
                     self.state = ReaderState::ReadingInitialBlocks;
                 }
-                
+
                 ReaderState::ReadingInitialBlocks => {
                     // Read chunks from the block reader, expecting a signature in the first set
                     match self.block_reader.read_chunks() {
@@ -217,13 +217,13 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             // Create a new chunk parser with the read data
                             let parser = ChunksParser::new(chunk_data);
                             self.state = ReaderState::ExpectingSignature(parser);
-                        },
+                        }
                         Err(e) => {
                             // Handle errors based on corruption strategy
                             if self.config.corruption_strategy == CorruptionStrategy::Recover {
                                 // Try to recover, but only for certain errors
                                 match &e {
-                                    DiskyError::Corruption(_) | DiskyError::BlockHeaderHashMismatch => {
+                                    DiskyError::BlockHeaderHashMismatch => {
                                         // Try to recover from block-level corruption
                                         if let Err(recovery_err) = self.block_reader.recover() {
                                             // Unrecoverable corruption
@@ -237,7 +237,8 @@ impl<Source: Read + Seek> RecordReader<Source> {
                                         // End of file reached without finding a signature
                                         self.state = ReaderState::Corrupted;
                                         return Err(DiskyError::InvalidFileSignature(
-                                            "End of file reached before signature chunk".to_string()
+                                            "End of file reached before signature chunk"
+                                                .to_string(),
                                         ));
                                     }
                                     _ => {
@@ -254,7 +255,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         }
                     }
                 }
-                
+
                 ReaderState::ReadingSubsequentBlocks => {
                     // Read chunks from the block reader after signature validation
                     match self.block_reader.read_chunks() {
@@ -268,7 +269,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             if self.config.corruption_strategy == CorruptionStrategy::Recover {
                                 // Try to recover, but only for certain errors
                                 match &e {
-                                    DiskyError::Corruption(_) | DiskyError::BlockHeaderHashMismatch => {
+                                    DiskyError::BlockHeaderHashMismatch => {
                                         // Try to recover from block-level corruption
                                         if let Err(recovery_err) = self.block_reader.recover() {
                                             // Unrecoverable corruption
@@ -304,7 +305,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         }
                     }
                 }
-                
+
                 ReaderState::ExpectingSignature(parser) => {
                     // We expect the first chunk to be a signature
                     match parser.next() {
@@ -314,25 +315,26 @@ impl<Source: Read + Seek> RecordReader<Source> {
                                 self.state = ReaderState::Corrupted;
                                 return Err(e);
                             }
-                            
+
                             // Transition to regular chunk parsing
                             self.state = ReaderState::ParsingChunks(parser.clone());
-                        },
+                        }
                         Ok(other) => {
                             // First chunk wasn't a signature - this is a corrupted file
                             self.state = ReaderState::Corrupted;
-                            return Err(DiskyError::InvalidFileSignature(
-                                format!("Expected signature chunk at file start, got {:?}", other)
-                            ));
-                        },
+                            return Err(DiskyError::InvalidFileSignature(format!(
+                                "Expected signature chunk at file start, got {:?}",
+                                other
+                            )));
+                        }
                         Err(e) => {
                             // Error parsing the signature
                             self.state = ReaderState::Corrupted;
                             return Err(e);
                         }
                     }
-                },
-                
+                }
+
                 ReaderState::ParsingChunks(parser) => {
                     // Parse the next chunk piece
                     match parser.next() {
@@ -340,26 +342,26 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             // Ignore signature chunks after the first one
                             // Just continue parsing
                         }
-                        
+
                         Ok(ChunkPiece::SimpleChunkStart) => {
                             // Start of a simple chunk - continue parsing
                             // Records will come next
                         }
-                        
+
                         Ok(ChunkPiece::Record(record)) => {
                             // Found a record, return it
                             return Ok(Some(record));
                         }
-                        
+
                         Ok(ChunkPiece::SimpleChunkEnd) => {
                             // End of simple chunk, continue parsing
                         }
-                        
+
                         Ok(ChunkPiece::ChunksEnd) => {
                             // End of current chunks, read more blocks
                             self.state = ReaderState::ReadingSubsequentBlocks;
                         }
-                        
+
                         Ok(ChunkPiece::Padding) => {
                             // Padding chunk (not fully implemented yet)
                             // If we encounter it, try to recover based on strategy
@@ -369,17 +371,17 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             } else {
                                 // Return an error since padding chunks aren't fully supported
                                 return Err(DiskyError::Other(
-                                    "Padding chunks are not fully supported yet".to_string()
+                                    "Padding chunks are not fully supported yet".to_string(),
                                 ));
                             }
                         }
-                        
+
                         Err(e) => {
                             // Error during parsing
                             if self.config.corruption_strategy == CorruptionStrategy::Recover {
                                 // Try to recover by refreshing the parser state
                                 parser.refresh();
-                                
+
                                 // Check if we have chunks left to parse
                                 match parser.next() {
                                     Ok(ChunkPiece::ChunksEnd) => {
@@ -403,42 +405,42 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         }
                     }
                 }
-                
+
                 ReaderState::EndOfFile => {
                     // End of file reached, no more records
                     return Ok(None);
                 }
-                
+
                 ReaderState::Corrupted => {
                     // Already corrupted, can't read more records
                     return Err(DiskyError::UnrecoverableCorruption(
-                        "Reader in corrupted state".to_string()
+                        "Reader in corrupted state".to_string(),
                     ));
                 }
             }
         }
     }
-    
+
     /// Returns the current position in the file.
     pub fn file_position(&self) -> u64 {
         self.block_reader.file_position()
     }
-    
+
     /// Returns a reference to the underlying source.
     pub fn get_ref(&self) -> &Source {
         self.block_reader.get_ref()
     }
-    
+
     /// Returns a mutable reference to the underlying source.
     pub fn get_mut(&mut self) -> &mut Source {
         self.block_reader.get_mut()
     }
-    
+
     /// Returns the underlying source, consuming self.
     pub fn into_inner(self) -> Source {
         self.block_reader.into_inner()
     }
-    
+
     /// Attempt to recover from a corrupted state.
     ///
     /// This method tries to recover from corruption by resetting the state machine
@@ -452,10 +454,10 @@ impl<Source: Read + Seek> RecordReader<Source> {
         if matches!(self.state, ReaderState::Corrupted) {
             // Ask the block reader to recover
             self.block_reader.recover()?;
-            
+
             // Reset state
             self.state = ReaderState::Ready;
-            
+
             Ok(())
         } else {
             // Not in a corrupted state, no need to recover
@@ -468,3 +470,4 @@ impl<Source: Read + Seek> RecordReader<Source> {
 mod tests {
     // Tests will go here - we'll implement them separately
 }
+

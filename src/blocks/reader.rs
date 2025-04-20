@@ -6,14 +6,14 @@ use std::cmp::min;
 use std::io::{Read, Result as IoResult, Seek, SeekFrom};
 
 /// A wrapper around any `Read + Seek` source that tracks the current position.
-/// 
+///
 /// This tracks the current position automatically as reads and seeks occur,
 /// eliminating the need to call `stream_position()` frequently or manually
 /// maintain a position counter.
 pub struct ReadPositionTracker<Source: Read + Seek> {
     /// The underlying source to read from
     source: Source,
-    
+
     /// The current position in the source
     position: u64,
 }
@@ -23,28 +23,25 @@ impl<Source: Read + Seek> ReadPositionTracker<Source> {
     pub fn new(mut source: Source) -> IoResult<Self> {
         // Get the initial position from the source
         let position = source.stream_position()?;
-        
-        Ok(Self {
-            source,
-            position,
-        })
+
+        Ok(Self { source, position })
     }
-    
+
     /// Returns the current position in the source.
     pub fn position(&self) -> u64 {
         self.position
     }
-    
+
     /// Returns a reference to the underlying source.
     pub fn get_ref(&self) -> &Source {
         &self.source
     }
-    
+
     /// Returns a mutable reference to the underlying source.
     pub fn get_mut(&mut self) -> &mut Source {
         &mut self.source
     }
-    
+
     /// Returns the underlying source, consuming self.
     pub fn into_inner(self) -> Source {
         self.source
@@ -63,13 +60,13 @@ impl<Source: Read + Seek> Seek for ReadPositionTracker<Source> {
     fn seek(&mut self, pos: SeekFrom) -> IoResult<u64> {
         // Forward seek call to the source
         let new_pos = self.source.seek(pos)?;
-        
+
         // Update our tracked position
         self.position = new_pos;
-        
+
         Ok(new_pos)
     }
-    
+
     fn stream_position(&mut self) -> IoResult<u64> {
         // We can return our tracked position directly without a system call
         Ok(self.position)
@@ -134,7 +131,7 @@ enum BlockReaderState {
     /// begins. This is likely due to a corruption of the current chunk and
     /// a suprise begin of a new chunk. We should trust the new block header
     /// and assume that the new chunk indeed begins where it indicates.
-    ReadHeaderPreviousChunkInconsistency(BlockHeader),
+    BlockHeaderInconsistency(BlockHeader),
 
     ReadInvalidHeader,
 
@@ -202,9 +199,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
     /// Creates a new BlockReader with custom configuration.
     pub fn with_config(source: Source, config: BlockReaderConfig) -> Result<Self> {
-        let source = ReadPositionTracker::new(source)
-            .map_err(|e| DiskyError::Io(e))?;
-        
+        let source = ReadPositionTracker::new(source).map_err(|e| DiskyError::Io(e))?;
+
         let position = source.position();
 
         Ok(Self {
@@ -368,8 +364,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 self.read_from_header_with_check(block_header)
             }
             // Need to call `recover` before trying to read again.
-            BlockReaderState::ReadCorruptedHeader(_) | BlockReaderState::ReadHeaderPreviousChunkInconsistency(_) => Err(
-                DiskyError::Corruption(
+            BlockReaderState::ReadCorruptedHeader(_) | BlockReaderState::BlockHeaderInconsistency(_) => Err(
+                DiskyError::ReadCorruptedBlock(
                     "Attemping to `read_chunks` on a corrupted reader. Try to call `recover` before reading again.".to_string()
                     )
                 ),
@@ -404,8 +400,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
     fn verify_expected_previous_chunk(&mut self, header: &BlockHeader) -> Result<()> {
         let expected_previous_chunk = self.source.position() - BLOCK_HEADER_SIZE - self.chunk_begin;
         if header.previous_chunk != expected_previous_chunk {
-            self.state = BlockReaderState::ReadHeaderPreviousChunkInconsistency(header.clone());
-            return Err(DiskyError::Corruption(format!(
+            self.state = BlockReaderState::BlockHeaderInconsistency(header.clone());
+            return Err(DiskyError::BlockHeaderInconsistency(format!(
                 "Block header previous_chunk value mismatch: expected {}, got {}",
                 expected_previous_chunk, header.previous_chunk
             )));
@@ -563,7 +559,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
                 Ok(())
             }
-            BlockReaderState::ReadHeaderPreviousChunkInconsistency(block_header) => {
+            BlockReaderState::BlockHeaderInconsistency(block_header) => {
                 // We must seek back to the start of previous chunk.
                 let previous_chunk = block_header.previous_chunk + BLOCK_HEADER_SIZE;
                 // Seek back to start of prervious chunk assuming the currrent one

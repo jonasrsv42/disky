@@ -6,8 +6,8 @@ use crate::chunks::SimpleChunkParser;
 use crate::chunks::SimpleChunkWriter;
 use crate::compression::core::CompressionType;
 use crate::error::DiskyError;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::hash::highway_hash;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 // Import SimpleChunkPiece from the SimpleChunkParser module
 use crate::chunks::simple_chunk_parser::SimpleChunkPiece;
@@ -551,12 +551,14 @@ fn test_valid_data_hash() {
 
     // This should succeed because the hash in the header matches the data
     let result = SimpleChunkParser::new(header, chunk_data);
-    assert!(result.is_ok(), "Parser creation should succeed with valid hash");
+    assert!(
+        result.is_ok(),
+        "Parser creation should succeed with valid hash"
+    );
 }
 
 #[test]
 fn test_invalid_data_hash() {
-    
     // Create a valid chunk
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
@@ -565,7 +567,7 @@ fn test_invalid_data_hash() {
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
     let mut header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Modify the data hash to an incorrect value
     header.data_hash = header.data_hash ^ 0xDEADBEEF; // XOR to change the hash
 
@@ -573,12 +575,13 @@ fn test_invalid_data_hash() {
     let result = SimpleChunkParser::new(header, chunk_data);
 
     // Should fail due to hash mismatch
-    assert!(result.is_err(), "Parser creation should fail with invalid hash");
+    assert!(
+        result.is_err(),
+        "Parser creation should fail with invalid hash"
+    );
     if let Err(err) = result {
         match err {
-            DiskyError::Corruption(msg) => {
-                assert!(msg.contains("Chunk data hash mismatch"));
-            }
+            DiskyError::ChunkDataHashMismatch => (),
             _ => panic!("Expected Corruption error, got: {:?}", err),
         }
     }
@@ -594,10 +597,10 @@ fn test_modified_data_hash_verification() {
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Create a modified copy of the chunk data
     let mut modified_data = chunk_data.clone();
-    
+
     // Modify one byte of the data (the compression type byte is easiest to change)
     if modified_data.len() > 0 {
         let mut bytes_mut = BytesMut::with_capacity(modified_data.len());
@@ -610,12 +613,13 @@ fn test_modified_data_hash_verification() {
     let result = SimpleChunkParser::new(header, modified_data);
 
     // Should fail due to hash mismatch
-    assert!(result.is_err(), "Parser creation should fail with modified data");
+    assert!(
+        result.is_err(),
+        "Parser creation should fail with modified data"
+    );
     if let Err(err) = result {
         match err {
-            DiskyError::Corruption(msg) => {
-                assert!(msg.contains("Chunk data hash mismatch"));
-            }
+            DiskyError::ChunkDataHashMismatch => (),
             _ => panic!("Expected Corruption error, got: {:?}", err),
         }
     }
@@ -707,7 +711,7 @@ fn test_invalid_sizes_length() {
     // Calculate the hash of the corrupted data to pass hash verification
     let corrupted_bytes = corrupted_data.freeze();
     let data_hash = highway_hash(&corrupted_bytes);
-    
+
     // Update the header with the new hash
     header.data_hash = data_hash;
 
@@ -717,7 +721,7 @@ fn test_invalid_sizes_length() {
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
-            DiskyError::Corruption(msg) => {
+            DiskyError::UnexpectedEndOfChunk(msg) => {
                 assert!(msg.contains("Sizes data length"));
             }
             _ => panic!("Expected Corruption error"),
@@ -746,7 +750,7 @@ fn test_unsupported_compression_type() {
     // Calculate hash for the modified data
     let modified_bytes = modified_data.freeze();
     let data_hash = highway_hash(&modified_bytes);
-    
+
     // Update the header with the correct hash for the modified data
     header.data_hash = data_hash;
 

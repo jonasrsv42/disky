@@ -263,7 +263,10 @@ mod tests {
 
         let header = parse_chunk_header(&mut truncated);
 
-        assert!(matches!(header, Err(DiskyError::UnexpectedEndOfChunkHeader(_))));
+        assert!(matches!(
+            header,
+            Err(DiskyError::UnexpectedEndOfChunkHeader(_))
+        ));
     }
 
     #[test]
@@ -275,4 +278,3 @@ mod tests {
         assert_eq!(bytes.len(), 0);
     }
 }
-

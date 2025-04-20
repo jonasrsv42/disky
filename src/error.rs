@@ -42,27 +42,37 @@ pub enum DiskyError {
 
     /// Reached an unexpected end of chunk when
     /// trying to parse it.
-    #[error("UnexpectedEndOfChunk corruption: {0}")]
+    #[error("Unexpected end of chunk: {0}")]
     UnexpectedEndOfChunk(String),
 
     /// Reached an unexpected end while parsing chunk header.
-    #[error("UnexpectedEndOfChunkHeader corruption: {0}")]
+    #[error("Unexpected end of chunk header: {0}")]
     UnexpectedEndOfChunkHeader(String),
 
     /// Reached an unexpected end while parsing chunk header.
-    #[error("BlockHeaderInconsistency: {0}")]
+    #[error("Block header inconsistency: {0}")]
     BlockHeaderInconsistency(String),
 
+    /// An error occurred while trying to read signature.
+    /// We typically do not try to recover from these.
+    #[error("Error while reading signature: {0}")]
+    SignatureReadingError(String),
+
     /// Block header validation failed.
-    #[error("InvalidBlockHeader: {0}")]
+    #[error("Invalid block header: {0}")]
     InvalidBlockHeader(String),
 
-    /// Block header validation failed.
-    #[error("ReadCorruptedBlock: {0}")]
+    /// Tried to read a corrupted block, this originates from
+    /// the block reader.
+    #[error("Trying to read at a corrupted block: {0}")]
     ReadCorruptedBlock(String),
 
+    /// Tried to read a corrupted chunk.
+    #[error("Trying to read at a corrupted chunk: {0}")]
+    ReadCorruptedChunk(String),
+
     /// Failed to parse varint
-    #[error("VarintParseError: {0}")]
+    #[error("Varint parse error: {0}")]
     VarintParseError(String),
 
     /// The file is corrupt and cannot be recovered.
@@ -73,6 +83,10 @@ pub enum DiskyError {
     #[error("Unsupported compression type: {0}")]
     UnsupportedCompressionType(u8),
 
+    /// Unsupported compression type.
+    #[error("Unsupported chunk type: {0}")]
+    UnsupportedChunkType(u8),
+
     /// The chunk type is not recognized.
     #[error("Unknown chunk type: {0}")]
     UnknownChunkType(u8),
@@ -82,12 +96,16 @@ pub enum DiskyError {
     UnexpectedEof,
 
     /// The file is not a Disky file.
-    #[error("Not a Disky file")]
-    NotDiskyFile,
+    #[error("Not a Disky file: {0}")]
+    NotDiskyFile(String),
 
     /// Attempted to write to a closed file.
     #[error("Writing a closed file")]
     WritingClosedFile,
+
+    /// We hit an invalid reader state.
+    #[error("Invalid reader state: {0}")]
+    InvalidReaderState(String),
 
     /// A general error occurred.
     #[error("{0}")]

@@ -37,6 +37,15 @@ pub enum CorruptionStrategy {
     Recover,
 }
 
+/// Returned by reads
+pub enum DiskyPiece {
+    /// A bytes record from disky file.
+    Record(Bytes),
+
+    /// End of disky file.
+    EOF,
+}
+
 impl Default for CorruptionStrategy {
     fn default() -> Self {
         CorruptionStrategy::Error
@@ -91,10 +100,20 @@ enum ReaderState {
     ReadingSubsequentBlocks,
 
     /// Expecting the initial signature chunk
-    ExpectingSignature(ChunksParser),
+    ExpectingSignature(Option<ChunksParser>),
 
     /// Actively parsing chunks from previously read block data
-    ParsingChunks(ChunksParser),
+    ParsingChunks(Option<ChunksParser>),
+
+    /// We encountered a block corruption when trying to read chunks.
+    BlockCorruption(DiskyError),
+
+    /// We encountered a chunks corruption when trying to parse chunks.
+    ChunkCorruption(DiskyError, Option<ChunksParser>),
+
+    /// We somehow reached an invalid reader state. There must be an implementation
+    /// bug.
+    InvalidState(DiskyError),
 
     /// End of file reached, no more records
     EndOfFile,
@@ -103,52 +122,6 @@ enum ReaderState {
     Corrupted,
 }
 
-/// High-level reader for Riegeli records.
-///
-/// `RecordReader` combines a `BlockReader` and `ChunksParser` into a state machine
-/// that reads and parses records from a Riegeli file. It handles the necessary
-/// transitions between reading blocks, handling block headers, parsing chunks,
-/// and extracting records.
-///
-/// # Example
-///
-/// ```
-/// use disky::reader::{RecordReader, RecordReaderConfig, CorruptionStrategy};
-/// use std::fs::File;
-///
-/// # fn example() -> disky::error::Result<()> {
-/// # let file = File::open("example.riegeli")?;
-///
-/// // Create a reader with default configuration
-/// let mut reader = RecordReader::new(file)?;
-///
-/// // Or with custom configuration
-/// # let file = File::open("example.riegeli")?;
-/// let config = RecordReaderConfig::default()
-///     .with_corruption_strategy(CorruptionStrategy::Recover);
-/// let mut reader = RecordReader::with_config(file, config)?;
-///
-/// // Read all records in the file
-/// loop {
-///     match reader.next_record() {
-///         Ok(Some(record)) => {
-///             // Process the record data (as Bytes)
-///             println!("Record size: {}", record.len());
-///         },
-///         Ok(None) => {
-///             // End of file reached
-///             break;
-///         },
-///         Err(e) => {
-///             // Handle error (depending on corruption_strategy, some errors may be skipped)
-///             println!("Error: {:?}", e);
-///             break;
-///         }
-///     }
-/// }
-/// # Ok(())
-/// # }
-/// ```
 pub struct RecordReader<Source: Read + Seek> {
     /// The block-level reader for handling Riegeli blocks and headers
     block_reader: BlockReader<Source>,
@@ -202,7 +175,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
     ///
     /// * `Result<Option<Bytes>>` - The next record as Bytes if available, None if end of file,
     ///   or an error if reading fails and recovery is disabled or fails
-    pub fn next_record(&mut self) -> Result<Option<Bytes>> {
+    pub fn next_record(&mut self) -> Result<DiskyPiece> {
         loop {
             match &mut self.state {
                 ReaderState::Ready => {
@@ -216,42 +189,13 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         Ok(chunk_data) => {
                             // Create a new chunk parser with the read data
                             let parser = ChunksParser::new(chunk_data);
-                            self.state = ReaderState::ExpectingSignature(parser);
+                            self.state = ReaderState::ExpectingSignature(Some(parser));
                         }
                         Err(e) => {
-                            // Handle errors based on corruption strategy
-                            if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                                // Try to recover, but only for certain errors
-                                match &e {
-                                    DiskyError::BlockHeaderHashMismatch => {
-                                        // Try to recover from block-level corruption
-                                        if let Err(recovery_err) = self.block_reader.recover() {
-                                            // Unrecoverable corruption
-                                            self.state = ReaderState::Corrupted;
-                                            return Err(recovery_err);
-                                        }
-                                        // Successfully recovered, try reading again
-                                        // Stay in ReadingInitialBlocks state
-                                    }
-                                    DiskyError::UnexpectedEof => {
-                                        // End of file reached without finding a signature
-                                        self.state = ReaderState::Corrupted;
-                                        return Err(DiskyError::InvalidFileSignature(
-                                            "End of file reached before signature chunk"
-                                                .to_string(),
-                                        ));
-                                    }
-                                    _ => {
-                                        // Other errors are not recoverable
-                                        self.state = ReaderState::Corrupted;
-                                        return Err(e);
-                                    }
-                                }
-                            } else {
-                                // No recovery, just return the error
-                                self.state = ReaderState::Corrupted;
-                                return Err(e);
-                            }
+                            // We do not try to recover if reading initial chunks for signature
+                            // fails.
+                            self.state = ReaderState::Corrupted;
+                            return Err(DiskyError::SignatureReadingError(e.to_string()));
                         }
                     }
                 }
@@ -262,160 +206,144 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         Ok(chunk_data) => {
                             // Create a new chunk parser with the read data
                             let parser = ChunksParser::new(chunk_data);
-                            self.state = ReaderState::ParsingChunks(parser);
+                            self.state = ReaderState::ParsingChunks(Some(parser));
                         }
-                        Err(e) => {
-                            // Handle errors based on corruption strategy
-                            if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                                // Try to recover, but only for certain errors
-                                match &e {
-                                    DiskyError::BlockHeaderHashMismatch => {
-                                        // Try to recover from block-level corruption
-                                        if let Err(recovery_err) = self.block_reader.recover() {
-                                            // Unrecoverable corruption
-                                            self.state = ReaderState::Corrupted;
-                                            return Err(recovery_err);
-                                        }
-                                        // Successfully recovered, try reading again
-                                        // Stay in ReadingBlock state
-                                    }
-                                    DiskyError::UnexpectedEof => {
-                                        // End of file reached
-                                        self.state = ReaderState::EndOfFile;
-                                        return Ok(None);
-                                    }
-                                    _ => {
-                                        // Other errors are not recoverable
+                        Err(e) => match e {
+                            // Recoverable errors
+                            DiskyError::BlockHeaderHashMismatch
+                            | DiskyError::InvalidBlockHeader(_)
+                            | DiskyError::BlockHeaderInconsistency(_) => {
+                                // Transition to block corruption state.
+                                self.state = ReaderState::BlockCorruption(e);
+                            }
+                            error => {
+                                // Unrecoverable error: transition to reader being corrupted and return error.
+                                self.state = ReaderState::Corrupted;
+                                return Err(error);
+                            }
+                        },
+                    }
+                }
+
+                ReaderState::ExpectingSignature(maybe_parser) => {
+                    match maybe_parser.take() {
+                        Some(mut parser) => {
+                            // We expect the first chunk to be a signature
+                            match parser.next() {
+                                Ok(ChunkPiece::Signature(header)) => {
+                                    // Verify the signature
+                                    if let Err(e) = validate_signature(&header) {
                                         self.state = ReaderState::Corrupted;
                                         return Err(e);
                                     }
+
+                                    // Transition to regular chunk parsing
+                                    self.state = ReaderState::ParsingChunks(Some(parser));
                                 }
-                            } else {
-                                // No recovery, just return the error
-                                if let DiskyError::UnexpectedEof = e {
-                                    // End of file is a special case
-                                    self.state = ReaderState::EndOfFile;
-                                    return Ok(None);
-                                } else {
-                                    // Any other error
+                                Ok(other) => {
+                                    // First chunk wasn't a signature - this is a corrupted file
+                                    self.state = ReaderState::Corrupted;
+                                    return Err(DiskyError::NotDiskyFile(format!(
+                                        "Expected signature chunk at file start, got {:?}",
+                                        other
+                                    )));
+                                }
+                                Err(e) => {
+                                    // Error parsing the signature, we don't try to recover from this.
                                     self.state = ReaderState::Corrupted;
                                     return Err(e);
                                 }
                             }
                         }
-                    }
-                }
-
-                ReaderState::ExpectingSignature(parser) => {
-                    // We expect the first chunk to be a signature
-                    match parser.next() {
-                        Ok(ChunkPiece::Signature(header)) => {
-                            // Verify the signature
-                            if let Err(e) = validate_signature(&header) {
-                                self.state = ReaderState::Corrupted;
-                                return Err(e);
-                            }
-
-                            // Transition to regular chunk parsing
-                            self.state = ReaderState::ParsingChunks(parser.clone());
-                        }
-                        Ok(other) => {
-                            // First chunk wasn't a signature - this is a corrupted file
-                            self.state = ReaderState::Corrupted;
-                            return Err(DiskyError::InvalidFileSignature(format!(
-                                "Expected signature chunk at file start, got {:?}",
-                                other
-                            )));
-                        }
-                        Err(e) => {
-                            // Error parsing the signature
-                            self.state = ReaderState::Corrupted;
-                            return Err(e);
+                        None => {
+                            self.state = ReaderState::InvalidState(DiskyError::Other(
+                                "Unable to `take` parser when `ExpectingSignature`.".to_string(),
+                            ))
                         }
                     }
                 }
 
-                ReaderState::ParsingChunks(parser) => {
-                    // Parse the next chunk piece
-                    match parser.next() {
-                        Ok(ChunkPiece::Signature(_)) => {
-                            // Ignore signature chunks after the first one
-                            // Just continue parsing
-                        }
-
-                        Ok(ChunkPiece::SimpleChunkStart) => {
-                            // Start of a simple chunk - continue parsing
-                            // Records will come next
-                        }
-
-                        Ok(ChunkPiece::Record(record)) => {
-                            // Found a record, return it
-                            return Ok(Some(record));
-                        }
-
-                        Ok(ChunkPiece::SimpleChunkEnd) => {
-                            // End of simple chunk, continue parsing
-                        }
-
-                        Ok(ChunkPiece::ChunksEnd) => {
-                            // End of current chunks, read more blocks
-                            self.state = ReaderState::ReadingSubsequentBlocks;
-                        }
-
-                        Ok(ChunkPiece::Padding) => {
-                            // Padding chunk (not fully implemented yet)
-                            // If we encounter it, try to recover based on strategy
-                            if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                                // Refresh parser to skip this chunk
-                                parser.refresh();
-                            } else {
-                                // Return an error since padding chunks aren't fully supported
-                                return Err(DiskyError::Other(
-                                    "Padding chunks are not fully supported yet".to_string(),
-                                ));
+                ReaderState::ParsingChunks(maybe_parser) => {
+                    match maybe_parser.take() {
+                        Some(mut parser) => match parser.next() {
+                            Ok(ChunkPiece::Signature(_))
+                            | Ok(ChunkPiece::SimpleChunkStart)
+                            | Ok(ChunkPiece::SimpleChunkEnd)
+                            | Ok(ChunkPiece::Padding) => {
+                                // Ignore signature chunks after the first one
+                                // Just continue parsing
                             }
-                        }
 
-                        Err(e) => {
-                            // Error during parsing
-                            if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                                // Try to recover by refreshing the parser state
-                                parser.refresh();
-
-                                // Check if we have chunks left to parse
-                                match parser.next() {
-                                    Ok(ChunkPiece::ChunksEnd) => {
-                                        // No more chunks to parse, read more blocks
-                                        self.state = ReaderState::ReadingSubsequentBlocks;
-                                    }
-                                    Err(_) => {
-                                        // Still getting errors, try reading next block
-                                        self.state = ReaderState::ReadingSubsequentBlocks;
-                                    }
-                                    _ => {
-                                        // Found another valid chunk piece, continue parsing
-                                        // Stay in ParsingChunks state
-                                    }
-                                }
-                            } else {
-                                // No recovery, return the error
-                                self.state = ReaderState::Corrupted;
-                                return Err(e);
+                            Ok(ChunkPiece::Record(record)) => {
+                                // Found a record, return it
+                                return Ok(DiskyPiece::Record(record));
                             }
+
+                            Ok(ChunkPiece::ChunksEnd) => {
+                                // End of current chunks, read more blocks
+                                self.state = ReaderState::ReadingSubsequentBlocks;
+                            }
+
+                            Err(e) => {
+                                self.state = ReaderState::ChunkCorruption(e, Some(parser));
+                            }
+                        },
+
+                        None => {
+                            self.state = ReaderState::InvalidState(DiskyError::Other(
+                                "Unable to `take` parser when `ParsingChunks`.".to_string(),
+                            ))
                         }
                     }
                 }
 
                 ReaderState::EndOfFile => {
                     // End of file reached, no more records
-                    return Ok(None);
+                    return Ok(DiskyPiece::EOF);
                 }
 
+                ReaderState::BlockCorruption(error) => {
+                    // Handle errors based on corruption strategy
+                    if self.config.corruption_strategy == CorruptionStrategy::Recover {
+                        if let Err(recovery_err) = self.block_reader.recover() {
+                            // Unrecoverable corruption
+                            self.state = ReaderState::Corrupted;
+                            return Err(recovery_err);
+                        }
+                    } else {
+                        return Err(DiskyError::ReadCorruptedBlock(error.to_string()));
+                    }
+                }
+
+                ReaderState::ChunkCorruption(error, maybe_parser) => {
+                    match maybe_parser.take() {
+                        Some(mut parser) => {
+                            // Error during parsing
+                            if self.config.corruption_strategy == CorruptionStrategy::Recover {
+                                // Try to recover by refreshing the parser state
+                                parser.refresh();
+                                self.state = ReaderState::ParsingChunks(Some(parser));
+                            } else {
+                                // No recovery, return the error
+                                return Err(DiskyError::ReadCorruptedChunk(error.to_string()));
+                            }
+                        }
+                        None => {
+                            self.state = ReaderState::InvalidState(DiskyError::Other(
+                                "Unable to `take` parser when `ChunkCorruption`.".to_string(),
+                            ))
+                        }
+                    }
+                }
                 ReaderState::Corrupted => {
                     // Already corrupted, can't read more records
                     return Err(DiskyError::UnrecoverableCorruption(
                         "Reader in corrupted state".to_string(),
                     ));
+                }
+
+                ReaderState::InvalidState(err) => {
+                    return Err(DiskyError::InvalidReaderState(err.to_string()))
                 }
             }
         }

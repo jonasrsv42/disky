@@ -21,7 +21,7 @@ pub fn read_vu64(buf: &mut Bytes) -> Result<u64> {
 
     loop {
         if buf.remaining() < 1 {
-            return Err(DiskyError::VarintParseError("Truncated varint".to_string()));
+            return Err(DiskyError::VarintParseError("truncated varint".to_string()));
         }
 
         let byte = buf.get_u8();
@@ -33,7 +33,7 @@ pub fn read_vu64(buf: &mut Bytes) -> Result<u64> {
 
         shift += 7;
         if shift >= 64 {
-            return Err(DiskyError::VarintParseError("Varint too long".to_string()));
+            return Err(DiskyError::VarintParseError("varint too long".to_string()));
         }
     }
 
@@ -71,7 +71,7 @@ mod tests {
 
         assert_eq!(
             read_vu64(&mut frozen).err().unwrap().to_string(),
-            "VarintParseError: Truncated varint".to_string()
+            "Varint parse error: truncated varint".to_string()
         );
     }
 
@@ -88,7 +88,7 @@ mod tests {
         println!("{:?}", read_vu64(&mut frozen));
         assert_eq!(
             read_vu64(&mut frozen).err().unwrap().to_string(),
-            "VarintParseError: Varint too long".to_string()
+            "Varint parse error: varint too long".to_string()
         );
     }
 }

@@ -82,7 +82,7 @@ use crate::error::{DiskyError, Result};
 /// Represents a parsed piece from a Riegeli chunk.
 ///
 /// A ChunkPiece can be a complete chunk (like a Signature or Padding chunk),
-/// or it can represent a part of the parsing process for a complex chunk type 
+/// or it can represent a part of the parsing process for a complex chunk type
 /// (like SimpleChunkStart, Record, and SimpleChunkEnd for a simple chunk with records).
 #[derive(Debug)]
 pub enum ChunkPiece {
@@ -92,10 +92,10 @@ pub enum ChunkPiece {
 
     /// Start of a simple chunk with records - indicates that records will follow
     SimpleChunkStart,
-    
+
     /// A single record from a simple chunk - contains the actual record data
     Record(Bytes),
-    
+
     /// End of a simple chunk - indicates that all records in the current chunk have been read
     SimpleChunkEnd,
 
@@ -107,14 +107,13 @@ pub enum ChunkPiece {
 }
 
 /// Internal parser state to track parsing progress
-#[derive(Clone)]
 enum State {
     /// Ready to parse a new chunk - initial state or after completing a chunk
     Fresh,
-    
+
     /// In the process of parsing a simple chunk - contains the SimpleChunkParser
     SimpleChunk(SimpleChunkParser),
-    
+
     /// Done parsing chunks - reached the end of the buffer or an unrecoverable error
     Finish,
 }
@@ -127,7 +126,6 @@ enum State {
 /// - Parsing different chunk types (signature, simple records, etc.)
 /// - Iterating through records in chunks
 /// - Recovering from errors to continue parsing subsequent chunks
-#[derive(Clone)]
 pub struct ChunksParser {
     /// The buffer of chunk data being parsed
     buffer: Bytes,
@@ -249,9 +247,9 @@ impl ChunksParser {
             ChunkType::Padding => {
                 // Currently we don't have a proper parser for padding chunks
                 // So we throw an error to indicate this isn't supported yet
-                Err(DiskyError::Other(format!(
-                    "Padding chunk parsing not yet implemented. Use refresh() to skip."
-                )))
+                Err(DiskyError::UnsupportedChunkType(
+                    header.chunk_type.as_byte(),
+                ))
             }
         }
     }
@@ -324,3 +322,4 @@ impl ChunksParser {
 mod tests {
     // Tests are in src/chunks/tests/chunks_parser_tests.rs
 }
+

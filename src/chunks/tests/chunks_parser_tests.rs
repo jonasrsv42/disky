@@ -214,8 +214,8 @@ fn test_padding_chunk_error() {
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
-            DiskyError::Other(msg) => {
-                assert!(msg.contains("Padding chunk parsing not yet implemented"));
+            DiskyError::UnsupportedChunkType(chunk_type) => {
+                assert_eq!(chunk_type, ChunkType::Padding.as_byte());
             }
             _ => panic!("Expected Other error"),
         }

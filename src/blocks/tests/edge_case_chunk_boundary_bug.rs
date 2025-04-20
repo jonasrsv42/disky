@@ -9,6 +9,7 @@
 
 use super::super::reader::{BlockReader, BlockReaderConfig};
 use super::super::writer::{BlockWriter, BlockWriterConfig};
+use super::helpers::extract_bytes;
 use bytes::Bytes;
 use std::io::Cursor;
 
@@ -65,7 +66,8 @@ fn test_bug_chunk_ends_at_block_boundary() {
     
     // This read should return only the first chunk, despite the second chunk
     // starting at a block boundary
-    let read_chunk = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_chunk = extract_bytes(block_piece);
     
     // Verify we only received the first chunk
     assert_eq!(read_chunk.len(), first_chunk_size, 
@@ -79,7 +81,8 @@ fn test_bug_chunk_ends_at_block_boundary() {
     }
     
     // Now read the second chunk
-    let read_chunk2 = reader.read_chunks().unwrap();
+    let block_piece2 = reader.read_chunks().unwrap();
+    let read_chunk2 = extract_bytes(block_piece2);
     
     // Verify we received the second chunk
     assert_eq!(read_chunk2.len(), second_chunk.len(), 
@@ -127,7 +130,8 @@ fn test_read_starting_within_block_crossing_boundary() {
     ).unwrap();
     
     // Read the chunk
-    let read_data = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_data = extract_bytes(block_piece);
     
     // Verify the data matches the original pattern
     assert_eq!(read_data.len(), pattern_data.len(),

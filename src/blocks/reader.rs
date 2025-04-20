@@ -5,6 +5,15 @@ use bytes::{Bytes, BytesMut};
 use std::cmp::min;
 use std::io::{Read, Result as IoResult, Seek, SeekFrom};
 
+/// Result of a chunks read operation.
+#[derive(Debug)]
+pub enum BlocksPiece {
+    /// Successfully read chunks data.
+    Chunks(Bytes),
+    /// End of file reached - no more chunks to read.
+    EOF,
+}
+
 /// A wrapper around any `Read + Seek` source that tracks the current position.
 ///
 /// This tracks the current position automatically as reads and seeks occur,
@@ -327,6 +336,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         Ok(bytes_read)
     }
 
+
     /// Reads chunks data, handling block headers.
     ///
     /// This method reads from the current position, skipping any block headers
@@ -336,7 +346,12 @@ impl<Source: Read + Seek> BlockReader<Source> {
     ///
     /// The returned data needs to be processed by a higher-level chunk parser to
     /// extract individual chunks based on their specific format.
-    pub fn read_chunks(&mut self) -> Result<Bytes> {
+    ///
+    /// # Returns
+    ///
+    /// * `Result<BlocksPiece>` - Either `BlocksPiece::Chunks` with data or
+    ///   `BlocksPiece::EOF` if end of file is reached, or an error.
+    pub fn read_chunks(&mut self) -> Result<BlocksPiece> {
         // Get previous state.
         let state = self.state.clone();
 
@@ -353,7 +368,6 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         match &state {
             BlockReaderState::Fresh => {
-
                 self.chunk_begin = self.source.position();
                 self.read_new_chunks()
             }
@@ -370,7 +384,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
                     )
                 ),
 
-            BlockReaderState::EOF => Err(DiskyError::Other("Cannot read after EOF.".to_string())),
+            BlockReaderState::EOF => Ok(BlocksPiece::EOF),
             BlockReaderState::ReadInvalidHeader => Err(DiskyError::UnrecoverableCorruption(
                     "Cannot `read_chunks` after having read an invalid header.".to_string())),
 
@@ -384,7 +398,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
     }
 
     /// Read as if we're at the start of a new chunk.
-    fn read_new_chunks(&mut self) -> Result<Bytes> {
+    fn read_new_chunks(&mut self) -> Result<BlocksPiece> {
         if self.at_block_boundary() {
             self.read_from_boundary()
         } else {
@@ -392,7 +406,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         }
     }
 
-    fn read_from_header_with_check(&mut self, header: &BlockHeader) -> Result<Bytes> {
+    fn read_from_header_with_check(&mut self, header: &BlockHeader) -> Result<BlocksPiece> {
         self.verify_expected_previous_chunk(header)?;
         self.read_from_header(header)
     }
@@ -410,7 +424,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
     }
 
     /// Read from right after a block header
-    fn read_from_header(&mut self, header: &BlockHeader) -> Result<Bytes> {
+    fn read_from_header(&mut self, header: &BlockHeader) -> Result<BlocksPiece> {
         // We can't reliably check `expected_previous_chunk` here, since there
         // may have been > 1 chunk read up until this point.
 
@@ -427,7 +441,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
             self.state = BlockReaderState::ReadHeader(header.clone());
             // We've completed a chunk that ended exactly at a block boundary,
             // and the next block contains a new chunk
-            return Ok(self.buffer.split().freeze());
+            return Ok(BlocksPiece::Chunks(self.buffer.split().freeze()));
         }
 
         // Determine the size remaining of the chunk.
@@ -437,7 +451,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         self.read_complete_chunk_data(chunk_size)?;
 
         // Return the completed chunk
-        Ok(self.buffer.split().freeze())
+        Ok(BlocksPiece::Chunks(self.buffer.split().freeze()))
     }
 
     /// Reads chunks starting at a block boundary.
@@ -447,8 +461,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
     ///
     /// # Returns
     ///
-    /// * `Result<Bytes>` - The complete chunk data, or an error
-    fn read_from_boundary(&mut self) -> Result<Bytes> {
+    /// * `Result<BlocksPiece>` - The complete chunk data, or an error
+    fn read_from_boundary(&mut self) -> Result<BlocksPiece> {
         // Read the block header
         let header = self.read_block_header()?;
 
@@ -463,8 +477,8 @@ impl<Source: Read + Seek> BlockReader<Source> {
     ///
     /// # Returns
     ///
-    /// * `Result<Bytes>` - The complete chunk data, or an error
-    fn read_from_within(&mut self) -> Result<Bytes> {
+    /// * `Result<BlocksPiece>` - The complete chunk data, or an error
+    fn read_from_within(&mut self) -> Result<BlocksPiece> {
         // Read until the next block boundary
         let remaining_in_block =
             utils::remaining_in_block(self.source.position(), self.config.block_size);
@@ -473,10 +487,10 @@ impl<Source: Read + Seek> BlockReader<Source> {
         if bytes_read == 0 {
             if self.buffer.is_empty() {
                 self.state = BlockReaderState::EOF;
-                return Err(DiskyError::UnexpectedEof);
+                return Ok(BlocksPiece::EOF);
             }
 
-            return Ok(self.buffer.split().freeze());
+            return Ok(BlocksPiece::Chunks(self.buffer.split().freeze()));
         }
 
         // If we're at a block boundary, we read from the boundary.
@@ -488,7 +502,7 @@ impl<Source: Read + Seek> BlockReader<Source> {
         self.state = BlockReaderState::Fresh;
 
         // Return the completed chunk
-        Ok(self.buffer.split().freeze())
+        Ok(BlocksPiece::Chunks(self.buffer.split().freeze()))
     }
 
     /// Reads the remainder of a chunk, handling any block headers encountered.

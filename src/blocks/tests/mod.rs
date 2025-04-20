@@ -14,11 +14,20 @@ mod reader_edge_cases;
 pub(crate) mod helpers {
     use super::super::*;
     use std::io::Cursor;
+    use bytes::Bytes;
     
     // Helper function to safely get the inner buffer from a writer
     pub fn get_buffer<S: std::io::Write + std::io::Seek>(writer: writer::BlockWriter<S>) -> Vec<u8> 
     where S: IntoInner<Output = Vec<u8>> {
         writer.into_inner().into_inner()
+    }
+    
+    // Helper function to extract Bytes from BlocksPiece
+    pub fn extract_bytes(block_piece: reader::BlocksPiece) -> Bytes {
+        match block_piece {
+            reader::BlocksPiece::Chunks(bytes) => bytes,
+            reader::BlocksPiece::EOF => panic!("Expected Chunks but got EOF"),
+        }
     }
     
     // Helper trait to make the above function work with different types

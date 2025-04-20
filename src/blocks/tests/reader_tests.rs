@@ -3,6 +3,7 @@
 use super::super::reader::{BlockReader, BlockReaderConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
+use super::helpers::extract_bytes;
 use crate::error::DiskyError;
 use bytes::Bytes;
 use std::io::Cursor;
@@ -31,7 +32,8 @@ fn test_read_simple_chunks() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
 
     // Read the chunks
-    let chunks = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let chunks = extract_bytes(block_piece);
 
     // Verify the chunks matches the original data
     assert_eq!(&chunks[..], test_data);
@@ -56,7 +58,8 @@ fn test_read_chunks_crossing_block_boundary() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
 
     // Read the chunks
-    let chunks = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let chunks = extract_bytes(block_piece);
 
     // Verify the chunks matches the original data
     assert_eq!(&chunks[..], &test_data[..]);
@@ -88,13 +91,16 @@ fn test_read_multiple_chunks_sequential() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
 
     // Read each chunks section and verify
-    let read_chunks1 = reader.read_chunks().unwrap();
+    let block_piece1 = reader.read_chunks().unwrap();
+    let read_chunks1 = extract_bytes(block_piece1);
     assert_eq!(&read_chunks1[..], chunk1);
 
-    let read_chunks2 = reader.read_chunks().unwrap();
+    let block_piece2 = reader.read_chunks().unwrap();
+    let read_chunks2 = extract_bytes(block_piece2);
     assert_eq!(&read_chunks2[..], chunk2);
 
-    let read_chunks3 = reader.read_chunks().unwrap();
+    let block_piece3 = reader.read_chunks().unwrap();
+    let read_chunks3 = extract_bytes(block_piece3);
     assert_eq!(&read_chunks3[..], chunk3);
 }
 
@@ -117,7 +123,8 @@ fn test_large_chunks_crossing_multiple_boundaries() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
 
     // Read the chunks
-    let chunks = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let chunks = extract_bytes(block_piece);
 
     // Verify the chunks matches the original data
     assert_eq!(&chunks[..], &pattern_data[..]);
@@ -170,7 +177,8 @@ fn test_multiple_chunks_in_single_block() {
 
     // When starting at a block boundary, the reader uses block header information
     // to read exactly the first chunk
-    let first_chunks = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let first_chunks = extract_bytes(block_piece);
     assert_eq!(
         &first_chunks[..],
         small_chunk1,
@@ -180,7 +188,8 @@ fn test_multiple_chunks_in_single_block() {
     // For the second read, since we're now in the middle of a block, the behavior is
     // different. Since we can't rely on block header information for chunk boundaries,
     // the reader will read both remaining chunks.
-    let remaining_chunks = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let remaining_chunks = extract_bytes(block_piece);
 
     // Create the expected data - remaining two chunks
     let mut expected_remaining = Vec::new();
@@ -194,25 +203,25 @@ fn test_multiple_chunks_in_single_block() {
         "Second read should return the remaining chunks concatenated"
     );
 
-    // Verify that a third call to read_chunks() either returns empty data or an EOF error
+    // Verify that a third call to read_chunks() returns EOF
     match reader.read_chunks() {
-        Ok(more_data) => {
-            assert!(
-                more_data.is_empty(),
-                "Third read_chunks call should return empty data"
-            );
-        }
-        Err(e) => {
-            // An EOF error is acceptable at the end of the file
-            match e {
-                DiskyError::UnexpectedEof => {
+        Ok(block_piece) => {
+            // We expect BlocksPiece::EOF here since we've refactored
+            match block_piece {
+                crate::blocks::reader::BlocksPiece::EOF => {
                     // This is expected, we've reached the end of the file
                     println!("Got expected EOF on third read");
                 }
-                _ => {
-                    panic!("Unexpected error on third read_chunks call: {:?}", e);
+                crate::blocks::reader::BlocksPiece::Chunks(data) => {
+                    assert!(
+                        data.is_empty(),
+                        "Third read_chunks call should return empty data"
+                    );
                 }
             }
+        }
+        Err(e) => {
+            panic!("Unexpected error on third read_chunks call: {:?}", e);
         }
     }
 }

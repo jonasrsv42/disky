@@ -186,11 +186,20 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::ReadingInitialBlocks => {
                     // Read chunks from the block reader, expecting a signature in the first set
                     match self.block_reader.read_chunks() {
-                        Ok(chunk_data) => {
-                            // Create a new chunk parser with the read data
-                            let parser = ChunksParser::new(chunk_data);
-                            self.state = ReaderState::ExpectingSignature(Some(parser));
-                        }
+                        Ok(block_piece) => match block_piece {
+                            crate::blocks::reader::BlocksPiece::Chunks(chunk_data) => {
+                                // Create a new chunk parser with the read data
+                                let parser = ChunksParser::new(chunk_data);
+                                self.state = ReaderState::ExpectingSignature(Some(parser));
+                            }
+                            crate::blocks::reader::BlocksPiece::EOF => {
+                                // We reached EOF while reading initial blocks - this is an error
+                                self.state = ReaderState::Corrupted;
+                                return Err(DiskyError::SignatureReadingError(
+                                    "Reached EOF while reading initial signature".to_string(),
+                                ));
+                            }
+                        },
                         Err(e) => {
                             // We do not try to recover if reading initial chunks for signature
                             // fails.
@@ -203,11 +212,17 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::ReadingSubsequentBlocks => {
                     // Read chunks from the block reader after signature validation
                     match self.block_reader.read_chunks() {
-                        Ok(chunk_data) => {
-                            // Create a new chunk parser with the read data
-                            let parser = ChunksParser::new(chunk_data);
-                            self.state = ReaderState::ParsingChunks(Some(parser));
-                        }
+                        Ok(block_piece) => match block_piece {
+                            crate::blocks::reader::BlocksPiece::Chunks(chunk_data) => {
+                                // Create a new chunk parser with the read data
+                                let parser = ChunksParser::new(chunk_data);
+                                self.state = ReaderState::ParsingChunks(Some(parser));
+                            }
+                            crate::blocks::reader::BlocksPiece::EOF => {
+                                // Reached end of file
+                                self.state = ReaderState::EndOfFile;
+                            }
+                        },
                         Err(e) => match e {
                             // Recoverable errors
                             DiskyError::BlockHeaderHashMismatch

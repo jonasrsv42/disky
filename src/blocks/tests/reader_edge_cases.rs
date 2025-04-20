@@ -3,6 +3,7 @@
 use super::super::reader::{BlockReader, BlockReaderConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
+use super::helpers::extract_bytes;
 use crate::error::DiskyError;
 use bytes::Bytes;
 use std::io::Cursor;
@@ -43,12 +44,14 @@ fn test_empty_and_tiny_chunks() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
     
     // Read the first regular chunk
-    let read_chunk1 = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_chunk1 = extract_bytes(block_piece);
     assert_eq!(&read_chunk1[..], chunk1);
     
     // Read the next chunk, which may contain both the tiny chunk and final chunk
     // because they might be in the same block and combined by the reader
-    let read_next = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_next = extract_bytes(block_piece);
     
     // Create the expected combined chunk
     let mut combined = Vec::new();
@@ -61,8 +64,8 @@ fn test_empty_and_tiny_chunks() {
     
     // Verify we've reached EOF
     let result = reader.read_chunks();
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), DiskyError::UnexpectedEof));
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap(), crate::blocks::reader::BlocksPiece::EOF));
 }
 
 #[test]
@@ -107,19 +110,22 @@ fn test_file_boundary_edge_cases() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
     
     // Read the padding chunk
-    let read_padding = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_padding = extract_bytes(block_piece);
     assert_eq!(&read_padding[..], &padding[..]);
     
     // Read the one block chunk
-    let read_one_block = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_one_block = extract_bytes(block_piece);
     assert_eq!(&read_one_block[..], &one_block_chunk[..]);
     
     // Read the tiny chunk
-    let read_tiny = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let read_tiny = extract_bytes(block_piece);
     assert_eq!(&read_tiny[..], tiny_chunk);
     
     // Verify we've reached EOF
     let result = reader.read_chunks();
-    assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), DiskyError::UnexpectedEof));
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap(), crate::blocks::reader::BlocksPiece::EOF));
 }

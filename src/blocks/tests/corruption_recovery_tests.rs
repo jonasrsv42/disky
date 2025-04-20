@@ -3,6 +3,7 @@
 use super::super::reader::{BlockReader, BlockReaderConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
+use super::helpers::extract_bytes;
 use crate::error::DiskyError;
 use bytes::Bytes;
 use std::io::Cursor;
@@ -49,7 +50,8 @@ fn test_recover_from_corrupted_header() {
 
     // Read the first chunk successfully - this should be completely within the first block
     // and not affected by the corrupted header at the block boundary
-    let chunk1_read = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let chunk1_read = extract_bytes(block_piece);
     assert_eq!(&chunk1_read[..], chunk1);
 
     // The next read should hit the corrupted header and fail
@@ -66,7 +68,8 @@ fn test_recover_from_corrupted_header() {
     // After recovery, we should be able to read a chunk
     // This will either be chunk2 or chunk3, depending on whether our corruption
     // only affected the header or also damaged the chunk data
-    let recovered_chunk = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let recovered_chunk = extract_bytes(block_piece);
 
     // Check that we recovered to a valid chunk
     // Since we corrupted the header at the start of the second chunk,
@@ -156,7 +159,8 @@ fn test_recover_from_multiple_corrupted_headers() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
 
     // Read the first chunk successfully
-    let chunk1_read = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let chunk1_read = extract_bytes(block_piece);
     assert_eq!(&chunk1_read[..], chunk1);
 
     // The next read should hit the first corrupted header and fail
@@ -182,7 +186,7 @@ fn test_recover_from_multiple_corrupted_headers() {
     }
 
     // Now we should be able to read the fourth chunk
-    let chunk4_read = reader.read_chunks().unwrap();
+    let chunk4_read = extract_bytes(reader.read_chunks().unwrap());
     assert_eq!(&chunk4_read[..], chunk4);
 }
 
@@ -249,7 +253,8 @@ fn test_recover_from_previous_chunk_inconsistency() {
     reader.recover().unwrap();
 
     // After recovery, we should be able to read the new chunk
-    let recovered_chunk = reader.read_chunks().unwrap();
+    let block_piece = reader.read_chunks().unwrap();
+    let recovered_chunk = extract_bytes(block_piece);
     assert_eq!(&recovered_chunk[..], new_chunk);
 }
 
@@ -283,7 +288,7 @@ fn test_recover_at_end_of_file() {
     let mut reader = BlockReader::with_config(cursor, BlockReaderConfig { block_size }).unwrap();
 
     // Read the first chunk successfully
-    let chunk = reader.read_chunks().unwrap();
+    let chunk = extract_bytes(reader.read_chunks().unwrap());
     assert_eq!(&chunk[..], b"Single chunk");
 
     // Try to read again, it should hit the corrupted header and error

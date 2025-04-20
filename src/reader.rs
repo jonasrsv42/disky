@@ -356,50 +356,6 @@ impl<Source: Read + Seek> RecordReader<Source> {
             }
         }
     }
-
-    /// Returns the current position in the file.
-    pub fn file_position(&self) -> u64 {
-        self.block_reader.file_position()
-    }
-
-    /// Returns a reference to the underlying source.
-    pub fn get_ref(&self) -> &Source {
-        self.block_reader.get_ref()
-    }
-
-    /// Returns a mutable reference to the underlying source.
-    pub fn get_mut(&mut self) -> &mut Source {
-        self.block_reader.get_mut()
-    }
-
-    /// Returns the underlying source, consuming self.
-    pub fn into_inner(self) -> Source {
-        self.block_reader.into_inner()
-    }
-
-    /// Attempt to recover from a corrupted state.
-    ///
-    /// This method tries to recover from corruption by resetting the state machine
-    /// and asking the block reader to recover.
-    ///
-    /// # Returns
-    ///
-    /// A Result indicating if recovery was successful
-    pub fn recover(&mut self) -> Result<()> {
-        // Only attempt recovery if we're in a corrupted state
-        if matches!(self.state, ReaderState::Corrupted) {
-            // Ask the block reader to recover
-            self.block_reader.recover()?;
-
-            // Reset state
-            self.state = ReaderState::Ready;
-
-            Ok(())
-        } else {
-            // Not in a corrupted state, no need to recover
-            Ok(())
-        }
-    }
 }
 
 #[cfg(test)]

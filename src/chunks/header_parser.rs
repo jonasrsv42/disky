@@ -17,10 +17,10 @@
 //! This module provides functionality for parsing Riegeli chunk headers
 //! according to the file format specification.
 
-use bytes::{Buf, Bytes};
-use crate::hash::highway_hash;
-use crate::error::{Result, DiskyError};
 use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
+use crate::error::{DiskyError, Result};
+use crate::hash::highway_hash;
+use bytes::{Buf, Bytes};
 
 /// Parses a Riegeli chunk header from a Bytes object.
 ///
@@ -39,7 +39,7 @@ use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 ///
 /// # Returns
 ///
-/// A `Result` containing the parsed `ChunkHeader`. The bytes buffer position will be advanced 
+/// A `Result` containing the parsed `ChunkHeader`. The bytes buffer position will be advanced
 /// past the header, so it will only contain the data after the header when this function returns.
 ///
 /// # Errors
@@ -66,7 +66,7 @@ use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 ///     300                     // decoded_data_size
 /// );
 /// let header_bytes = write_chunk_header(&header).unwrap();
-/// 
+///
 /// // Add some data after the header
 /// let mut full_bytes = Vec::new();
 /// full_bytes.extend_from_slice(&header_bytes);
@@ -84,12 +84,16 @@ use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 pub fn parse_chunk_header(bytes: &mut Bytes) -> Result<ChunkHeader> {
     // Ensure we have enough bytes for a complete header
     if bytes.remaining() < CHUNK_HEADER_SIZE {
-        return Err(DiskyError::UnexpectedEof);
+        return Err(DiskyError::UnexpectedEndOfChunkHeader(format!(
+            "Unable to parse chunk header. expected at-least {} bytes, got {} bytes",
+            CHUNK_HEADER_SIZE,
+            bytes.remaining()
+        )));
     }
 
     // Make a copy of the header portion for hash verification
     let header_copy = bytes.slice(0..CHUNK_HEADER_SIZE);
-    
+
     // Extract header_hash (first 8 bytes)
     let header_hash = bytes.get_u64_le();
 
@@ -138,7 +142,7 @@ pub fn parse_chunk_header(bytes: &mut Bytes) -> Result<ChunkHeader> {
 mod tests {
     use super::*;
     use crate::chunks::header_writer::write_chunk_header;
-    use bytes::{BytesMut, BufMut};
+    use bytes::{BufMut, BytesMut};
 
     #[test]
     fn test_parse_valid_header() {
@@ -148,83 +152,86 @@ mod tests {
             9876543210,
             ChunkType::SimpleRecords,
             42,
-            987654321
+            987654321,
         );
-        
+
         let header_bytes = write_chunk_header(&original_header).unwrap();
-        
+
         // Add some extra data to test that only the header is consumed
         let mut bytes = BytesMut::with_capacity(header_bytes.len() + 10);
         bytes.extend_from_slice(&header_bytes);
         bytes.extend_from_slice(b"extradata");
         let mut bytes = bytes.freeze();
-        
+
         // Parse the header
         let parsed_header = parse_chunk_header(&mut bytes).unwrap();
-        
+
         // Verify the parsed fields match the original values
         assert_eq!(parsed_header, original_header);
-        
+
         // Verify the remaining bytes are correct (bytes now only contains data after the header)
         assert_eq!(bytes, Bytes::from_static(b"extradata"));
     }
-    
+
     #[test]
     fn test_parse_header_not_enough_bytes() {
         // Create a header but truncate it
         let header = ChunkHeader::new(1, 2, ChunkType::SimpleRecords, 3, 4);
         let header_bytes = write_chunk_header(&header).unwrap();
         let mut truncated = header_bytes.slice(0..CHUNK_HEADER_SIZE - 1);
-        
+
         // Parsing should fail with UnexpectedEof
         let result = parse_chunk_header(&mut truncated);
-        assert!(matches!(result, Err(DiskyError::UnexpectedEof)));
+        assert!(matches!(
+            result,
+            Err(DiskyError::UnexpectedEndOfChunkHeader(_))
+        ));
     }
-    
+
     #[test]
     fn test_parse_header_invalid_hash() {
         // Create a valid header
         let header = ChunkHeader::new(100, 200, ChunkType::SimpleRecords, 5, 300);
         let header_bytes = write_chunk_header(&header).unwrap();
-        
+
         // Corrupt the header data (but not the hash)
         let mut corrupted = BytesMut::with_capacity(CHUNK_HEADER_SIZE);
         corrupted.extend_from_slice(&header_bytes[0..9]); // Include hash and one more byte
         corrupted.put_u8(header_bytes[9] ^ 0x01); // Flip one bit
         corrupted.extend_from_slice(&header_bytes[10..]); // Add the rest
         let mut corrupted = corrupted.freeze();
-        
+
         // Parsing should fail with ChunkHeaderHashMismatch
         let result = parse_chunk_header(&mut corrupted);
         assert!(matches!(result, Err(DiskyError::ChunkHeaderHashMismatch)));
     }
-    
+
     #[test]
     fn test_parse_header_unknown_chunk_type() {
         // Create a valid header
         let header = ChunkHeader::new(100, 200, ChunkType::SimpleRecords, 5, 300);
         let header_bytes = write_chunk_header(&header).unwrap();
-        
+
         // Corrupt the chunk type byte
         let mut corrupted = BytesMut::with_capacity(CHUNK_HEADER_SIZE);
         corrupted.extend_from_slice(&header_bytes[0..24]); // Up to chunk type
         corrupted.put_u8(0xFF); // Invalid chunk type
         corrupted.extend_from_slice(&header_bytes[25..]); // Add the rest
-        
+
         // Recalculate the header hash
         let header_hash = highway_hash(&corrupted[8..]);
-        
+
         // Replace the header hash
         let mut final_bytes = BytesMut::with_capacity(CHUNK_HEADER_SIZE);
         final_bytes.put_u64_le(header_hash);
         final_bytes.extend_from_slice(&corrupted[8..]);
         let mut final_bytes = final_bytes.freeze();
-        
+
         // Parsing should fail with UnknownChunkType
         let result = parse_chunk_header(&mut final_bytes);
         assert!(matches!(result, Err(DiskyError::UnknownChunkType(0xFF))));
     }
-    
+
     #[test]
     fn test_parse_all_chunk_types() {
         // Test parsing each valid chunk type
@@ -233,28 +240,29 @@ mod tests {
             ChunkType::Padding,
             ChunkType::SimpleRecords,
         ];
-        
+
         for expected_type in types {
             let original_header = ChunkHeader::new(1, 2, expected_type, 3, 4);
             let header_bytes = write_chunk_header(&original_header).unwrap();
             let mut header_bytes = header_bytes.clone();
-            
+
             let parsed_header = parse_chunk_header(&mut header_bytes).unwrap();
             assert_eq!(parsed_header.chunk_type, expected_type);
         }
     }
-    
+
     #[test]
     fn test_exact_header_length() {
         // Create a header with exactly CHUNK_HEADER_SIZE bytes
         let header = ChunkHeader::new(100, 200, ChunkType::SimpleRecords, 5, 300);
         let header_bytes = write_chunk_header(&header).unwrap();
-        
+
         assert_eq!(header_bytes.len(), CHUNK_HEADER_SIZE);
-        
+
         // Parse should succeed and consume all bytes
         let mut header_bytes_clone = header_bytes.clone();
         let _ = parse_chunk_header(&mut header_bytes_clone).unwrap();
         assert_eq!(header_bytes_clone.len(), 0);
     }
 }
+

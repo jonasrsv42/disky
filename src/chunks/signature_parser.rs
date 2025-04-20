@@ -263,7 +263,7 @@ mod tests {
 
         let header = parse_chunk_header(&mut truncated);
 
-        assert!(matches!(header, Err(DiskyError::UnexpectedEof)));
+        assert!(matches!(header, Err(DiskyError::UnexpectedEndOfChunkHeader(_))));
     }
 
     #[test]

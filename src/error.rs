@@ -44,6 +44,15 @@ pub enum DiskyError {
     #[error("File corruption: {0}")]
     Corruption(String),
 
+    /// Reached an unexpected end of chunk when
+    /// trying to parse it.
+    #[error("UnexpectedEndOfChunk corruption: {0}")]
+    UnexpectedEndOfChunk(String),
+
+    /// Reached an unexpected end while parsing chunk header.
+    #[error("UnexpectedEndOfChunkHeader corruption: {0}")]
+    UnexpectedEndOfChunkHeader(String),
+
     /// The file is corrupt and cannot be recovered.
     #[error("Unrecoverable file corruption: {0}")]
     UnrecoverableCorruption(String),

@@ -224,7 +224,7 @@ impl ChunksParser {
 
         // Make sure we have the full chunk data
         if self.buffer.len() < header.data_size as usize {
-            return Err(DiskyError::Corruption(format!(
+            return Err(DiskyError::UnexpectedEndOfChunk(format!(
                 "Chunk data is smaller than expected: expected {} bytes, got {} bytes",
                 header.data_size,
                 self.buffer.remaining()

@@ -12,11 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tests for the Riegeli implementation.
+//! Tests for the Disky format reader implementation
 
-// Import test modules
-pub mod utils;
-pub mod writer;
-pub mod reader;
-
-
+mod basic_reading_tests;
+mod configuration_tests;
+mod corruption_handling_tests;

@@ -53,6 +53,7 @@
 use std::io::{Read, Seek};
 
 use bytes::Bytes;
+use log::{error, info, warn};
 
 use crate::blocks::reader::{BlockReader, BlockReaderConfig, BlocksPiece};
 use crate::chunks::chunks_parser::{ChunkPiece, ChunksParser};
@@ -190,14 +191,14 @@ enum ReaderState {
 /// High-level reader for extracting records from Riegeli files.
 ///
 /// `RecordReader` provides a streaming API that reads Riegeli-formatted files and
-/// extracts individual records one at a time while handling block headers, 
+/// extracts individual records one at a time while handling block headers,
 /// chunk boundaries, validation, and optional corruption recovery.
 ///
 /// The reader works as a state machine, transparently handling all the low-level
 /// format details including:
 ///
 /// - Reading and validating block headers
-/// - Processing chunk formats and boundaries 
+/// - Processing chunk formats and boundaries
 /// - Verifying signatures and checksums
 /// - Recovering from certain types of data corruption when configured
 ///
@@ -330,6 +331,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         Err(e) => {
                             // We do not try to recover if reading initial chunks for signature
                             // fails.
+                            warn!("Error reading initial chunks for signature: {}", e);
                             self.state = ReaderState::Corrupted;
                             return Err(DiskyError::SignatureReadingError(e.to_string()));
                         }
@@ -356,10 +358,12 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             | DiskyError::InvalidBlockHeader(_)
                             | DiskyError::BlockHeaderInconsistency(_) => {
                                 // Transition to block corruption state.
+                                warn!("Potentially recoverable block corruption detected: {}", e);
                                 self.state = ReaderState::BlockCorruption(e);
                             }
                             error => {
                                 // Unrecoverable error: transition to reader being corrupted and return error.
+                                error!("Unrecoverable error during reading: {}", error);
                                 self.state = ReaderState::Corrupted;
                                 return Err(error);
                             }
@@ -373,6 +377,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         Ok(ChunkPiece::Signature(header)) => {
                             // Verify the signature
                             if let Err(e) = validate_signature(&header) {
+                                error!("Signature validation failed: {}", e);
                                 self.state = ReaderState::Corrupted;
                                 return Err(e);
                             }
@@ -432,12 +437,21 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::BlockCorruption(error) => {
                     // Error during disk reading.
                     if self.config.corruption_strategy == CorruptionStrategy::Recover {
+                        info!("Attempting to recover from block corruption: {}", error);
                         if let Err(recovery_err) = self.block_reader.recover() {
                             // Unrecoverable corruption
+                            error!("Block recovery failed: {}", recovery_err);
                             self.state = ReaderState::Corrupted;
                             return Err(recovery_err);
                         }
+
+                        info!("Block corruption recovery successful");
+                        self.state = ReaderState::ReadingSubsequentBlocks;
                     } else {
+                        warn!(
+                            "Block corruption detected but recovery not enabled: {}",
+                            error
+                        );
                         let ret_val = Err(DiskyError::ReadCorruptedBlock(error.to_string()));
 
                         // Need to set state to not leave us in transitionary state.
@@ -449,17 +463,42 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::ChunkCorruption(error, mut parser) => {
                     // Error during parsing
                     if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                        // Try to recover by skipping the chunk.
-                        parser.skip_chunk();
-                        self.state = ReaderState::ParsingChunks(parser);
+                        match error {
+                            chunk_err @ (DiskyError::ChunkDataHashMismatch
+                            | DiskyError::UnsupportedChunkType(_)
+                            | DiskyError::UnsupportedCompressionType(_)
+                            | DiskyError::UnexpectedEndOfChunk(_)) => {
+                                warn!("Attempting to recover from chunk corruption: {}", chunk_err);
+                                // Try to recover by skipping the chunk.
+                                parser.skip_chunk();
+                                info!("Skipped corrupted chunk, continuing with next chunk");
+                                self.state = ReaderState::ParsingChunks(parser);
+                            }
+                            chunks_err @ (DiskyError::MissingChunkData(_)
+                            | DiskyError::ChunkHeaderHashMismatch
+                            | DiskyError::UnknownChunkType(_)
+                            | DiskyError::UnexpectedEndOfChunkHeader(_)) => {
+                                info!("Skipped entire in memory blocks, continuing to read new blocks: {}", chunks_err);
+                                self.state = ReaderState::ReadingSubsequentBlocks;
+                            }
+                            others => {
+                                error!("Unrecoverable: {}", others);
+                                self.state = ReaderState::Corrupted;
+                            }
+                        }
                     } else {
                         // No recovery, return the error
+                        warn!(
+                            "Chunk corruption detected but recovery not enabled: {}",
+                            error
+                        );
                         self.state = ReaderState::Corrupted;
                         return Err(DiskyError::ReadCorruptedChunk(error.to_string()));
                     }
                 }
                 ReaderState::Corrupted => {
                     // Already corrupted, can't read more records
+                    error!("Attempting to read from already corrupted reader state");
                     self.state = ReaderState::Corrupted;
                     return Err(DiskyError::UnrecoverableCorruption(
                         "Reader in corrupted state".to_string(),
@@ -467,6 +506,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 }
 
                 ReaderState::InvalidState(err) => {
+                    error!("Invalid reader state encountered: {}", err);
                     let ret_val = Err(DiskyError::InvalidReaderState(err.to_string()));
                     self.state = ReaderState::InvalidState(err);
                     return ret_val;

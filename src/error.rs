@@ -45,6 +45,12 @@ pub enum DiskyError {
     #[error("Unexpected end of chunk: {0}")]
     UnexpectedEndOfChunk(String),
 
+    /// Missing chunk data. There is not enough
+    /// chunk data according to the chunk header.
+    /// This is not recoverable.
+    #[error("Missing chunk data: {0}")]
+    MissingChunkData(String),
+
     /// Reached an unexpected end while parsing chunk header.
     #[error("Unexpected end of chunk header: {0}")]
     UnexpectedEndOfChunkHeader(String),

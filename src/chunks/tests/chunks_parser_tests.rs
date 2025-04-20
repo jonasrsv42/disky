@@ -291,10 +291,10 @@ fn test_corrupted_chunk_data() {
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
-            DiskyError::UnexpectedEndOfChunk(_) => {
+            DiskyError::MissingChunkData(_) => {
                 // Expected error
             }
-            _ => panic!("Expected UnexpectedEndOfChunk error, got: {:?}", err),
+            _ => panic!("Expected MissingChunkData error, got: {:?}", err),
         }
     }
 }
@@ -663,4 +663,3 @@ fn test_recovery_during_simple_chunk_parsing() {
         _ => panic!("Expected ChunksEnd"),
     }
 }
-

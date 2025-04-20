@@ -12,11 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Record reader for Riegeli files.
+//! High-level record reader for Riegeli files.
 //!
-//! This module provides a high-level API for reading records from Riegeli files.
-//! It combines the block-level reading of `BlockReader` with the parsing logic
-//! of `ChunksParser` into a simple state machine that yields records one at a time.
+//! # Overview
+//!
+//! The `reader` module provides a performant, streaming API for extracting records from
+//! Riegeli formatted files. It handles all the complexities of the format including:
+//!
+//! - Block boundaries and headers
+//! - Chunk parsing and validation
+//! - Signature verification
+//! - Corruption detection and optional recovery
+//!
+//! # Usage
+//!
+//! ```no_run
+//! use std::fs::File;
+//! use disky::reader::RecordReader;
+//! use disky::reader::DiskyPiece;
+//! use disky::error::Result;
+//!
+//! fn read_records(path: &str) -> Result<()> {
+//!     let file = File::open(path)?;
+//!     let mut reader = RecordReader::new(file)?;
+//!
+//!     // Read records until EOF
+//!     loop {
+//!         match reader.next_record()? {
+//!             DiskyPiece::Record(bytes) => {
+//!                 // Process record bytes
+//!                 println!("Record size: {}", bytes.len());
+//!             }
+//!             DiskyPiece::EOF => break,
+//!         }
+//!     }
+//!     Ok(())
+//! }
+//! ```
 
 use std::io::{Read, Seek};
 
@@ -27,22 +59,31 @@ use crate::chunks::chunks_parser::{ChunkPiece, ChunksParser};
 use crate::chunks::signature_parser::validate_signature;
 use crate::error::{DiskyError, Result};
 
-/// Configures how the RecordReader should handle corruption
+/// Strategy for handling data corruption during file reading.
+///
+/// Determines whether `RecordReader` should attempt to recover from corrupted blocks
+/// and continue reading subsequent records, or fail immediately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CorruptionStrategy {
-    /// Errors out on any corruption (default)
+    /// Return errors immediately on any corruption (default)
     Error,
 
-    /// Attempts to recover from corruption by skipping corrupted blocks and chunks
+    /// Attempt recovery by skipping corrupted blocks/chunks
+    ///
+    /// When enabled, the reader will attempt to find the next valid record after
+    /// encountering corruption, potentially skipping damaged portions of the file.
     Recover,
 }
 
-/// Returned by reads
+/// Result returned by `next_record()`, representing either record data or EOF.
+///
+/// This enum avoids using `Option<Bytes>` for better semantics and future extensibility.
+#[derive(Debug)]
 pub enum DiskyPiece {
-    /// A bytes record from disky file.
+    /// A complete record extracted from the file
     Record(Bytes),
 
-    /// End of disky file.
+    /// End of file reached, no more records available
     EOF,
 }
 
@@ -52,13 +93,15 @@ impl Default for CorruptionStrategy {
     }
 }
 
-/// Configuration for the RecordReader
+/// Configuration for the [`RecordReader`].
+///
+/// Controls the behavior of record reading, including block size and corruption handling.
 #[derive(Debug, Clone)]
 pub struct RecordReaderConfig {
-    /// Block reader configuration
+    /// Underlying block reader configuration (block size, etc.)
     pub block_config: BlockReaderConfig,
 
-    /// Strategy for handling corruption
+    /// How to handle corrupted data encountered during reading
     pub corruption_strategy: CorruptionStrategy,
 }
 
@@ -72,7 +115,15 @@ impl Default for RecordReaderConfig {
 }
 
 impl RecordReaderConfig {
-    /// Creates a new RecordReaderConfig with the specified block size
+    /// Creates a config with a custom block size.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_size` - Size of blocks in bytes (must be at least 48 bytes)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if block_size is too small to prevent cascading headers.
     pub fn with_block_size(block_size: u64) -> Result<Self> {
         let block_config = BlockReaderConfig::with_block_size(block_size)?;
         Ok(Self {
@@ -81,82 +132,125 @@ impl RecordReaderConfig {
         })
     }
 
-    /// Sets the corruption strategy
+    /// Sets the corruption handling strategy.
+    ///
+    /// Returns self for method chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use disky::reader::{RecordReaderConfig, CorruptionStrategy};
+    ///
+    /// let config = RecordReaderConfig::default()
+    ///     .with_corruption_strategy(CorruptionStrategy::Recover);
+    /// ```
     pub fn with_corruption_strategy(mut self, strategy: CorruptionStrategy) -> Self {
         self.corruption_strategy = strategy;
         self
     }
 }
 
-/// State for the RecordReader state machine
+/// Internal state machine states for the RecordReader.
+///
+/// Each state represents a specific phase in the record reading process.
+/// The reader transitions between these states based on file contents
+/// and processing requirements.
 enum ReaderState {
-    /// Initial state, reader is ready to start reading
+    /// Initial state before any reading has begun
     Ready,
 
-    /// Reading initial blocks, which should start with a signature
+    /// Reading blocks at the start of a file to find signature
     ReadingInitialBlocks,
 
-    /// Reading subsequent blocks after signature has been verified
+    /// Reading blocks after signature verification
     ReadingSubsequentBlocks,
 
-    /// Expecting the initial signature chunk - directly owns the parser
+    /// Processing the initial signature chunk
     ExpectingSignature(ChunksParser),
 
-    /// Actively parsing chunks from previously read block data
+    /// Processing chunks to extract records
     ParsingChunks(ChunksParser),
 
-    /// We encountered a block corruption when trying to read chunks.
+    /// Handling corrupted block header
     BlockCorruption(DiskyError),
 
-    /// We encountered a chunks corruption when trying to parse chunks.
+    /// Handling corrupted chunk data with parser for potential recovery
     ChunkCorruption(DiskyError, ChunksParser),
 
-    /// We somehow reached an invalid reader state. There must be an implementation
-    /// bug.
+    /// Invalid internal state, indicates implementation error
     InvalidState(DiskyError),
 
-    /// End of file reached, no more records
+    /// End of file reached, no more records available
     EOF,
 
-    /// A corrupted section was encountered that cannot be recovered
+    /// Unrecoverable corruption encountered
     Corrupted,
 }
 
+/// High-level reader for extracting records from Riegeli files.
+///
+/// `RecordReader` provides a streaming API that reads Riegeli-formatted files and
+/// extracts individual records one at a time while handling block headers, 
+/// chunk boundaries, validation, and optional corruption recovery.
+///
+/// The reader works as a state machine, transparently handling all the low-level
+/// format details including:
+///
+/// - Reading and validating block headers
+/// - Processing chunk formats and boundaries 
+/// - Verifying signatures and checksums
+/// - Recovering from certain types of data corruption when configured
+///
+/// # Generic Parameters
+///
+/// * `Source` - Any type that implements both `Read` and `Seek` (e.g., `File`, `Cursor<Vec<u8>>`)
 pub struct RecordReader<Source: Read + Seek> {
-    /// The block-level reader for handling Riegeli blocks and headers
+    /// Underlying block-level reader
     block_reader: BlockReader<Source>,
 
-    /// Current state of the reader state machine
+    /// Current state in the reading state machine
     state: ReaderState,
 
-    /// Configuration for the reader
+    /// Reader configuration parameters
     config: RecordReaderConfig,
 }
 
 impl<Source: Read + Seek> RecordReader<Source> {
-    /// Creates a new RecordReader with default configuration.
+    /// Creates a new reader with default configuration.
     ///
-    /// # Arguments
+    /// This constructor uses sensible defaults:
+    /// - 64 KiB block size
+    /// - Error handling for corruption (no recovery attempts)
     ///
-    /// * `source` - Any type that implements `Read + Seek`
+    /// # Errors
     ///
-    /// # Returns
+    /// Returns an error if the source cannot be positioned or read.
     ///
-    /// A Result containing the RecordReader or an error
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::fs::File;
+    /// use disky::reader::RecordReader;
+    ///
+    /// # fn example() -> disky::error::Result<()> {
+    /// let file = File::open("example.riegeli")?;
+    /// let reader = RecordReader::new(file)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(source: Source) -> Result<Self> {
         Self::with_config(source, RecordReaderConfig::default())
     }
 
-    /// Creates a new RecordReader with custom configuration.
+    /// Creates a new reader with custom configuration.
     ///
-    /// # Arguments
+    /// Use this constructor when you need to customize behavior such as:
+    /// - Setting a non-standard block size
+    /// - Enabling corruption recovery
     ///
-    /// * `source` - Any type that implements `Read + Seek`
-    /// * `config` - Reader configuration
+    /// # Errors
     ///
-    /// # Returns
-    ///
-    /// A Result containing the RecordReader or an error
+    /// Returns an error if the source cannot be positioned or read.
     pub fn with_config(source: Source, config: RecordReaderConfig) -> Result<Self> {
         Ok(Self {
             block_reader: BlockReader::with_config(source, config.block_config.clone())?,
@@ -165,16 +259,40 @@ impl<Source: Read + Seek> RecordReader<Source> {
         })
     }
 
-    /// Reads the next record from the file.
+    /// Reads the next record from the file or signals EOF.
     ///
-    /// This method advances the reader state machine through its various states
-    /// as needed to read the next record. It handles block reading, chunk parsing,
-    /// and extracting records from chunks.
+    /// This is the primary method for extracting records from a Riegeli file.
+    /// When it returns `DiskyPiece::EOF`, no more records are available.
     ///
     /// # Returns
     ///
-    /// * `Result<Option<Bytes>>` - The next record as Bytes if available, None if end of file,
-    ///   or an error if reading fails and recovery is disabled or fails
+    /// Returns either:
+    /// - `DiskyPiece::Record(bytes)` containing the next record data
+    /// - `DiskyPiece::EOF` when the end of file is reached
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when:
+    /// - File format is invalid or corrupted (in non-recovery mode)
+    /// - I/O errors occur during reading
+    /// - Signature validation fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::fs::File;
+    /// use disky::reader::{RecordReader, DiskyPiece};
+    ///
+    /// # fn example() -> disky::error::Result<()> {
+    /// let file = File::open("data.riegeli")?;
+    /// let mut reader = RecordReader::new(file)?;
+    ///
+    /// while let DiskyPiece::Record(record) = reader.next_record()? {
+    ///     println!("Record size: {}", record.len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn next_record(&mut self) -> Result<DiskyPiece> {
         loop {
             // Replace the current state with a temporary invalid state
@@ -354,6 +472,42 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     return ret_val;
                 }
             }
+        }
+    }
+}
+
+/// Allows the reader to be used as an iterator that yields records.
+///
+/// This implementation enables using `RecordReader` directly in for loops, iterator chains,
+/// and other iterator-based APIs. Each iteration will either yield the next record
+/// or an error if one occurs during reading.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::fs::File;
+/// use disky::reader::RecordReader;
+///
+/// # fn example() -> disky::error::Result<()> {
+/// let file = File::open("data.riegeli")?;
+/// let reader = RecordReader::new(file)?;
+///
+/// // Process records with a for loop
+/// for record_result in reader {
+///     let record = record_result?;
+///     println!("Record size: {}", record.len());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+impl<Source: Read + Seek> Iterator for RecordReader<Source> {
+    type Item = Result<Bytes>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_record() {
+            Ok(DiskyPiece::Record(bytes)) => Some(Ok(bytes)),
+            Ok(DiskyPiece::EOF) => None,
+            Err(e) => Some(Err(e)),
         }
     }
 }

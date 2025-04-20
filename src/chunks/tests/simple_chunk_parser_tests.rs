@@ -7,6 +7,7 @@ use crate::chunks::SimpleChunkWriter;
 use crate::compression::core::CompressionType;
 use crate::error::DiskyError;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use crate::hash::highway_hash;
 
 // Import SimpleChunkPiece from the SimpleChunkParser module
 use crate::chunks::simple_chunk_parser::SimpleChunkPiece;
@@ -538,6 +539,89 @@ fn test_invalid_chunk_type() {
 }
 
 #[test]
+fn test_valid_data_hash() {
+    // Create a valid chunk
+    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    writer.write_record(b"Test record").unwrap();
+    let serialized_chunk = writer.serialize_chunk().unwrap();
+
+    // Parse the header and data
+    let mut chunk_data = serialized_chunk.clone();
+    let header = parse_chunk_header(&mut chunk_data).unwrap();
+
+    // This should succeed because the hash in the header matches the data
+    let result = SimpleChunkParser::new(header, chunk_data);
+    assert!(result.is_ok(), "Parser creation should succeed with valid hash");
+}
+
+#[test]
+fn test_invalid_data_hash() {
+    
+    // Create a valid chunk
+    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    writer.write_record(b"Test record").unwrap();
+    let serialized_chunk = writer.serialize_chunk().unwrap();
+
+    // Parse header
+    let mut chunk_data = serialized_chunk.clone();
+    let mut header = parse_chunk_header(&mut chunk_data).unwrap();
+    
+    // Modify the data hash to an incorrect value
+    header.data_hash = header.data_hash ^ 0xDEADBEEF; // XOR to change the hash
+
+    // Try to create parser with invalid hash
+    let result = SimpleChunkParser::new(header, chunk_data);
+
+    // Should fail due to hash mismatch
+    assert!(result.is_err(), "Parser creation should fail with invalid hash");
+    if let Err(err) = result {
+        match err {
+            DiskyError::Corruption(msg) => {
+                assert!(msg.contains("Chunk data hash mismatch"));
+            }
+            _ => panic!("Expected Corruption error, got: {:?}", err),
+        }
+    }
+}
+
+#[test]
+fn test_modified_data_hash_verification() {
+    // Create a valid chunk
+    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    writer.write_record(b"Test record").unwrap();
+    let serialized_chunk = writer.serialize_chunk().unwrap();
+
+    // Parse header
+    let mut chunk_data = serialized_chunk.clone();
+    let header = parse_chunk_header(&mut chunk_data).unwrap();
+    
+    // Create a modified copy of the chunk data
+    let mut modified_data = chunk_data.clone();
+    
+    // Modify one byte of the data (the compression type byte is easiest to change)
+    if modified_data.len() > 0 {
+        let mut bytes_mut = BytesMut::with_capacity(modified_data.len());
+        bytes_mut.extend_from_slice(&modified_data);
+        bytes_mut[0] = bytes_mut[0] ^ 0x01; // Toggle one bit in the first byte
+        modified_data = bytes_mut.freeze();
+    }
+
+    // Try to create parser with modified data (should fail hash verification)
+    let result = SimpleChunkParser::new(header, modified_data);
+
+    // Should fail due to hash mismatch
+    assert!(result.is_err(), "Parser creation should fail with modified data");
+    if let Err(err) = result {
+        match err {
+            DiskyError::Corruption(msg) => {
+                assert!(msg.contains("Chunk data hash mismatch"));
+            }
+            _ => panic!("Expected Corruption error, got: {:?}", err),
+        }
+    }
+}
+
+#[test]
 fn test_empty_chunk_data() {
     // Create a valid header but empty data
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
@@ -605,7 +689,7 @@ fn test_invalid_sizes_length() {
 
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
+    let mut header = parse_chunk_header(&mut chunk_data).unwrap();
 
     // Corrupt the data by modifying the sizes length to be larger than available data
     let mut corrupted_data = BytesMut::new();
@@ -620,8 +704,12 @@ fn test_invalid_sizes_length() {
         corrupted_data.extend_from_slice(&chunk_data[4..]);
     }
 
-    // Convert to Bytes and make mutable
+    // Calculate the hash of the corrupted data to pass hash verification
     let corrupted_bytes = corrupted_data.freeze();
+    let data_hash = highway_hash(&corrupted_bytes);
+    
+    // Update the header with the new hash
+    header.data_hash = data_hash;
 
     // Try to create a parser with corrupted data
     let result = SimpleChunkParser::new(header, corrupted_bytes);
@@ -646,7 +734,7 @@ fn test_unsupported_compression_type() {
 
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
+    let mut header = parse_chunk_header(&mut chunk_data).unwrap();
 
     // Modify the compression type byte to an unsupported value
     let mut modified_data = BytesMut::new();
@@ -655,8 +743,12 @@ fn test_unsupported_compression_type() {
         modified_data.extend_from_slice(&chunk_data[1..]);
     }
 
-    // Convert to Bytes and make mutable
+    // Calculate hash for the modified data
     let modified_bytes = modified_data.freeze();
+    let data_hash = highway_hash(&modified_bytes);
+    
+    // Update the header with the correct hash for the modified data
+    header.data_hash = data_hash;
 
     // Try to create a parser with invalid compression type
     let result = SimpleChunkParser::new(header, modified_bytes);
@@ -750,12 +842,14 @@ fn test_record_size_exceeds_available_data() {
     // Add just a few bytes of data section
     minimal_chunk.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05]);
 
-    // We need a header with matching data_size
-    let mut custom_header = header.clone();
-    custom_header.data_size = minimal_chunk.len() as u64;
-
-    // Convert to Bytes and create a mutable reference
+    // Calculate hash for our custom chunk data
     let chunk_bytes = minimal_chunk.freeze();
+    let data_hash = highway_hash(&chunk_bytes);
+
+    // We need a header with matching data_size and correct hash
+    let mut custom_header = header.clone();
+    custom_header.data_size = chunk_bytes.len() as u64;
+    custom_header.data_hash = data_hash;
 
     // Create parser with custom data
     let mut reader = SimpleChunkParser::new(custom_header, chunk_bytes).unwrap();

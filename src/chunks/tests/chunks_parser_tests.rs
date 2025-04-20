@@ -552,10 +552,15 @@ fn test_recovery_during_simple_chunk_parsing() {
     // Add some record data (will never be reached due to invalid sizes)
     corrupted_data.extend_from_slice(b"This data will never be read due to corruption");
     
-    // Create a header claiming 2 records
+    // Calculate the real hash of the data to avoid hash verification failure
+    // We want to test record parsing failure, not hash verification failure
+    use crate::hash::highway_hash;
+    let data_hash = highway_hash(&corrupted_data);
+    
+    // Create a header claiming 2 records with correct hash
     let header = ChunkHeader::new(
         corrupted_data.len() as u64,  // Data size
-        12345, // Arbitrary hash
+        data_hash, // Use the actual hash to pass hash verification
         ChunkType::SimpleRecords,
         2, // We claim 2 records
         100 // Claim some decoded size

@@ -20,6 +20,7 @@
 use crate::chunks::header::{ChunkHeader, ChunkType};
 use crate::compression::core::CompressionType;
 use crate::error::{DiskyError, Result};
+use crate::hash::highway_hash;
 use crate::varint;
 use bytes::{Buf, Bytes};
 
@@ -107,6 +108,18 @@ impl SimpleChunkParser {
 
         // Take a slice of the current chunk data without advancing yet
         let this_chunk_data = chunk_data.slice(0..expected_chunk_size);
+        
+        // Verify the data hash if present
+        if header.data_hash != 0 {
+            let computed_hash = highway_hash(&this_chunk_data);
+            if computed_hash != header.data_hash {
+                return Err(DiskyError::Corruption(format!(
+                    "Chunk data hash mismatch: expected {}, computed {}",
+                    header.data_hash,
+                    computed_hash
+                )));
+            }
+        }
 
         // Prepare to parse the chunk's internal format
         let mut data = if this_chunk_data.len() > 0 {

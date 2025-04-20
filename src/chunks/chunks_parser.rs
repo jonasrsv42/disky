@@ -65,7 +65,7 @@
 //! # let result = parser.next();
 //! # if result.is_err() {
 //!     // Error occurred, reset parser state to continue with next chunk
-//!     parser.refresh();
+//!     parser.skip_chunk();
 //!     // Continue parsing from the next chunk
 //! # }
 //! # Ok(())
@@ -170,7 +170,7 @@ impl ChunksParser {
     /// - Unsupported chunk types
     /// - Corrupted chunks
     ///
-    /// After calling refresh(), the next call to next() will attempt to parse
+    /// After calling skip_chunk(), the next call to next() will attempt to parse
     /// the next chunk in the buffer, skipping any problematic chunk.
     ///
     /// # Example
@@ -186,12 +186,12 @@ impl ChunksParser {
     /// // If an error occurs during parsing
     /// if let Err(_) = parser.next() {
     ///     // Refresh state to skip the problematic chunk
-    ///     parser.refresh();
+    ///     parser.skip_chunk();
     ///     // Continue parsing with the next chunk
     /// }
     /// # }
     /// ```
-    pub fn refresh(&mut self) {
+    pub fn skip_chunk(&mut self) {
         self.state = State::Fresh;
     }
 
@@ -293,8 +293,8 @@ impl ChunksParser {
     ///             // ...
     ///         },
     ///         Err(e) => {
-    ///             // Handle error or refresh and continue
-    ///             parser.refresh();
+    ///             // Handle error or skip_chunk and continue
+    ///             parser.skip_chunk();
     ///         }
     ///     }
     /// }

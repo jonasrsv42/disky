@@ -203,7 +203,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             }
                             BlocksPiece::EOF => {
                                 // We reached EOF while reading initial blocks - this is an error
-                                self.state = ReaderState::EOF;
+                                self.state = ReaderState::Corrupted;
                                 return Err(DiskyError::SignatureReadingError(
                                     "Reached EOF while reading initial signature".to_string(),
                                 ));
@@ -312,7 +312,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 }
 
                 ReaderState::BlockCorruption(error) => {
-                    // Handle errors based on corruption strategy
+                    // Error during disk reading.
                     if self.config.corruption_strategy == CorruptionStrategy::Recover {
                         if let Err(recovery_err) = self.block_reader.recover() {
                             // Unrecoverable corruption
@@ -331,8 +331,8 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::ChunkCorruption(error, mut parser) => {
                     // Error during parsing
                     if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                        // Try to recover by refreshing the parser state
-                        parser.refresh();
+                        // Try to recover by skipping the chunk.
+                        parser.skip_chunk();
                         self.state = ReaderState::ParsingChunks(parser);
                     } else {
                         // No recovery, return the error

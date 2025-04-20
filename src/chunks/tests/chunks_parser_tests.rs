@@ -223,7 +223,7 @@ fn test_padding_chunk_error() {
 }
 
 #[test]
-fn test_refresh_after_error() {
+fn test_skip_chunk_after_error() {
     // Create a padding chunk followed by a simple chunk
     let padding_chunk = create_invalid_chunk_header();
     let records = [b"Record 1", b"Record 2"];
@@ -243,7 +243,7 @@ fn test_refresh_after_error() {
     assert!(result.is_err());
 
     // Refresh the parser state
-    parser.refresh();
+    parser.skip_chunk();
 
     // Try to parse the next chunk (should succeed with SimpleChunkStart)
     match parser.next().unwrap() {
@@ -647,7 +647,7 @@ fn test_recovery_during_simple_chunk_parsing() {
     );
 
     // Refresh the parser to recover
-    parser.refresh();
+    parser.skip_chunk();
 
     // Should be able to continue with next (signature) chunk
     match parser.next().unwrap() {

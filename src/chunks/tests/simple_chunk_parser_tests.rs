@@ -860,7 +860,7 @@ fn test_record_size_exceeds_available_data() {
 
     if let Err(err) = result {
         match err {
-            DiskyError::Corruption(msg) => {
+            DiskyError::UnexpectedEndOfChunk(msg) => {
                 assert!(msg.contains("Record extends beyond data boundary"));
             }
             _ => panic!("Expected Corruption error, got: {:?}", err),

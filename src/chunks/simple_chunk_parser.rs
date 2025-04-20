@@ -239,7 +239,7 @@ impl SimpleChunkParser {
         // Ensure the record is within bounds
         if record_size > self.records_data.remaining() {
             self.state = ReaderState::Error;
-            return Err(DiskyError::Corruption(format!(
+            return Err(DiskyError::UnexpectedEndOfChunk(format!(
                 "Record extends beyond data boundary: size={}, remaining={}",
                 record_size,
                 self.records_data.remaining()

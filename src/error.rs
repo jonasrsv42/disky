@@ -53,6 +53,10 @@ pub enum DiskyError {
     #[error("UnexpectedEndOfChunkHeader corruption: {0}")]
     UnexpectedEndOfChunkHeader(String),
 
+    /// Failed to parse varint
+    #[error("VarintParseError: {0}")]
+    VarintParseError(String),
+
     /// The file is corrupt and cannot be recovered.
     #[error("Unrecoverable file corruption: {0}")]
     UnrecoverableCorruption(String),

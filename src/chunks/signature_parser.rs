@@ -3,33 +3,30 @@ use crate::error::{DiskyError, Result};
 
 /// Validates a Disky file signature chunk.
 ///
-/// This function checks if the provided bytes start with a valid Riegeli file signature.
+/// This function checks if the provided chunk header represents a valid Riegeli file signature.
 /// A valid signature must have:
-/// 1. The correct header hash
-/// 2. The chunk type set to 's' (Signature)
-/// 3. The right size and format
+/// 1. The chunk type set to 's' (Signature)
+/// 2. All size fields set to 0
 ///
 /// # Arguments
 ///
-/// * `bytes` - Mutable reference to a Bytes object containing the signature chunk and potentially more data.
-///             The buffer will be advanced past the signature header after validation.
+/// * `header` - Reference to a ChunkHeader object that has been parsed from a file.
 ///
 /// # Returns
 ///
-/// A `Result<()>` indicating success. The bytes buffer will be advanced past the signature
-/// header, so it will only contain the data after the signature when this function returns.
+/// A `Result<()>` indicating whether the header represents a valid signature chunk.
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - There are not enough bytes to parse the header
-/// - The signature does not match the expected format
 /// - The chunk type is not 's' (Signature)
+/// - Any of the size fields (data_size, num_records, decoded_data_size) are not zero
 ///
 /// # Example
 ///
 /// ```
 /// use disky::chunks::signature_parser::validate_signature;
+/// use disky::chunks::header_parser::parse_chunk_header;
 /// use disky::chunks::FILE_SIGNATURE_HEADER;
 /// use bytes::Bytes;
 ///
@@ -39,10 +36,13 @@ use crate::error::{DiskyError, Result};
 /// data.extend_from_slice(b"some extra data");
 /// let mut bytes = Bytes::from(data);
 ///
-/// // Validate the signature - this will advance the bytes buffer past the signature
-/// validate_signature(&mut bytes).unwrap();
+/// // First parse the chunk header
+/// let header = parse_chunk_header(&mut bytes).unwrap();
 ///
-/// // If validation succeeds, bytes will only contain data after the signature
+/// // Then validate the signature
+/// validate_signature(&header).unwrap();
+///
+/// // After parsing the header, bytes will only contain data after the header
 /// assert_eq!(bytes, Bytes::from_static(b"some extra data"));
 /// ```
 pub fn validate_signature(header: &ChunkHeader) -> Result<()> {

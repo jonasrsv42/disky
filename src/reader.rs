@@ -22,7 +22,7 @@ use std::io::{Read, Seek};
 
 use bytes::Bytes;
 
-use crate::blocks::reader::{BlockReader, BlockReaderConfig};
+use crate::blocks::reader::{BlockReader, BlockReaderConfig, BlocksPiece};
 use crate::chunks::chunks_parser::{ChunkPiece, ChunksParser};
 use crate::chunks::signature_parser::validate_signature;
 use crate::error::{DiskyError, Result};
@@ -116,7 +116,7 @@ enum ReaderState {
     InvalidState(DiskyError),
 
     /// End of file reached, no more records
-    EndOfFile,
+    EOF,
 
     /// A corrupted section was encountered that cannot be recovered
     Corrupted,
@@ -187,14 +187,14 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     // Read chunks from the block reader, expecting a signature in the first set
                     match self.block_reader.read_chunks() {
                         Ok(block_piece) => match block_piece {
-                            crate::blocks::reader::BlocksPiece::Chunks(chunk_data) => {
+                            BlocksPiece::Chunks(chunk_data) => {
                                 // Create a new chunk parser with the read data
                                 let parser = ChunksParser::new(chunk_data);
                                 self.state = ReaderState::ExpectingSignature(Some(parser));
                             }
-                            crate::blocks::reader::BlocksPiece::EOF => {
+                            BlocksPiece::EOF => {
                                 // We reached EOF while reading initial blocks - this is an error
-                                self.state = ReaderState::Corrupted;
+                                self.state = ReaderState::EOF;
                                 return Err(DiskyError::SignatureReadingError(
                                     "Reached EOF while reading initial signature".to_string(),
                                 ));
@@ -220,7 +220,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             }
                             crate::blocks::reader::BlocksPiece::EOF => {
                                 // Reached end of file
-                                self.state = ReaderState::EndOfFile;
+                                self.state = ReaderState::EOF;
                             }
                         },
                         Err(e) => match e {
@@ -312,7 +312,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     }
                 }
 
-                ReaderState::EndOfFile => {
+                ReaderState::EOF => {
                     // End of file reached, no more records
                     return Ok(DiskyPiece::EOF);
                 }
@@ -413,4 +413,3 @@ impl<Source: Read + Seek> RecordReader<Source> {
 mod tests {
     // Tests will go here - we'll implement them separately
 }
-

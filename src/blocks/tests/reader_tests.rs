@@ -1,10 +1,9 @@
 //! Tests for BlockReader functionality
 
-use super::super::reader::{BlockReader, BlockReaderConfig};
+use super::super::reader::{BlockReader, BlockReaderConfig, BlocksPiece};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::helpers::extract_bytes;
-use crate::error::DiskyError;
 use bytes::Bytes;
 use std::io::Cursor;
 
@@ -208,11 +207,11 @@ fn test_multiple_chunks_in_single_block() {
         Ok(block_piece) => {
             // We expect BlocksPiece::EOF here since we've refactored
             match block_piece {
-                crate::blocks::reader::BlocksPiece::EOF => {
+                BlocksPiece::EOF => {
                     // This is expected, we've reached the end of the file
                     println!("Got expected EOF on third read");
                 }
-                crate::blocks::reader::BlocksPiece::Chunks(data) => {
+                BlocksPiece::Chunks(data) => {
                     assert!(
                         data.is_empty(),
                         "Third read_chunks call should return empty data"
@@ -225,4 +224,3 @@ fn test_multiple_chunks_in_single_block() {
         }
     }
 }
-

@@ -107,6 +107,7 @@ pub enum ChunkPiece {
 }
 
 /// Internal parser state to track parsing progress
+#[derive(Clone)]
 enum State {
     /// Ready to parse a new chunk - initial state or after completing a chunk
     Fresh,
@@ -126,6 +127,7 @@ enum State {
 /// - Parsing different chunk types (signature, simple records, etc.)
 /// - Iterating through records in chunks
 /// - Recovering from errors to continue parsing subsequent chunks
+#[derive(Clone)]
 pub struct ChunksParser {
     /// The buffer of chunk data being parsed
     buffer: Bytes,

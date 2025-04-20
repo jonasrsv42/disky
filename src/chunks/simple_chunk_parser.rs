@@ -51,6 +51,7 @@ enum ReaderState {
 /// This parser processes the data of a simple chunk (after the 40-byte header)
 /// and allows reading records one by one. When there are no more records,
 /// it returns EndOfChunk and advances the input buffer past this chunk.
+#[derive(Clone)]
 pub struct SimpleChunkParser {
     /// The current state of the reader
     state: ReaderState,

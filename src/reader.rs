@@ -84,8 +84,14 @@ enum ReaderState {
     /// Initial state, reader is ready to start reading
     Ready,
     
-    /// Currently reading from block reader, no active chunk parser
-    ReadingBlock,
+    /// Reading initial blocks, which should start with a signature
+    ReadingInitialBlocks,
+    
+    /// Reading subsequent blocks after signature has been verified
+    ReadingSubsequentBlocks,
+    
+    /// Expecting the initial signature chunk
+    ExpectingSignature(ChunksParser),
     
     /// Actively parsing chunks from previously read block data
     ParsingChunks(ChunksParser),
@@ -150,9 +156,6 @@ pub struct RecordReader<Source: Read + Seek> {
     /// Current state of the reader state machine
     state: ReaderState,
     
-    /// Flag indicating if the file signature has been verified
-    signature_verified: bool,
-    
     /// Configuration for the reader
     config: RecordReaderConfig,
 }
@@ -185,7 +188,6 @@ impl<Source: Read + Seek> RecordReader<Source> {
         Ok(Self {
             block_reader: BlockReader::with_config(source, config.block_config.clone())?,
             state: ReaderState::Ready,
-            signature_verified: false,
             config,
         })
     }
@@ -204,12 +206,57 @@ impl<Source: Read + Seek> RecordReader<Source> {
         loop {
             match &mut self.state {
                 ReaderState::Ready => {
-                    // Initial state, start reading blocks
-                    self.state = ReaderState::ReadingBlock;
+                    // Initial state, start reading initial blocks
+                    self.state = ReaderState::ReadingInitialBlocks;
                 }
                 
-                ReaderState::ReadingBlock => {
-                    // Read chunks from the block reader
+                ReaderState::ReadingInitialBlocks => {
+                    // Read chunks from the block reader, expecting a signature in the first set
+                    match self.block_reader.read_chunks() {
+                        Ok(chunk_data) => {
+                            // Create a new chunk parser with the read data
+                            let parser = ChunksParser::new(chunk_data);
+                            self.state = ReaderState::ExpectingSignature(parser);
+                        },
+                        Err(e) => {
+                            // Handle errors based on corruption strategy
+                            if self.config.corruption_strategy == CorruptionStrategy::Recover {
+                                // Try to recover, but only for certain errors
+                                match &e {
+                                    DiskyError::Corruption(_) | DiskyError::BlockHeaderHashMismatch => {
+                                        // Try to recover from block-level corruption
+                                        if let Err(recovery_err) = self.block_reader.recover() {
+                                            // Unrecoverable corruption
+                                            self.state = ReaderState::Corrupted;
+                                            return Err(recovery_err);
+                                        }
+                                        // Successfully recovered, try reading again
+                                        // Stay in ReadingInitialBlocks state
+                                    }
+                                    DiskyError::UnexpectedEof => {
+                                        // End of file reached without finding a signature
+                                        self.state = ReaderState::Corrupted;
+                                        return Err(DiskyError::InvalidFileSignature(
+                                            "End of file reached before signature chunk".to_string()
+                                        ));
+                                    }
+                                    _ => {
+                                        // Other errors are not recoverable
+                                        self.state = ReaderState::Corrupted;
+                                        return Err(e);
+                                    }
+                                }
+                            } else {
+                                // No recovery, just return the error
+                                self.state = ReaderState::Corrupted;
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+                
+                ReaderState::ReadingSubsequentBlocks => {
+                    // Read chunks from the block reader after signature validation
                     match self.block_reader.read_chunks() {
                         Ok(chunk_data) => {
                             // Create a new chunk parser with the read data
@@ -258,20 +305,40 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     }
                 }
                 
+                ReaderState::ExpectingSignature(parser) => {
+                    // We expect the first chunk to be a signature
+                    match parser.next() {
+                        Ok(ChunkPiece::Signature(header)) => {
+                            // Verify the signature
+                            if let Err(e) = validate_signature(&header) {
+                                self.state = ReaderState::Corrupted;
+                                return Err(e);
+                            }
+                            
+                            // Transition to regular chunk parsing
+                            self.state = ReaderState::ParsingChunks(parser.clone());
+                        },
+                        Ok(other) => {
+                            // First chunk wasn't a signature - this is a corrupted file
+                            self.state = ReaderState::Corrupted;
+                            return Err(DiskyError::InvalidFileSignature(
+                                format!("Expected signature chunk at file start, got {:?}", other)
+                            ));
+                        },
+                        Err(e) => {
+                            // Error parsing the signature
+                            self.state = ReaderState::Corrupted;
+                            return Err(e);
+                        }
+                    }
+                },
+                
                 ReaderState::ParsingChunks(parser) => {
                     // Parse the next chunk piece
                     match parser.next() {
-                        Ok(ChunkPiece::Signature(header)) => {
-                            // File signature chunk - verify it only on first read
-                            if !self.signature_verified {
-                                // Verify signature with the header
-                                if let Err(e) = validate_signature(&header) {
-                                    self.state = ReaderState::Corrupted;
-                                    return Err(e);
-                                }
-                                self.signature_verified = true;
-                            }
-                            // Continue parsing
+                        Ok(ChunkPiece::Signature(_)) => {
+                            // Ignore signature chunks after the first one
+                            // Just continue parsing
                         }
                         
                         Ok(ChunkPiece::SimpleChunkStart) => {
@@ -290,7 +357,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         
                         Ok(ChunkPiece::ChunksEnd) => {
                             // End of current chunks, read more blocks
-                            self.state = ReaderState::ReadingBlock;
+                            self.state = ReaderState::ReadingSubsequentBlocks;
                         }
                         
                         Ok(ChunkPiece::Padding) => {
@@ -317,11 +384,11 @@ impl<Source: Read + Seek> RecordReader<Source> {
                                 match parser.next() {
                                     Ok(ChunkPiece::ChunksEnd) => {
                                         // No more chunks to parse, read more blocks
-                                        self.state = ReaderState::ReadingBlock;
+                                        self.state = ReaderState::ReadingSubsequentBlocks;
                                     }
                                     Err(_) => {
                                         // Still getting errors, try reading next block
-                                        self.state = ReaderState::ReadingBlock;
+                                        self.state = ReaderState::ReadingSubsequentBlocks;
                                     }
                                     _ => {
                                         // Found another valid chunk piece, continue parsing

@@ -213,12 +213,12 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     // Read chunks from the block reader after signature validation
                     match self.block_reader.read_chunks() {
                         Ok(block_piece) => match block_piece {
-                            crate::blocks::reader::BlocksPiece::Chunks(chunk_data) => {
+                            BlocksPiece::Chunks(chunk_data) => {
                                 // Create a new chunk parser with the read data
                                 let parser = ChunksParser::new(chunk_data);
                                 self.state = ReaderState::ParsingChunks(Some(parser));
                             }
-                            crate::blocks::reader::BlocksPiece::EOF => {
+                            BlocksPiece::EOF => {
                                 // Reached end of file
                                 self.state = ReaderState::EOF;
                             }
@@ -285,7 +285,6 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             | Ok(ChunkPiece::SimpleChunkStart)
                             | Ok(ChunkPiece::SimpleChunkEnd)
                             | Ok(ChunkPiece::Padding) => {
-                                // Ignore signature chunks after the first one
                                 // Just continue parsing
                             }
 

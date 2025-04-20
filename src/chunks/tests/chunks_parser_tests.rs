@@ -513,3 +513,131 @@ fn test_mixed_chunk_types() {
         _ => panic!("Expected ChunksEnd"),
     }
 }
+
+#[test]
+fn test_recovery_during_simple_chunk_parsing() {
+    // We'll create a sequence of chunks: signature -> valid simple chunk -> corrupted simple chunk -> signature
+    // Then we'll verify we can recover from errors during the corrupted simple chunk parsing
+    
+    // Create the valid chunks
+    let signature1 = create_signature_chunk();
+    let valid_records = [b"Valid Record 1", b"Valid Record 2"];
+    let valid_simple_chunk = create_simple_chunk(&valid_records);
+    
+    // Create corrupted data that will pass initial validation but fail during record parsing
+    // We'll construct a simple chunk with valid header but invalid record sizes
+    let mut corrupted_data = BytesMut::with_capacity(40);
+    
+    // Add compression type (None = 0)
+    corrupted_data.put_u8(0);
+    
+    // Add a varint for sizes section length (10 bytes)
+    corrupted_data.put_u8(10); 
+    
+    // Add some corrupted record sizes that will cause errors during parsing
+    // First varint is valid but points to data beyond what we have
+    corrupted_data.put_u8(0xFF); // Start of a multi-byte varint
+    corrupted_data.put_u8(0xFF); // Continue varint
+    corrupted_data.put_u8(0xFF); // Continue varint
+    corrupted_data.put_u8(0x01); // End varint (very large value > 2^24)
+    
+    // Add invalid varint sequence
+    corrupted_data.put_u8(0xFF);
+    corrupted_data.put_u8(0xFF);
+    corrupted_data.put_u8(0xFF);
+    corrupted_data.put_u8(0xFF);
+    corrupted_data.put_u8(0xFF);
+    corrupted_data.put_u8(0xFF);
+    
+    // Add some record data (will never be reached due to invalid sizes)
+    corrupted_data.extend_from_slice(b"This data will never be read due to corruption");
+    
+    // Create a header claiming 2 records
+    let header = ChunkHeader::new(
+        corrupted_data.len() as u64,  // Data size
+        12345, // Arbitrary hash
+        ChunkType::SimpleRecords,
+        2, // We claim 2 records
+        100 // Claim some decoded size
+    );
+    
+    let corrupted_data = corrupted_data.freeze();
+    
+    // Write the header
+    let header_bytes = write_chunk_header(&header).unwrap();
+    
+    // Combine header and corrupted data
+    let mut corrupted_chunk = BytesMut::with_capacity(header_bytes.len() + corrupted_data.len());
+    corrupted_chunk.extend_from_slice(&header_bytes);
+    corrupted_chunk.extend_from_slice(&corrupted_data);
+    let corrupted_chunk = corrupted_chunk.freeze();
+    
+    // Add a final signature chunk
+    let signature2 = create_signature_chunk();
+    
+    // Combine all chunks
+    let mut combined = BytesMut::with_capacity(
+        signature1.len() + valid_simple_chunk.len() + corrupted_chunk.len() + signature2.len()
+    );
+    combined.extend_from_slice(&signature1);
+    combined.extend_from_slice(&valid_simple_chunk);
+    combined.extend_from_slice(&corrupted_chunk);
+    combined.extend_from_slice(&signature2);
+    let combined_chunks = combined.freeze();
+    
+    // Create a parser with all chunks
+    let mut parser = ChunksParser::new(combined_chunks);
+    
+    // First signature
+    match parser.next().unwrap() {
+        ChunkPiece::Signature => {}
+        _ => panic!("Expected first Signature"),
+    }
+    
+    // Valid simple chunk start
+    match parser.next().unwrap() {
+        ChunkPiece::SimpleChunkStart => {}
+        _ => panic!("Expected SimpleChunkStart for valid chunk"),
+    }
+    
+    // Read records from valid chunk
+    for expected_record in &valid_records {
+        match parser.next().unwrap() {
+            ChunkPiece::Record(record) => {
+                assert_eq!(record, Bytes::copy_from_slice(*expected_record));
+            }
+            _ => panic!("Expected Record from valid chunk"),
+        }
+    }
+    
+    // End of valid chunk
+    match parser.next().unwrap() {
+        ChunkPiece::SimpleChunkEnd => {}
+        _ => panic!("Expected SimpleChunkEnd for valid chunk"),
+    }
+    
+    // Now start parsing corrupted chunk - should return SimpleChunkStart
+    match parser.next().unwrap() {
+        ChunkPiece::SimpleChunkStart => {}
+        _ => panic!("Expected SimpleChunkStart for corrupted chunk"),
+    }
+    
+    // Trying to read records from corrupted chunk should fail
+    let result = parser.next();
+    assert!(result.is_err(), "Expected error parsing corrupted chunk data");
+    
+    // Refresh the parser to recover
+    parser.refresh();
+    
+    // Should be able to continue with next (signature) chunk
+    match parser.next().unwrap() {
+        ChunkPiece::Signature => {}
+        _ => panic!("Expected signature chunk after recovery"),
+    }
+    
+    // End of all chunks
+    match parser.next().unwrap() {
+        ChunkPiece::ChunksEnd => {}
+        _ => panic!("Expected ChunksEnd"),
+    }
+}

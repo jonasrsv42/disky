@@ -14,7 +14,7 @@ pub mod chunks_parser;
 pub mod tests;
 
 pub use simple_chunk_writer::SimpleChunkWriter;
-pub use simple_chunk_parser::{SimpleChunkParser, RecordResult};
+pub use simple_chunk_parser::{SimpleChunkParser, SimpleChunkPiece};
 pub use writer::{ChunkWriter, RecordsSize};
 pub use signature_writer::SignatureWriter;
 pub use signature::{FILE_SIGNATURE_HEADER, SIGNATURE_HEADER_SIZE};
@@ -22,4 +22,4 @@ pub use signature_parser::validate_signature;
 pub use header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 pub use header_writer::write_chunk_header;
 pub use header_parser::parse_chunk_header;
-pub use chunks_parser::{ChunksParser, Chunk, SimpleChunk, SimpleChunkIterator};
+//pub use chunks_parser::{ChunksParser, Chunk, SimpleChunk, SimpleChunkIterator};

@@ -20,72 +20,37 @@
 
 use bytes::{Buf, Bytes};
 
-use crate::chunks::header::{ChunkHeader, ChunkType};
+use crate::chunks::header::ChunkType;
 use crate::chunks::header_parser::parse_chunk_header;
-use crate::chunks::simple_chunk_parser::{RecordResult, SimpleChunkParser};
+use crate::chunks::simple_chunk_parser::{SimpleChunkParser, SimpleChunkPiece};
 use crate::error::{DiskyError, Result};
 
-/// Represents a parsed chunk from a Riegeli file
+/// Represents a parsed chunk piece from a Riegeli file. It it as piece of a chunk
+/// which may be the size of the chunk itself or a partial piece like in the case
+/// of records being emitted during parsing of a SimpleChunk.
+/// or a piece
 #[derive(Debug)]
-pub enum Chunk<'a> {
+pub enum ChunkPiece {
     /// File signature chunk
     Signature,
 
-    /// Simple chunk with records
-    SimpleRecords(SimpleChunk<'a>),
+    SimpleChunkStart,
+    Record(Bytes),
+    SimpleChunkEnd,
 
     /// Padding chunk
     Padding,
+
+    /// Done parsing all chunks in current buffer
+    ChunksEnd,
 }
 
-/// A simple records chunk that can be iterated to get individual records
-#[derive(Debug)]
-pub struct SimpleChunk<'a> {
-    /// The header information for this chunk
-    pub header: ChunkHeader,
-
-    /// The raw data for this chunk
-    data: &'a mut Bytes,
-}
-
-impl<'a> SimpleChunk<'a> {
-    /// Creates a new SimpleChunk taking ownership of data
-    fn new(header: ChunkHeader, data: &'a mut Bytes) -> SimpleChunk<'a> {
-        Self { header, data }
-    }
-
-    /// Consumes this chunk and returns an iterator over the records
-    pub fn into_records(self) -> Result<SimpleChunkIterator<'a>> {
-        let parser = SimpleChunkParser::new(self.header, self.data)?;
-        Ok(SimpleChunkIterator { parser })
-    }
-
-    /// Returns the number of records in this chunk
-    pub fn record_count(&self) -> u64 {
-        self.header.num_records
-    }
-
-    /// Returns the decoded data size for this chunk
-    pub fn decoded_size(&self) -> u64 {
-        self.header.decoded_data_size
-    }
-}
-
-/// Iterator for records in a SimpleChunk
-pub struct SimpleChunkIterator<'a> {
-    parser: SimpleChunkParser<'a>,
-}
-
-impl<'a> Iterator for SimpleChunkIterator<'a> {
-    type Item = Result<Bytes>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.parser.next() {
-            Ok(RecordResult::Record(record)) => Some(Ok(record)),
-            Ok(RecordResult::EndOfChunk) => None,
-            Err(e) => Some(Err(e)),
-        }
-    }
+enum State {
+    /// Ready to parse a new chunk
+    Fresh,
+    SimpleChunk(SimpleChunkParser),
+    /// Done parsing chunks.
+    Finish,
 }
 
 /// Parser for Riegeli chunks that consumes the output of BlockReader::read_chunks
@@ -93,8 +58,7 @@ pub struct ChunksParser {
     /// The buffer of chunk data
     buffer: Bytes,
 
-    /// Backup slice pointing to the next chunk's position, used for recovery
-    next_chunk_backup: Option<Bytes>,
+    state: State,
 }
 
 impl ChunksParser {
@@ -102,40 +66,21 @@ impl ChunksParser {
     pub fn new(chunk_data: Bytes) -> Self {
         Self {
             buffer: chunk_data,
-            next_chunk_backup: None,
+            state: State::Fresh,
         }
     }
 
-    /// Resets the buffer to the next chunk if we have a backup
-    ///
-    /// This method is useful when a SimpleChunk iterator encounters an error
-    /// and doesn't fully consume all records, leaving the buffer in a potentially
-    /// inconsistent state. Calling this method resets to the next chunk position.
-    ///
-    /// # Returns
-    ///
-    /// - Ok(()) if the reset was successful
-    /// - Err if there's no backup to restore
-    pub fn recover_to_next_chunk(&mut self) -> Result<()> {
-        if let Some(backup) = self.next_chunk_backup.take() {
-            self.buffer = backup;
-            Ok(())
-        } else {
-            Err(DiskyError::Other(
-                "No backup position available to recover to next chunk".to_string(),
-            ))
-        }
+    /// refresh parser state, for-example to recover
+    /// from an error during SimpleChunk parsing by going to the next chunk.
+    pub fn refresh(&mut self) {
+        self.state = State::Fresh;
     }
 
-    /// Parses the next chunk from the buffer
-    ///
-    /// # Returns
-    ///
-    /// - Ok(Chunk) if a chunk was successfully parsed
-    /// - Err if an error occurred during parsing or there's not enough data
-    pub fn next_chunk(&mut self) -> Result<Chunk> {
-        // Clear any previous backup
-        self.next_chunk_backup = None;
+    fn next_chunk(&mut self) -> Result<ChunkPiece> {
+        if self.buffer.is_empty() {
+            self.state = State::Finish;
+            return Ok(ChunkPiece::ChunksEnd);
+        }
 
         // Parse the chunk header
         let header = parse_chunk_header(&mut self.buffer)?;
@@ -149,22 +94,21 @@ impl ChunksParser {
             )));
         }
 
-        // Store a backup slice pointing to the next chunk
-        if self.buffer.len() > header.data_size as usize {
-            self.next_chunk_backup = Some(self.buffer.slice(header.data_size as usize..));
-        }
+        // Split out the current chunk and advance buffer to the next chunk.
+        let buffer_view = self.buffer.split_to(header.data_size as usize);
 
         // Parse the chunk based on its type
         match header.chunk_type {
             ChunkType::Signature => {
-                // For signature chunks, advance the buffer past the chunk and return the type
-                self.buffer.advance(header.data_size as usize);
-                Ok(Chunk::Signature)
+                // For signature chunks, we do nothing, they should only be
+                // validated at the start of the file.
+                Ok(ChunkPiece::Signature)
             }
             ChunkType::SimpleRecords => {
                 // For simple records, return a chunk that can be iterated
-                let simple_chunk = SimpleChunk::new(header, &mut self.buffer);
-                Ok(Chunk::SimpleRecords(simple_chunk))
+                let parser = SimpleChunkParser::new(header, buffer_view)?;
+                self.state = State::SimpleChunk(parser);
+                Ok(ChunkPiece::SimpleChunkStart)
             }
             ChunkType::Padding => {
                 // Currently we don't have a proper parser for padding chunks
@@ -173,6 +117,22 @@ impl ChunksParser {
                     "Padding chunk parsing not yet implemented. Use recover_to_next_chunk() to skip."
                 )))
             }
+        }
+    }
+
+    pub fn next(&mut self) -> Result<ChunkPiece> {
+        match &mut self.state {
+            State::Fresh => self.next_chunk(),
+            State::SimpleChunk(simple_chunk_parser) => match simple_chunk_parser.next()? {
+                SimpleChunkPiece::Record(bytes) => Ok(ChunkPiece::Record(bytes)),
+                SimpleChunkPiece::EndOfChunk => {
+                    self.state = State::Fresh;
+                    Ok(ChunkPiece::SimpleChunkEnd)
+                }
+            },
+            State::Finish => Err(DiskyError::Other(
+                "Cannot advance on a finished ChunksParser.".to_string(),
+            )),
         }
     }
 }

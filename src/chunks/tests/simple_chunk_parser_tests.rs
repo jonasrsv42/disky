@@ -6,10 +6,10 @@ use crate::chunks::SimpleChunkParser;
 use crate::chunks::SimpleChunkWriter;
 use crate::compression::core::CompressionType;
 use crate::error::DiskyError;
-use bytes::{Bytes, BytesMut, BufMut, Buf};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-// Import RecordResult from the SimpleChunkParser module
-use crate::chunks::simple_chunk_parser::RecordResult;
+// Import SimpleChunkPiece from the SimpleChunkParser module
+use crate::chunks::simple_chunk_parser::SimpleChunkPiece;
 
 #[test]
 fn test_basic_read_write() {
@@ -25,56 +25,64 @@ fn test_basic_read_write() {
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
-    // Use a block scope to control reader lifetime
-    {
-        // Create a parser with mutable reference to chunk_data
-        let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
-    
-        // Check initial state
-        assert_eq!(reader.records_read(), 0);
-        assert_eq!(reader.total_records(), 3);
-        assert_eq!(reader.compression_type(), CompressionType::None);
-    
-        // Read records
-        let record1 = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record1, Bytes::from_static(b"Record 1"));
-    
-        let record2 = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record2, Bytes::from_static(b"Record 2"));
-    
-        let record3 = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record3, Bytes::from_static(b"Record 3"));
-    
-        // No more records, should return EndOfChunk and have advanced the buffer
-        match reader.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-        
-        // Calling next() again after EndOfChunk should return an error
-        let error_result = reader.next();
-        assert!(error_result.is_err(), "Expected an error when calling next() after EndOfChunk");
-        if let Err(err) = error_result {
-            match err {
-                DiskyError::Other(msg) => {
-                    assert!(msg.contains("Cannot invoke next() after SimpleChunkParser has returned EndOfChunk"));
-                }
-                _ => panic!("Expected Other error"),
+    // Create a parser with mutable reference to chunk_data
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+
+    // Check initial state
+    assert_eq!(reader.records_read(), 0);
+    assert_eq!(reader.total_records(), 3);
+    assert_eq!(reader.compression_type(), CompressionType::None);
+
+    // Read records
+    let record1 = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record1, Bytes::from_static(b"Record 1"));
+
+    let record2 = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record2, Bytes::from_static(b"Record 2"));
+
+    let record3 = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record3, Bytes::from_static(b"Record 3"));
+
+    // No more records, should return EndOfChunk and have advanced the buffer
+    match reader.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    // Calling next() again after EndOfChunk should return an error
+    let error_result = reader.next();
+    assert!(
+        error_result.is_err(),
+        "Expected an error when calling next() after EndOfChunk"
+    );
+    if let Err(err) = error_result {
+        match err {
+            DiskyError::Other(msg) => {
+                assert!(msg.contains(
+                    "Cannot invoke next() after SimpleChunkParser has returned EndOfChunk"
+                ));
             }
+            _ => panic!("Expected Other error"),
         }
-    } // reader is dropped here, releasing the mutable borrow
-    
+    }
+
+    chunk_data.advance(reader.header().data_size as usize);
+
     // Now we can use chunk_data again
-    assert_eq!(chunk_data.remaining(), 0, "Buffer should have been fully advanced");
+    assert_eq!(
+        chunk_data.remaining(),
+        0,
+        "Buffer should have been fully advanced"
+    );
 }
 
 #[test]
@@ -103,72 +111,76 @@ fn test_multiple_chunks() {
     // Parse the first chunk header
     let header1 = parse_chunk_header(&mut combined_chunks).unwrap();
 
-    // Use a block scope for the first chunk reader
-    {
-        // Create parser for the first chunk - it gets a mutable reference to the buffer
-        let mut reader1 = SimpleChunkParser::new(header1, &mut combined_chunks).unwrap();
-    
-        // Read records from first chunk
-        let record1 = match reader1.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record1, Bytes::from_static(b"Chunk1 Record1"));
-    
-        let record2 = match reader1.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record2, Bytes::from_static(b"Chunk1 Record2"));
-    
-        // Done with first chunk, should advance the buffer past the first chunk
-        match reader1.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-    } // reader1 is dropped here, releasing mutable borrow
-    
+    // Create parser for the first chunk - it gets a mutable reference to the buffer
+    let mut reader1 = SimpleChunkParser::new(header1, combined_chunks.clone()).unwrap();
+
+    // Read records from first chunk
+    let record1 = match reader1.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record1, Bytes::from_static(b"Chunk1 Record1"));
+
+    let record2 = match reader1.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record2, Bytes::from_static(b"Chunk1 Record2"));
+
+    // Done with first chunk, should advance the buffer past the first chunk
+    match reader1.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    combined_chunks.advance(reader1.header().data_size as usize);
+
     // The buffer should now be positioned at the start of the second chunk
-    assert_eq!(combined_chunks.remaining(), chunk2.len(), 
-               "Buffer should be advanced past first chunk");
+    assert_eq!(
+        combined_chunks.remaining(),
+        chunk2.len(),
+        "Buffer should be advanced past first chunk"
+    );
 
     // Parse the second chunk header
     let header2 = parse_chunk_header(&mut combined_chunks).unwrap();
 
-    // Use a block scope for the second chunk reader
-    {
-        // Create parser for the second chunk
-        let mut reader2 = SimpleChunkParser::new(header2, &mut combined_chunks).unwrap();
-    
-        // Read records from second chunk
-        let record1 = match reader2.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record1, Bytes::from_static(b"Chunk2 Record1"));
-    
-        let record2 = match reader2.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record2, Bytes::from_static(b"Chunk2 Record2"));
-    
-        let record3 = match reader2.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record3, Bytes::from_static(b"Chunk2 Record3"));
-    
-        // Done with second chunk, should be end of buffer
-        match reader2.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-    } // reader2 is dropped here, releasing mutable borrow
-    
+    // Create parser for the second chunk
+    let mut reader2 = SimpleChunkParser::new(header2, combined_chunks.clone()).unwrap();
+
+    // Read records from second chunk
+    let record1 = match reader2.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record1, Bytes::from_static(b"Chunk2 Record1"));
+
+    let record2 = match reader2.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record2, Bytes::from_static(b"Chunk2 Record2"));
+
+    let record3 = match reader2.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record3, Bytes::from_static(b"Chunk2 Record3"));
+
+    // Done with second chunk, should be end of buffer
+    match reader2.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    combined_chunks.advance(reader2.header().data_size as usize);
+
     // Buffer should be fully advanced now
-    assert_eq!(combined_chunks.remaining(), 0, 
-               "Buffer should be fully advanced after reading all chunks");
+    assert_eq!(
+        combined_chunks.remaining(),
+        0,
+        "Buffer should be fully advanced after reading all chunks"
+    );
 }
 
 #[test]
@@ -180,29 +192,31 @@ fn test_empty_chunk() {
     // Parse the header and get the chunk data
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Store the initial length to verify advancement
     let _initial_length = chunk_data.len();
 
-    // Use a block scope for the reader
-    {
-        // Create a parser
-        let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
-    
-        // Check initial state
-        assert_eq!(reader.records_read(), 0);
-        assert_eq!(reader.total_records(), 0);
-    
-        // No records, should return EndOfChunk immediately
-        match reader.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-    } // reader is dropped here, releasing mutable borrow
-    
+    // Create a parser
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+
+    // Check initial state
+    assert_eq!(reader.records_read(), 0);
+    assert_eq!(reader.total_records(), 0);
+
+    // No records, should return EndOfChunk immediately
+    match reader.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    chunk_data.advance(reader.header().data_size as usize);
+
     // Verify buffer was advanced past the chunk
-    assert_eq!(chunk_data.remaining(), 0, 
-               "Buffer should be fully advanced after EndOfChunk");
+    assert_eq!(
+        chunk_data.remaining(),
+        0,
+        "Buffer should be fully advanced after EndOfChunk"
+    );
 }
 
 #[test]
@@ -219,28 +233,26 @@ fn test_large_records() {
     // Parse and read
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
-    // Use a block scope for the reader
-    {
-        let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
-    
-        // Read the large record
-        let record = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-    
-        assert_eq!(record.len(), 1_000_000);
-        assert_eq!(record[0], 0xAA);
-        assert_eq!(record[999_999], 0xAA);
-        
-        // Verify EndOfChunk and buffer advancement
-        match reader.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-    } // reader is dropped here, releasing mutable borrow
-    
+
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+
+    // Read the large record
+    let record = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+
+    assert_eq!(record.len(), 1_000_000);
+    assert_eq!(record[0], 0xAA);
+    assert_eq!(record[999_999], 0xAA);
+
+    // Verify EndOfChunk and buffer advancement
+    match reader.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    chunk_data.advance(reader.header().data_size as usize);
     // Buffer should be fully advanced
     assert_eq!(chunk_data.remaining(), 0, "Buffer should be fully advanced");
 }
@@ -269,49 +281,48 @@ fn test_mixed_record_sizes() {
     // Parse and read
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
-    // Use a block scope for the reader
-    {
-        let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
-    
-        // Read and verify each record
-        // Empty record
-        let empty = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(empty.len(), 0);
-    
-        // Small record
-        let small = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(small, Bytes::from_static(b"Small"));
-    
-        // Medium record
-        let medium = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(medium.len(), 1024);
-        assert_eq!(medium[0], 0xBB);
-    
-        // Large record
-        let large = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(large.len(), 100_000);
-        assert_eq!(large[0], 0xCC);
-        
-        // Verify EndOfChunk and buffer advancement
-        match reader.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-    } // reader is dropped here, releasing mutable borrow
-    
+
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+
+    // Read and verify each record
+    // Empty record
+    let empty = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(empty.len(), 0);
+
+    // Small record
+    let small = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(small, Bytes::from_static(b"Small"));
+
+    // Medium record
+    let medium = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(medium.len(), 1024);
+    assert_eq!(medium[0], 0xBB);
+
+    // Large record
+    let large = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(large.len(), 100_000);
+    assert_eq!(large[0], 0xCC);
+
+    // Verify EndOfChunk and buffer advancement
+    match reader.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    chunk_data.advance(reader.header().data_size as usize);
+
     // Buffer should be fully advanced
     assert_eq!(chunk_data.remaining(), 0, "Buffer should be fully advanced");
 }
@@ -328,10 +339,10 @@ fn test_incomplete_chunk_data() {
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
     // Truncate the data to simulate incomplete chunk
-    let mut truncated_data = chunk_data.slice(0..5); // Not enough data
+    let truncated_data = chunk_data.slice(0..5); // Not enough data
 
     // Try to create a parser with truncated data
-    let result = SimpleChunkParser::new(header, &mut truncated_data);
+    let result = SimpleChunkParser::new(header, truncated_data);
 
     // Should fail with appropriate error
     assert!(result.is_err());
@@ -364,24 +375,25 @@ fn test_iteration_pattern() {
     // Parse the header and data
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Use a block scope for the reader
     let actual_records = {
-        let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
+        let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
         let mut records = Vec::new();
-    
+
         // Iterate over records using a common pattern
         loop {
             match reader.next().unwrap() {
-                RecordResult::Record(record) => {
+                SimpleChunkPiece::Record(record) => {
                     records.push(record.to_vec());
                 }
-                RecordResult::EndOfChunk => {
+                SimpleChunkPiece::EndOfChunk => {
                     break;
                 }
             }
         }
-        
+
+        chunk_data.advance(reader.header().data_size as usize);
         records
     }; // reader is dropped here, releasing mutable borrow
 
@@ -394,7 +406,7 @@ fn test_iteration_pattern() {
     {
         assert_eq!(actual, expected, "Record {} mismatch", i);
     }
-    
+
     // Buffer should be fully advanced
     assert_eq!(chunk_data.remaining(), 0, "Buffer should be fully advanced");
 }
@@ -414,37 +426,42 @@ fn test_with_trailing_data() {
 
     // Get the size of just the chunk (for debugging if needed)
     let _chunk_size = chunk.len();
-    
+
     // Parse the header and data
     let mut data = combined.freeze();
     let header = parse_chunk_header(&mut data).unwrap();
-    
-    // Use a block scope for the reader
-    {
-        let mut reader = SimpleChunkParser::new(header, &mut data).unwrap();
-    
-        // Read the record
-        let record = match reader.next().unwrap() {
-            RecordResult::Record(record) => record,
-            _ => panic!("Expected Record"),
-        };
-        assert_eq!(record, Bytes::from_static(b"Test record"));
-    
-        // EndOfChunk should advance the buffer past the chunk
-        match reader.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        };
-    } // reader is dropped here, releasing mutable borrow
-    
+
+    let mut reader = SimpleChunkParser::new(header, data.clone()).unwrap();
+
+    // Read the record
+    let record = match reader.next().unwrap() {
+        SimpleChunkPiece::Record(record) => record,
+        _ => panic!("Expected Record"),
+    };
+    assert_eq!(record, Bytes::from_static(b"Test record"));
+
+    // EndOfChunk should advance the buffer past the chunk
+    match reader.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    };
+
+    data.advance(reader.header().data_size as usize);
+
     // Buffer should now point to the trailing data
-    assert_eq!(data.remaining(), trailing_data.len(), 
-               "Buffer should be advanced past chunk but not trailing data");
-    
+    assert_eq!(
+        data.remaining(),
+        trailing_data.len(),
+        "Buffer should be advanced past chunk but not trailing data"
+    );
+
     // Copy the remaining data and verify it matches the trailing data
     let remaining_bytes = data.slice(0..data.remaining());
-    assert_eq!(remaining_bytes, Bytes::from_static(trailing_data),
-               "Remaining buffer should contain trailing data");
+    assert_eq!(
+        remaining_bytes,
+        Bytes::from_static(trailing_data),
+        "Remaining buffer should contain trailing data"
+    );
 }
 
 #[test]
@@ -462,35 +479,34 @@ fn test_records_read_counter() {
     // Parse the header and data
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
-    // Use a block scope for the reader
-    {
-        let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
-    
-        // Initially 0 records read
-        assert_eq!(reader.records_read(), 0);
-    
-        // Read records one by one and check counter
-        for i in 1..=5 {
-            let result = reader.next().unwrap();
-            match result {
-                RecordResult::Record(_) => {
-                    assert_eq!(reader.records_read(), i);
-                },
-                RecordResult::EndOfChunk => {
-                    panic!("Unexpected EndOfChunk before all records are read");
-                }
+
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+
+    // Initially 0 records read
+    assert_eq!(reader.records_read(), 0);
+
+    // Read records one by one and check counter
+    for i in 1..=5 {
+        let result = reader.next().unwrap();
+        match result {
+            SimpleChunkPiece::Record(_) => {
+                assert_eq!(reader.records_read(), i);
+            }
+            SimpleChunkPiece::EndOfChunk => {
+                panic!("Unexpected EndOfChunk before all records are read");
             }
         }
-    
-        // Reading EndOfChunk shouldn't increment counter
-        match reader.next().unwrap() {
-            RecordResult::EndOfChunk => {},
-            _ => panic!("Expected EndOfChunk"),
-        }
-        assert_eq!(reader.records_read(), 5);
-    } // reader is dropped here, releasing mutable borrow
-    
+    }
+
+    // Reading EndOfChunk shouldn't increment counter
+    match reader.next().unwrap() {
+        SimpleChunkPiece::EndOfChunk => {}
+        _ => panic!("Expected EndOfChunk"),
+    }
+    assert_eq!(reader.records_read(), 5);
+
+    chunk_data.advance(reader.header().data_size as usize);
+
     // Buffer should be fully advanced
     assert_eq!(chunk_data.remaining(), 0, "Buffer should be fully advanced");
 }
@@ -501,15 +517,15 @@ fn test_invalid_chunk_type() {
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse header and modify it to have an invalid chunk type
     let mut chunk_data = serialized_chunk.clone();
     let mut header = parse_chunk_header(&mut chunk_data).unwrap();
     header.chunk_type = crate::chunks::header::ChunkType::Padding; // Not a SimpleRecords type
-    
+
     // Try to create parser with invalid chunk type
-    let result = SimpleChunkParser::new(header, &mut chunk_data);
-    
+    let result = SimpleChunkParser::new(header, chunk_data);
+
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
@@ -527,20 +543,22 @@ fn test_empty_chunk_data() {
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse header but provide empty data
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Try to create parser with empty data
-    let mut empty_bytes = Bytes::new();
-    let result = SimpleChunkParser::new(header, &mut empty_bytes);
-    
+    let empty_bytes = Bytes::new();
+    let result = SimpleChunkParser::new(header, empty_bytes);
+
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
             DiskyError::Other(msg) => {
-                assert!(msg.contains("Chunk data incomplete") || msg.contains("Chunk data is empty"));
+                assert!(
+                    msg.contains("Chunk data incomplete") || msg.contains("Chunk data is empty")
+                );
             }
             _ => panic!("Expected Other error"),
         }
@@ -553,28 +571,28 @@ fn test_corrupted_sizes_length() {
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Corrupt the data by modifying the sizes length varint
     // We know the first byte is compression type, skip it
     let mut corrupted_data = BytesMut::new();
     corrupted_data.extend_from_slice(&chunk_data[0..1]); // Keep compression type
     corrupted_data.put_u8(0xFF); // Invalid varint (will keep reading)
     corrupted_data.put_u8(0xFF); // Invalid varint continuation
-    // Add rest of data
+                                 // Add rest of data
     if chunk_data.len() > 3 {
         corrupted_data.extend_from_slice(&chunk_data[3..]);
     }
-    
+
     // Convert to Bytes and make mutable
-    let mut corrupted_bytes = corrupted_data.freeze();
-    
+    let corrupted_bytes = corrupted_data.freeze();
+
     // Try to create a parser with corrupted data
-    let result = SimpleChunkParser::new(header, &mut corrupted_bytes);
-    
+    let result = SimpleChunkParser::new(header, corrupted_bytes);
+
     assert!(result.is_err());
 }
 
@@ -584,30 +602,30 @@ fn test_invalid_sizes_length() {
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Corrupt the data by modifying the sizes length to be larger than available data
     let mut corrupted_data = BytesMut::new();
     corrupted_data.extend_from_slice(&chunk_data[0..1]); // Keep compression type
-    // Insert a varint that's too large (larger than remaining data)
+                                                         // Insert a varint that's too large (larger than remaining data)
     corrupted_data.put_u8(0x80); // Start of varint
     corrupted_data.put_u8(0x80); // Continuation
     corrupted_data.put_u8(0x04); // End of varint, value too large
-    
+
     // Add rest of data
     if chunk_data.len() > 4 {
         corrupted_data.extend_from_slice(&chunk_data[4..]);
     }
-    
+
     // Convert to Bytes and make mutable
-    let mut corrupted_bytes = corrupted_data.freeze();
-    
+    let corrupted_bytes = corrupted_data.freeze();
+
     // Try to create a parser with corrupted data
-    let result = SimpleChunkParser::new(header, &mut corrupted_bytes);
-    
+    let result = SimpleChunkParser::new(header, corrupted_bytes);
+
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
@@ -625,24 +643,24 @@ fn test_unsupported_compression_type() {
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // Modify the compression type byte to an unsupported value
     let mut modified_data = BytesMut::new();
     modified_data.put_u8(0x99); // Invalid compression type
     if chunk_data.len() > 1 {
         modified_data.extend_from_slice(&chunk_data[1..]);
     }
-    
+
     // Convert to Bytes and make mutable
-    let mut modified_bytes = modified_data.freeze();
-    
+    let modified_bytes = modified_data.freeze();
+
     // Try to create a parser with invalid compression type
-    let result = SimpleChunkParser::new(header, &mut modified_bytes);
-    
+    let result = SimpleChunkParser::new(header, modified_bytes);
+
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
@@ -661,35 +679,40 @@ fn test_reading_after_error() {
     writer.write_record(b"Record 1").unwrap();
     writer.write_record(b"Record 2").unwrap();
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    let mut reader = SimpleChunkParser::new(header, &mut chunk_data).unwrap();
-    
+    let mut reader = SimpleChunkParser::new(header, chunk_data).unwrap();
+
     // Read one record successfully
     let _ = reader.next().unwrap();
-    
+
     // Read second record
     let record = reader.next();
     assert!(record.is_ok()); // Second record should be ok
-    
+
     // We've read both records at this point, so we should be done
     // Let's check that we get the EndOfChunk state
     match reader.next().unwrap() {
-        RecordResult::EndOfChunk => {
+        SimpleChunkPiece::EndOfChunk => {
             // Now try calling next again - should return an error
             let error_result = reader.next();
-            assert!(error_result.is_err(), "Expected an error when calling next() after EndOfChunk");
+            assert!(
+                error_result.is_err(),
+                "Expected an error when calling next() after EndOfChunk"
+            );
             if let Err(err) = error_result {
                 match err {
                     DiskyError::Other(msg) => {
-                        assert!(msg.contains("Cannot invoke next() after SimpleChunkParser has returned EndOfChunk"));
+                        assert!(msg.contains(
+                            "Cannot invoke next() after SimpleChunkParser has returned EndOfChunk"
+                        ));
                     }
                     _ => panic!("Expected Other error"),
                 }
             }
-        },
+        }
         _ => panic!("Expected EndOfChunk after reading all records"),
     }
 }
@@ -700,47 +723,47 @@ fn test_record_size_exceeds_available_data() {
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Record 1").unwrap();
     writer.write_record(b"Record 2").unwrap();
-    
+
     let serialized_chunk = writer.serialize_chunk().unwrap();
-    
+
     // Parse the header and get the chunk data
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
-    
+
     // For this test, we'll modify an existing chunk:
     // 1. Create a valid chunk but modify its data size to be much larger
-    
+
     // Make a small buffer with just enough data to pass creation
     // but will fail on record read due to size mismatch
     let mut minimal_chunk = BytesMut::new();
-    
+
     // Compression type - None (0)
     minimal_chunk.put_u8(0);
-    
+
     // Create a small sizes section - 2 bytes, containing one large size
     minimal_chunk.put_u8(2); // Size of sizes section
-    
+
     // Put a size that's larger than our data section will be
     minimal_chunk.put_u8(0xFF); // Start of large varint - 255 bytes
     minimal_chunk.put_u8(0x01); // 255 + 128 = 383 bytes (much larger than our data)
-    
+
     // Add just a few bytes of data section
-    minimal_chunk.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05]); 
-    
+    minimal_chunk.extend_from_slice(&[0x01, 0x02, 0x03, 0x04, 0x05]);
+
     // We need a header with matching data_size
     let mut custom_header = header.clone();
     custom_header.data_size = minimal_chunk.len() as u64;
-    
+
     // Convert to Bytes and create a mutable reference
-    let mut chunk_bytes = minimal_chunk.freeze();
-    
+    let chunk_bytes = minimal_chunk.freeze();
+
     // Create parser with custom data
-    let mut reader = SimpleChunkParser::new(custom_header, &mut chunk_bytes).unwrap();
-    
+    let mut reader = SimpleChunkParser::new(custom_header, chunk_bytes).unwrap();
+
     // First read should fail because record size is too large
     let result = reader.next();
     assert!(result.is_err());
-    
+
     if let Err(err) = result {
         match err {
             DiskyError::Corruption(msg) => {
@@ -750,4 +773,3 @@ fn test_record_size_exceeds_available_data() {
         }
     }
 }
-

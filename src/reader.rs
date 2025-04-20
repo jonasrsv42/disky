@@ -24,6 +24,7 @@ use bytes::Bytes;
 
 use crate::blocks::reader::{BlockReader, BlockReaderConfig};
 use crate::chunks::chunks_parser::{ChunkPiece, ChunksParser};
+use crate::chunks::signature_parser::validate_signature;
 use crate::error::{DiskyError, Result};
 
 /// Configures how the RecordReader should handle corruption
@@ -260,9 +261,14 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::ParsingChunks(parser) => {
                     // Parse the next chunk piece
                     match parser.next() {
-                        Ok(ChunkPiece::Signature) => {
+                        Ok(ChunkPiece::Signature(header)) => {
                             // File signature chunk - verify it only on first read
                             if !self.signature_verified {
+                                // Verify signature with the header
+                                if let Err(e) = validate_signature(&header) {
+                                    self.state = ReaderState::Corrupted;
+                                    return Err(e);
+                                }
                                 self.signature_verified = true;
                             }
                             // Continue parsing

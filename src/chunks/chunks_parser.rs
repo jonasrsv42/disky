@@ -22,6 +22,7 @@
 //!
 //! ```
 //! use disky::chunks::chunks_parser::{ChunksParser, ChunkPiece};
+//! use disky::chunks::signature_parser::validate_signature;
 //! use disky::blocks::reader::BlockReader;
 //! # use bytes::Bytes;
 //!
@@ -33,9 +34,10 @@
 //! // Parse chunks and process each piece
 //! loop {
 //!     match parser.next()? {
-//!         ChunkPiece::Signature => {
-//!             // Found a file signature chunk
-//!             println!("Found signature chunk");
+//!         ChunkPiece::Signature(header) => {
+//!             // Found a file signature chunk with header
+//!             validate_signature(&header)?;
+//!             println!("Found and validated signature chunk");
 //!         },
 //!         ChunkPiece::SimpleChunkStart => {
 //!             println!("Starting to parse a simple chunk");
@@ -72,7 +74,7 @@
 
 use bytes::{Buf, Bytes};
 
-use crate::chunks::header::ChunkType;
+use crate::chunks::header::{ChunkHeader, ChunkType};
 use crate::chunks::header_parser::parse_chunk_header;
 use crate::chunks::simple_chunk_parser::{SimpleChunkParser, SimpleChunkPiece};
 use crate::error::{DiskyError, Result};
@@ -85,7 +87,8 @@ use crate::error::{DiskyError, Result};
 #[derive(Debug)]
 pub enum ChunkPiece {
     /// File signature chunk - indicates the start of a Riegeli file
-    Signature,
+    /// Contains the chunk header for validation
+    Signature(ChunkHeader),
 
     /// Start of a simple chunk with records - indicates that records will follow
     SimpleChunkStart,
@@ -232,9 +235,8 @@ impl ChunksParser {
         // Parse the chunk based on its type
         match header.chunk_type {
             ChunkType::Signature => {
-                // For signature chunks, we do nothing, they should only be
-                // validated at the start of the file.
-                Ok(ChunkPiece::Signature)
+                // For signature chunks, we return the ChunkHeader for validation
+                Ok(ChunkPiece::Signature(header))
             }
             ChunkType::SimpleRecords => {
                 // For simple records, return a chunk that can be iterated

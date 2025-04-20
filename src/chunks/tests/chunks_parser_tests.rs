@@ -92,10 +92,15 @@ fn test_signature_chunk() {
     // Create a parser with the signature chunk
     let mut parser = ChunksParser::new(signature_chunk);
     
-    // Should return Signature chunk piece
+    // Should return Signature chunk piece with header
     match parser.next().unwrap() {
-        ChunkPiece::Signature => {}
-        _ => panic!("Expected Signature chunk piece"),
+        ChunkPiece::Signature(header) => {
+            assert_eq!(header.chunk_type, ChunkType::Signature);
+            assert_eq!(header.data_size, 0);
+            assert_eq!(header.num_records, 0);
+            assert_eq!(header.decoded_data_size, 0);
+        }
+        _ => panic!("Expected Signature chunk piece with header"),
     }
     
     // Next call should return ChunksEnd
@@ -161,8 +166,10 @@ fn test_multiple_chunks() {
     
     // First chunk: signature
     match parser.next().unwrap() {
-        ChunkPiece::Signature => {}
-        _ => panic!("Expected Signature chunk piece"),
+        ChunkPiece::Signature(header) => {
+            assert_eq!(header.chunk_type, ChunkType::Signature);
+        }
+        _ => panic!("Expected Signature chunk piece with header"),
     }
     
     // Second chunk: simple records
@@ -475,8 +482,10 @@ fn test_mixed_chunk_types() {
     
     // First signature
     match parser.next().unwrap() {
-        ChunkPiece::Signature => {}
-        _ => panic!("Expected first Signature"),
+        ChunkPiece::Signature(header) => {
+            assert_eq!(header.chunk_type, ChunkType::Signature);
+        }
+        _ => panic!("Expected first Signature with header"),
     }
     
     // Simple chunk
@@ -503,8 +512,10 @@ fn test_mixed_chunk_types() {
     
     // Second signature
     match parser.next().unwrap() {
-        ChunkPiece::Signature => {}
-        _ => panic!("Expected second Signature"),
+        ChunkPiece::Signature(header) => {
+            assert_eq!(header.chunk_type, ChunkType::Signature);
+        }
+        _ => panic!("Expected second Signature with header"),
     }
     
     // End of all chunks
@@ -595,8 +606,10 @@ fn test_recovery_during_simple_chunk_parsing() {
     
     // First signature
     match parser.next().unwrap() {
-        ChunkPiece::Signature => {}
-        _ => panic!("Expected first Signature"),
+        ChunkPiece::Signature(header) => {
+            assert_eq!(header.chunk_type, ChunkType::Signature);
+        }
+        _ => panic!("Expected first Signature with header"),
     }
     
     // Valid simple chunk start
@@ -636,8 +649,10 @@ fn test_recovery_during_simple_chunk_parsing() {
     
     // Should be able to continue with next (signature) chunk
     match parser.next().unwrap() {
-        ChunkPiece::Signature => {}
-        _ => panic!("Expected signature chunk after recovery"),
+        ChunkPiece::Signature(header) => {
+            assert_eq!(header.chunk_type, ChunkType::Signature);
+        }
+        _ => panic!("Expected signature chunk with header after recovery"),
     }
     
     // End of all chunks

@@ -196,6 +196,9 @@ pub struct BlockReader<Source: Read + Seek> {
 
     /// Buffer for storing chunk data that has been read.
     buffer: BytesMut,
+    
+    /// Reusable read buffer to avoid repeated allocations
+    read_buf: Vec<u8>,
 
     /// State of the reader
     state: BlockReaderState,
@@ -213,11 +216,17 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         let position = source.position();
 
+        // Pre-allocate read buffer with capacity matching the block size
+        // Initialize it with zeros to allow for safe slicing operations
+        let initial_read_buf_capacity = config.block_size as usize;
+        let read_buf = vec![0u8; initial_read_buf_capacity];
+
         Ok(Self {
             source,
             config,
             chunk_begin: position,
             buffer: BytesMut::new(),
+            read_buf,
             state: BlockReaderState::Fresh,
         })
     }
@@ -325,13 +334,12 @@ impl<Source: Read + Seek> BlockReader<Source> {
             return Ok(0);
         }
 
-        // Read the data
-        let mut buf = vec![0u8; to_read];
-        let bytes_read = self.source.read(&mut buf)?;
+        // Use our pre-allocated buffer to read directly into a slice of the appropriate size
+        let bytes_read = self.source.read(&mut self.read_buf[..to_read])?;
 
         if bytes_read > 0 {
-            // Add to our buffer - position is automatically updated by ReadPositionTracker
-            self.buffer.extend_from_slice(&buf[..bytes_read]);
+            // Add to our chunk buffer - position is automatically updated by ReadPositionTracker
+            self.buffer.extend_from_slice(&self.read_buf[..bytes_read]);
         }
 
         Ok(bytes_read)

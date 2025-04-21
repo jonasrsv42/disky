@@ -121,10 +121,12 @@ impl ChunkWriter for SimpleChunkWriter {
 impl SimpleChunkWriter {
     /// Creates a new SimpleChunkWriter with the specified compression type.
     pub fn new(compression_type: CompressionType) -> Self {
+        // Pre-allocate with reasonable capacity for records and sizes
+        // This avoids frequent reallocations for typical use cases
         SimpleChunkWriter {
             compression_type,
-            records: BytesMut::new(),
-            sizes: BytesMut::new(),
+            records: BytesMut::with_capacity(1024 * 1024), // Start with 1MB capacity
+            sizes: BytesMut::with_capacity(1024), // Enough for hundreds of varint-encoded sizes
             num_records: 0,
         }
     }

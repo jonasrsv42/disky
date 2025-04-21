@@ -62,8 +62,8 @@ cargo test
 # Run integration tests
 cargo test --test '*'
 
-# Run benchmarks (requires nightly Rust)
-cargo +nightly bench
+# Run benchmarks (using Criterion, works on stable Rust)
+cargo bench
 ```
 
 ## Future Work

@@ -12,26 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Benchmark for Riegeli record writing and reading.
-//! 
+//! Benchmark for Disky record writing and reading using Criterion.
+//!
 //! This benchmark measures the performance of:
 //! - Writing records of different sizes
 //! - Reading records of different sizes
-//! - Reading/writing with different file sizes
+//! - Stream processing records
 
-#![feature(test)]
-extern crate test;
-
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::time::Duration;
 use tempfile::NamedTempFile;
 
-use disky::reader::{RecordReader, DiskyPiece};
+use disky::reader::{DiskyPiece, RecordReader};
 use disky::writer::RecordWriter;
-use test::Bencher;
 
 /// Generate test records of a specific size
 fn generate_test_records(num_records: usize, record_size: usize) -> Vec<Vec<u8>> {
     let mut records = Vec::with_capacity(num_records);
-    
+
     for i in 0..num_records {
         // Fill with sequential bytes to make it a bit more realistic than all zeros
         let mut record = Vec::with_capacity(record_size);
@@ -40,7 +38,7 @@ fn generate_test_records(num_records: usize, record_size: usize) -> Vec<Vec<u8>>
         }
         records.push(record);
     }
-    
+
     records
 }
 
@@ -48,18 +46,18 @@ fn generate_test_records(num_records: usize, record_size: usize) -> Vec<Vec<u8>>
 fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
     // Create a temporary file
     let file = NamedTempFile::new().expect("Failed to create temp file");
-    
+
     // Create a writer
     let mut writer = RecordWriter::new(file.reopen().unwrap()).unwrap();
-    
+
     // Write all records
     for record in records {
         writer.write_record(record).unwrap();
     }
-    
+
     // Close the writer to flush all data
     writer.close().unwrap();
-    
+
     file
 }
 
@@ -67,7 +65,7 @@ fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
 fn read_all_records(file: &NamedTempFile) -> Vec<Vec<u8>> {
     let reader_file = file.reopen().unwrap();
     let reader = RecordReader::new(reader_file).unwrap();
-    
+
     // Collect all records
     reader
         .filter_map(|result| result.ok())
@@ -75,114 +73,163 @@ fn read_all_records(file: &NamedTempFile) -> Vec<Vec<u8>> {
         .collect()
 }
 
-// === Writing Benchmarks ===
+/// Stream process records (manual iteration)
+fn stream_process_records(file: &NamedTempFile) -> u64 {
+    let reader_file = file.reopen().unwrap();
+    let mut reader = RecordReader::new(reader_file).unwrap();
 
-#[bench]
-fn bench_write_small_records(b: &mut Bencher) {
-    let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    
-    b.iter(|| {
-        write_records_to_file(&records)
-    });
-}
+    let mut checksum: u64 = 0;
 
-#[bench]
-fn bench_write_medium_records(b: &mut Bencher) {
-    let records = generate_test_records(100, 10_000); // 100 records of 10 KB each
-    
-    b.iter(|| {
-        write_records_to_file(&records)
-    });
-}
-
-#[bench]
-fn bench_write_large_records(b: &mut Bencher) {
-    let records = generate_test_records(10, 100_000); // 10 records of 100 KB each
-    
-    b.iter(|| {
-        write_records_to_file(&records)
-    });
-}
-
-// === Reading Benchmarks ===
-
-#[bench]
-fn bench_read_small_records(b: &mut Bencher) {
-    let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    let file = write_records_to_file(&records);
-    
-    b.iter(|| {
-        read_all_records(&file)
-    });
-}
-
-#[bench]
-fn bench_read_medium_records(b: &mut Bencher) {
-    let records = generate_test_records(100, 10_000); // 100 records of 10 KB each
-    let file = write_records_to_file(&records);
-    
-    b.iter(|| {
-        read_all_records(&file)
-    });
-}
-
-#[bench]
-fn bench_read_large_records(b: &mut Bencher) {
-    let records = generate_test_records(10, 100_000); // 10 records of 100 KB each
-    let file = write_records_to_file(&records);
-    
-    b.iter(|| {
-        read_all_records(&file)
-    });
-}
-
-// === Stream Processing Benchmarks ===
-
-#[bench]
-fn bench_stream_small_records(b: &mut Bencher) {
-    let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    let file = write_records_to_file(&records);
-    
-    b.iter(|| {
-        // Simulate stream processing by walking through each record
-        // and performing a simple operation on it
-        let mut checksum: u64 = 0;
-        let reader_file = file.reopen().unwrap();
-        let mut reader = RecordReader::new(reader_file).unwrap();
-        
-        loop {
-            match reader.next_record().unwrap() {
-                DiskyPiece::Record(bytes) => {
-                    // Simple operation: sum the first byte of each record
-                    if let Some(first_byte) = bytes.first() {
-                        checksum = checksum.wrapping_add(*first_byte as u64);
-                    }
+    loop {
+        match reader.next_record().unwrap() {
+            DiskyPiece::Record(bytes) => {
+                // Simple operation: sum the first byte of each record
+                if let Some(first_byte) = bytes.first() {
+                    checksum = checksum.wrapping_add(*first_byte as u64);
                 }
-                DiskyPiece::EOF => break,
             }
+            DiskyPiece::EOF => break,
         }
-        
-        checksum
-    });
+    }
+
+    checksum
 }
 
-#[bench]
-fn bench_iterator_small_records(b: &mut Bencher) {
-    let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    let file = write_records_to_file(&records);
-    
-    b.iter(|| {
-        // Using the iterator interface
-        let reader_file = file.reopen().unwrap();
-        let reader = RecordReader::new(reader_file).unwrap();
-        
-        // Calculate a checksum using the iterator
-        let checksum: u64 = reader
-            .filter_map(|result| result.ok())
-            .filter_map(|bytes| bytes.first().copied())
-            .map(|byte| byte as u64)
-            .fold(0, |acc, val| acc.wrapping_add(val));
-        
-        checksum
-    });
+/// Stream process records using iterator
+fn iterator_process_records(file: &NamedTempFile) -> u64 {
+    let reader_file = file.reopen().unwrap();
+    let reader = RecordReader::new(reader_file).unwrap();
+
+    // Calculate a checksum using the iterator
+    reader
+        .filter_map(|result| result.ok())
+        .filter_map(|bytes| bytes.first().copied())
+        .map(|byte| byte as u64)
+        .fold(0, |acc, val| acc.wrapping_add(val))
 }
+
+/// Benchmark writing records of different sizes
+fn bench_write(c: &mut Criterion) {
+    let mut group = c.benchmark_group("write_records");
+    group.sample_size(10);
+
+    // Small records: 1000 records of 100 bytes each
+    let small_records = generate_test_records(1000, 100);
+    group.bench_function(BenchmarkId::new("small", "1000×100B"), |b| {
+        b.iter(|| write_records_to_file(&small_records))
+    });
+
+    // Medium records: 100 records of 10 KB each
+    let medium_records = generate_test_records(100, 10_000);
+    group.bench_function(BenchmarkId::new("medium", "100×10KB"), |b| {
+        b.iter(|| write_records_to_file(&medium_records))
+    });
+
+    // Large records: 10 records of 100 KB each
+    let large_records = generate_test_records(10, 100_000);
+    group.bench_function(BenchmarkId::new("large", "10×100KB"), |b| {
+        b.iter(|| write_records_to_file(&large_records))
+    });
+
+    group.finish();
+}
+
+fn bench_write_audio_dataset(c: &mut Criterion) {
+    let mut group = c.benchmark_group("write_audio_dataset");
+    group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+
+    // Large writes, 100 is very slow.
+    group.sample_size(10);
+
+    // Mega record: 5 records of 1 MB each
+    let audio_records = generate_test_records(2000, 2000_000);
+    group.bench_function(BenchmarkId::new("audio_dataset", "2000×2MB"), |b| {
+        b.iter(|| write_records_to_file(&audio_records))
+    });
+
+    group.finish();
+}
+
+/// Benchmark reading records of different sizes
+fn bench_read(c: &mut Criterion) {
+    let mut group = c.benchmark_group("read_records");
+    group.sample_size(10);
+
+    // Small records: 1000 records of 100 bytes each
+    let small_records = generate_test_records(1000, 100);
+    let small_file = write_records_to_file(&small_records);
+    group.bench_function(BenchmarkId::new("small", "1000×100B"), |b| {
+        b.iter(|| read_all_records(&small_file))
+    });
+
+    // Medium records: 100 records of 10 KB each
+    let medium_records = generate_test_records(100, 10_000);
+    let medium_file = write_records_to_file(&medium_records);
+    group.bench_function(BenchmarkId::new("medium", "100×10KB"), |b| {
+        b.iter(|| read_all_records(&medium_file))
+    });
+
+    // Large records: 10 records of 100 KB each
+    let large_records = generate_test_records(10, 100_000);
+    let large_file = write_records_to_file(&large_records);
+    group.bench_function(BenchmarkId::new("large", "10×100KB"), |b| {
+        b.iter(|| read_all_records(&large_file))
+    });
+
+    group.finish();
+}
+
+fn bench_read_audio_dataset(c: &mut Criterion) {
+    let mut group = c.benchmark_group("read_audio_dataset");
+    group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+
+    // Large writes, 100 is very slow.
+    group.sample_size(10);
+
+    // This is realistic for reading a dataset of audio files while training,
+    // typically an audio file may be ~ 2 MB and we may have a few thousand in a shard
+    //
+    // This should amount to about 4 GB of data.
+
+    let audio_dataset_records = generate_test_records(2000, 2000_000);
+    let audio_dataset_file = write_records_to_file(&audio_dataset_records);
+    group.bench_function(BenchmarkId::new("audio_dataset", "2000x2MB"), |b| {
+        b.iter(|| read_all_records(&audio_dataset_file))
+    });
+
+    group.finish();
+}
+
+/// Benchmark stream processing of records
+fn bench_stream_processing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stream_processing");
+
+    group.sample_size(10);
+
+    // Small records: 1000 records of 100 bytes each
+    let small_records = generate_test_records(1000, 100);
+    let small_file = write_records_to_file(&small_records);
+
+    // Manual iteration
+    group.bench_function(BenchmarkId::new("manual", "1000×100B"), |b| {
+        b.iter(|| stream_process_records(&small_file))
+    });
+
+    // Iterator approach
+    group.bench_function(BenchmarkId::new("iterator", "1000×100B"), |b| {
+        b.iter(|| iterator_process_records(&small_file))
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_write,
+    bench_write_audio_dataset,
+    bench_read,
+    bench_read_audio_dataset,
+    bench_stream_processing
+);
+criterion_main!(benches);
+

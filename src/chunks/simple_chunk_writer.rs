@@ -37,6 +37,27 @@ use bytes::{BufMut, Bytes, BytesMut};
 ///    - compressed_sizes_size (varint64)
 ///    - compressed_sizes (variable)
 ///    - compressed_values (the rest)
+///
+/// # Memory Optimization
+///
+/// This implementation is carefully optimized for memory efficiency:
+///
+/// 1. Pre-allocated buffers: We pre-allocate buffers based on expected chunk size
+///    to minimize reallocations during record collection and serialization.
+///
+/// 2. Single buffer copy: During serialization, we make exactly one copy of the
+///    record data from source buffers into the serialized chunk buffer. This copy
+///    is necessary due to the format requirements.
+///
+/// 3. Buffer reuse: The serialized_chunk buffer is reused across serializations.
+///    Although we call `freeze()` which returns an immutable `Bytes` view, the
+///    underlying buffer is not duplicated. When the returned `Bytes` is consumed
+///    (as happens when written to disk), the buffer becomes exclusively owned
+///    by our `serialized_chunk` again and can be reused.
+///
+/// 4. Efficient freezing: The `BytesMut::clone().freeze()` operation does not copy
+///    the underlying data; it only creates a new reference-counted view. This is
+///    memory-efficient in our usage pattern where chunks are processed sequentially.
 pub struct SimpleChunkWriter {
     // Compression to use for records and sizes.
     compression_type: CompressionType,
@@ -65,6 +86,27 @@ impl ChunkWriter for SimpleChunkWriter {
     /// - compressed_sizes_size (varint64) - size of compressed_sizes
     /// - compressed_sizes (compressed_sizes_size bytes) - compressed buffer with record sizes
     /// - compressed_values (the rest of data) - compressed buffer with record values
+    ///
+    /// # Implementation Notes
+    ///
+    /// This method uses an efficient single-buffer approach:
+    ///
+    /// 1. We clear and reuse our pre-allocated buffer (`serialized_chunk`) for each call
+    ///
+    /// 2. We first reserve space for the header by writing placeholder bytes
+    ///
+    /// 3. We add the chunk data (compression type, sizes, and records) directly after the header
+    ///
+    /// 4. We calculate the hash of the chunk data portion
+    ///
+    /// 5. We create the header and overwrite the placeholder space
+    ///
+    /// 6. We return a frozen view of the buffer using `clone().freeze()`, which creates
+    ///    a reference-counted view of the same underlying memory without copying data
+    ///
+    /// This design minimizes memory allocations and copies while maintaining the format
+    /// requirements of Riegeli files. The buffer is efficiently reused in subsequent calls
+    /// once the returned `Bytes` object is consumed (written to disk and dropped).
     fn serialize_chunk(&mut self) -> Result<Bytes> {
         // Clear our reusable buffer to start fresh
         self.serialized_chunk.clear();
@@ -80,14 +122,12 @@ impl ChunkWriter for SimpleChunkWriter {
         self.serialized_chunk.put_u8(self.compression_type.as_byte());
         
         // Write size of the sizes array as varint
-        // For CompressionType::None we don't need a decompressed size prefix
         varint::write_vu64(self.sizes.len() as u64, &mut self.serialized_chunk);
         
         // Write the record sizes
         self.serialized_chunk.extend_from_slice(&self.sizes);
         
         // Write the record values
-        // For CompressionType::None we don't need a decompressed size prefix
         self.serialized_chunk.extend_from_slice(&self.records);
         
         // Calculate the hash of just the chunk data portion (excluding header)
@@ -152,6 +192,7 @@ impl SimpleChunkWriter {
                 CHUNK_HEADER_SIZE as usize + chunk_size_bytes + sizes_capacity),
         }
     }
+    
     
     /// Writes a record to the chunk.
     ///

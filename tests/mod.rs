@@ -18,4 +18,4 @@
 //! treating it as a black box.
 
 // Import test modules
-//pub mod integration;
+pub mod integration;

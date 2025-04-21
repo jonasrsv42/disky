@@ -45,6 +45,27 @@ This is a basic implementation with the following limitations:
 - No support for transposed records
 - No proto message handling (though you can manually serialize them)
 
+## Testing and Benchmarking
+
+The library includes comprehensive test suites:
+
+- **Unit Tests**: Located in the source files' `tests` modules, these verify individual components.
+- **Integration Tests**: In the `tests/integration` directory, testing the library as an external user would.
+- **Benchmarks**: In the `benches` directory for performance measurements.
+
+To run the tests:
+
+```bash
+# Run unit tests
+cargo test
+
+# Run integration tests
+cargo test --test '*'
+
+# Run benchmarks (requires nightly Rust)
+cargo +nightly bench
+```
+
 ## Future Work
 
 - Add compression support (Brotli, Zstd, Snappy)
@@ -52,7 +73,6 @@ This is a basic implementation with the following limitations:
 - Add better error recovery
 - Add proto message integration
 - Improve performance with vectorized operations
-- Add more testing and benchmarks
 
 ## License
 

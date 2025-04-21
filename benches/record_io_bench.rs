@@ -17,16 +17,15 @@
 //! This benchmark measures the performance of:
 //! - Writing records of different sizes
 //! - Reading records of different sizes
-//! - Stream processing of records
+//! - Reading/writing with different file sizes
 
 #![feature(test)]
 extern crate test;
 
-use std::io::Cursor;
+use tempfile::NamedTempFile;
 
 use disky::reader::{RecordReader, DiskyPiece};
-use disky::writer::{RecordWriter, RecordWriterConfig};
-use disky::compression::CompressionType;
+use disky::writer::RecordWriter;
 use test::Bencher;
 
 /// Generate test records of a specific size
@@ -45,37 +44,35 @@ fn generate_test_records(num_records: usize, record_size: usize) -> Vec<Vec<u8>>
     records
 }
 
-/// Write records to a buffer and return the buffer
-fn write_records(records: &[Vec<u8>]) -> Vec<u8> {
-    let buffer = Cursor::new(Vec::new());
+/// Write records to a file and return the temp file
+fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
+    // Create a temporary file
+    let file = NamedTempFile::new().expect("Failed to create temp file");
     
-    // Default config uses no compression
-    let mut writer = RecordWriter::new(buffer).unwrap();
+    // Create a writer
+    let mut writer = RecordWriter::new(file.reopen().unwrap()).unwrap();
     
+    // Write all records
     for record in records {
         writer.write_record(record).unwrap();
     }
     
+    // Close the writer to flush all data
     writer.close().unwrap();
     
-    writer.get_data().unwrap()
+    file
 }
 
-/// Read all records from a buffer
-fn read_records(data: &[u8]) -> Vec<Vec<u8>> {
-    let mut result = Vec::new();
-    let mut reader = RecordReader::new(Cursor::new(data)).unwrap();
+/// Read all records from a file
+fn read_all_records(file: &NamedTempFile) -> Vec<Vec<u8>> {
+    let reader_file = file.reopen().unwrap();
+    let reader = RecordReader::new(reader_file).unwrap();
     
-    loop {
-        match reader.next_record().unwrap() {
-            DiskyPiece::Record(bytes) => {
-                result.push(bytes.to_vec());
-            }
-            DiskyPiece::EOF => break,
-        }
-    }
-    
-    result
+    // Collect all records
+    reader
+        .filter_map(|result| result.ok())
+        .map(|bytes| bytes.to_vec())
+        .collect()
 }
 
 // === Writing Benchmarks ===
@@ -85,7 +82,7 @@ fn bench_write_small_records(b: &mut Bencher) {
     let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
     
     b.iter(|| {
-        write_records(&records)
+        write_records_to_file(&records)
     });
 }
 
@@ -94,7 +91,7 @@ fn bench_write_medium_records(b: &mut Bencher) {
     let records = generate_test_records(100, 10_000); // 100 records of 10 KB each
     
     b.iter(|| {
-        write_records(&records)
+        write_records_to_file(&records)
     });
 }
 
@@ -103,7 +100,7 @@ fn bench_write_large_records(b: &mut Bencher) {
     let records = generate_test_records(10, 100_000); // 10 records of 100 KB each
     
     b.iter(|| {
-        write_records(&records)
+        write_records_to_file(&records)
     });
 }
 
@@ -112,30 +109,30 @@ fn bench_write_large_records(b: &mut Bencher) {
 #[bench]
 fn bench_read_small_records(b: &mut Bencher) {
     let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    let data = write_records(&records);
+    let file = write_records_to_file(&records);
     
     b.iter(|| {
-        read_records(&data)
+        read_all_records(&file)
     });
 }
 
 #[bench]
 fn bench_read_medium_records(b: &mut Bencher) {
     let records = generate_test_records(100, 10_000); // 100 records of 10 KB each
-    let data = write_records(&records);
+    let file = write_records_to_file(&records);
     
     b.iter(|| {
-        read_records(&data)
+        read_all_records(&file)
     });
 }
 
 #[bench]
 fn bench_read_large_records(b: &mut Bencher) {
     let records = generate_test_records(10, 100_000); // 10 records of 100 KB each
-    let data = write_records(&records);
+    let file = write_records_to_file(&records);
     
     b.iter(|| {
-        read_records(&data)
+        read_all_records(&file)
     });
 }
 
@@ -144,13 +141,14 @@ fn bench_read_large_records(b: &mut Bencher) {
 #[bench]
 fn bench_stream_small_records(b: &mut Bencher) {
     let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    let data = write_records(&records);
+    let file = write_records_to_file(&records);
     
     b.iter(|| {
         // Simulate stream processing by walking through each record
         // and performing a simple operation on it
         let mut checksum: u64 = 0;
-        let mut reader = RecordReader::new(Cursor::new(&data)).unwrap();
+        let reader_file = file.reopen().unwrap();
+        let mut reader = RecordReader::new(reader_file).unwrap();
         
         loop {
             match reader.next_record().unwrap() {
@@ -171,11 +169,12 @@ fn bench_stream_small_records(b: &mut Bencher) {
 #[bench]
 fn bench_iterator_small_records(b: &mut Bencher) {
     let records = generate_test_records(1000, 100); // 1000 records of 100 bytes each
-    let data = write_records(&records);
+    let file = write_records_to_file(&records);
     
     b.iter(|| {
         // Using the iterator interface
-        let reader = RecordReader::new(Cursor::new(&data)).unwrap();
+        let reader_file = file.reopen().unwrap();
+        let reader = RecordReader::new(reader_file).unwrap();
         
         // Calculate a checksum using the iterator
         let checksum: u64 = reader

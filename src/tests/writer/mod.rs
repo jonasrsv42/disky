@@ -20,6 +20,7 @@ pub mod chunk_size_tests;
 pub mod conformance;
 pub mod conformance_append;
 pub mod conformance_edge_cases;
+pub mod empty_records_test;
 
 use std::io::Cursor;
 

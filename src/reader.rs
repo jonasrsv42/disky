@@ -396,7 +396,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         Err(e) => {
                             // Error parsing the signature, we don't try to recover from this.
                             self.state = ReaderState::Corrupted;
-                            return Err(e);
+                            return Err(DiskyError::Other(format!("Error parsing signature: {:?}", e)));
                         }
                     }
                 }
@@ -539,10 +539,35 @@ impl<Source: Read + Seek> Iterator for RecordReader<Source> {
     type Item = Result<Bytes>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // Check if we're in a terminal state that can't produce more records
+        let should_stop = match &self.state {
+            // Terminal states that should stop iteration
+            ReaderState::Corrupted | 
+            ReaderState::InvalidState(_) | 
+            ReaderState::EOF | 
+            ReaderState::BlockCorruption(_) | 
+            ReaderState::ChunkCorruption(_, _) => true,
+            
+            // States that can still produce records
+            ReaderState::Ready | 
+            ReaderState::ReadingInitialBlocks |
+            ReaderState::ReadingSubsequentBlocks |
+            ReaderState::ExpectingSignature(_) |
+            ReaderState::ParsingChunks(_) => false,
+        };
+        
+        if should_stop {
+            return None;
+        }
+
+        // Continue with normal iteration
         match self.next_record() {
             Ok(DiskyPiece::Record(bytes)) => Some(Ok(bytes)),
             Ok(DiskyPiece::EOF) => None,
-            Err(e) => Some(Err(e)),
+            Err(e) => {
+                // Return the error once, but next call will see we're in an error state and return None
+                Some(Err(e))
+            }
         }
     }
 }

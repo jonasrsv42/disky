@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Tests for the Disky format reader implementation
+//! Integration tests for the Disky library.
+//! 
+//! These tests verify the functionality of the library from an external perspective,
+//! treating it as a black box.
 
-mod basic_reading_tests;
-mod configuration_tests;
-mod corruption_handling_tests;
-mod iterator_tests;  // Add new module for testing Iterator implementation
-mod edge_case_tests; // Add new module for additional edge cases
+// Import test modules
+//pub mod integration;

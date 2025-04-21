@@ -467,23 +467,20 @@ impl<Source: Read + Seek> RecordReader<Source> {
                             chunk_err @ (DiskyError::ChunkDataHashMismatch
                             | DiskyError::UnsupportedChunkType(_)
                             | DiskyError::UnsupportedCompressionType(_)
-                            | DiskyError::UnexpectedEndOfChunk(_)) => {
+                            | DiskyError::UnexpectedEndOfChunk(_)
+                            | DiskyError::VarintParseError(_)) => {
                                 warn!("Attempting to recover from chunk corruption: {}", chunk_err);
                                 // Try to recover by skipping the chunk.
                                 parser.skip_chunk();
                                 info!("Skipped corrupted chunk, continuing with next chunk");
                                 self.state = ReaderState::ParsingChunks(parser);
                             }
-                            chunks_err @ (DiskyError::MissingChunkData(_)
-                            | DiskyError::ChunkHeaderHashMismatch
-                            | DiskyError::UnknownChunkType(_)
-                            | DiskyError::UnexpectedEndOfChunkHeader(_)) => {
-                                info!("Skipped entire in memory blocks, continuing to read new blocks: {}", chunks_err);
+                            other_err => {
+                                info!(
+                                    "Skipping chunks, continuing to read new blocks: {}",
+                                    other_err
+                                );
                                 self.state = ReaderState::ReadingSubsequentBlocks;
-                            }
-                            others => {
-                                error!("Unrecoverable: {}", others);
-                                self.state = ReaderState::Corrupted;
                             }
                         }
                     } else {

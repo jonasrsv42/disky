@@ -175,25 +175,31 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
 
     /// Writes the Riegeli file signature.
     fn write_file_signature(&mut self) -> Result<()> {
-        if self.state != WriterState::New {
-            return Err(DiskyError::Other(
-                "File signature has already been written".to_string(),
-            ));
+        match self.state {
+            WriterState::New => {
+                // Create a signature writer
+                let mut signature_writer = SignatureWriter::new();
+
+                // Serialize the signature header
+                let signature = signature_writer.serialize_chunk()?;
+
+                // Write the signature through the block writer
+                self.block_writer.write_chunk(signature)?;
+
+                // Update state
+                self.state = WriterState::SignatureWritten;
+
+                Ok(())
+            }
+            WriterState::SignatureWritten
+            | WriterState::RecordsWritten
+            | WriterState::Flushed
+            | WriterState::Closed => {
+                return Err(DiskyError::Other(
+                    "File signature has already been written".to_string(),
+                ));
+            }
         }
-
-        // Create a signature writer
-        let mut signature_writer = SignatureWriter::new();
-
-        // Serialize the signature header
-        let signature = signature_writer.serialize_chunk()?;
-
-        // Write the signature through the block writer
-        self.block_writer.write_chunk(signature)?;
-
-        // Update state
-        self.state = WriterState::SignatureWritten;
-
-        Ok(())
     }
 
     /// Writes a record to the Riegeli file.
@@ -213,24 +219,25 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
             return Err(DiskyError::WritingClosedFile);
         }
 
-        // Add the record to the chunk and get current records size
-        let record_size = self.chunk_writer.write_record(record)?;
-
-        // Check if we need to write out the chunk based on size only
-        if record_size.0 >= self.config.chunk_size_bytes {
-            self.flush_chunk()?;
-        }
-
-        // Update state based on current state
         match self.state {
-            WriterState::SignatureWritten | WriterState::Flushed => {
-                // If we just wrote the signature or just flushed, we're now in RecordsWritten state
-                self.state = WriterState::RecordsWritten;
-            }
-            _ => {}
-        }
+            WriterState::New
+            | WriterState::SignatureWritten
+            | WriterState::RecordsWritten
+            | WriterState::Flushed => {
+                // Add the record to the chunk and get current records size
+                let record_size = self.chunk_writer.write_record(record)?;
 
-        Ok(())
+                self.state = WriterState::RecordsWritten;
+
+                // Check if we need to write out the chunk based on size only
+                if record_size.0 >= self.config.chunk_size_bytes {
+                    self.flush_chunk()?;
+                }
+
+                Ok(())
+            }
+            WriterState::Closed => return Err(DiskyError::WritingClosedFile),
+        }
     }
 
     /// Flushes the current chunk to disk.
@@ -259,18 +266,18 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
     ///
     /// This is equivalent to flush_chunk followed by a flush of the underlying writer.
     pub fn flush(&mut self) -> Result<()> {
-        // If we're already closed, nothing to do
-        if self.state == WriterState::Closed {
-            return Ok(());
-        }
+        match self.state {
+            WriterState::New | WriterState::Closed => (),
+            WriterState::RecordsWritten | WriterState::SignatureWritten => {
+                self.flush_chunk()?;
+                self.block_writer.flush()?;
+            }
+            WriterState::Flushed => {
+                self.block_writer.flush()?;
+            }
+        };
 
-        // Only flush a chunk if we're in the RecordsWritten state
-        if self.state == WriterState::RecordsWritten {
-            self.flush_chunk()?;
-        }
-
-        // Then flush the underlying writer
-        self.block_writer.flush()?;
+        self.state = WriterState::Flushed;
 
         Ok(())
     }
@@ -282,14 +289,20 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
         if self.state == WriterState::Closed {
             return Ok(());
         }
+        match self.state {
+            WriterState::New
+            | WriterState::SignatureWritten
+            | WriterState::RecordsWritten
+            | WriterState::Flushed => {
+                // Flush any remaining data
+                self.flush()?;
 
-        // Flush any remaining data
-        self.flush()?;
-
-        // Update state
-        self.state = WriterState::Closed;
-
-        Ok(())
+                // Update state
+                self.state = WriterState::Closed;
+                Ok(())
+            }
+            WriterState::Closed => return Ok(()),
+        }
     }
 }
 

@@ -64,16 +64,42 @@ fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
     file
 }
 
-/// Read all records from a file
-fn read_all_records(file: &NamedTempFile) -> Vec<Vec<u8>> {
+/// Read all records from a file and return the count and total size
+fn read_all_records(file: &NamedTempFile) -> (usize, usize) {
+    let reader_file = file.reopen().unwrap();
+    let mut reader = RecordReader::new(reader_file).unwrap();
+    
+    let mut record_count = 0;
+    let mut total_size = 0;
+    
+    loop {
+        match reader.next_record().unwrap() {
+            DiskyPiece::Record(bytes) => {
+                record_count += 1;
+                total_size += bytes.len();
+            }
+            DiskyPiece::EOF => break,
+        }
+    }
+    
+    (record_count, total_size)
+}
+
+/// Read all records from a file using the iterator API
+fn read_all_records_iterator(file: &NamedTempFile) -> (usize, usize) {
     let reader_file = file.reopen().unwrap();
     let reader = RecordReader::new(reader_file).unwrap();
-
-    // Collect all records
-    reader
-        .filter_map(|result| result.ok())
-        .map(|bytes| bytes.to_vec())
-        .collect()
+    
+    let mut record_count = 0;
+    let mut total_size = 0;
+    
+    for result in reader {
+        let bytes = result.unwrap();
+        record_count += 1;
+        total_size += bytes.len();
+    }
+    
+    (record_count, total_size)
 }
 
 /// Stream process records (manual iteration)
@@ -198,6 +224,35 @@ fn bench_read_audio_dataset(c: &mut Criterion) {
     let audio_dataset_file = write_records_to_file(&audio_dataset_records);
     group.bench_function(BenchmarkId::new("audio_dataset", "2000x2MB"), |b| {
         b.iter(|| read_all_records(&audio_dataset_file))
+    });
+
+    group.finish();
+}
+
+/// Benchmark the iterator API with small records
+fn bench_read_iterator(c: &mut Criterion) {
+    let mut group = c.benchmark_group("read_records_iterator");
+    group.sample_size(10);
+
+    // Small records: 1000 records of 100 bytes each
+    let small_records = generate_test_records(1000, 100);
+    let small_file = write_records_to_file(&small_records);
+    group.bench_function(BenchmarkId::new("small", "1000×100B"), |b| {
+        b.iter(|| read_all_records_iterator(&small_file))
+    });
+
+    // Medium records: 100 records of 10 KB each
+    let medium_records = generate_test_records(100, 10_000);
+    let medium_file = write_records_to_file(&medium_records);
+    group.bench_function(BenchmarkId::new("medium", "100×10KB"), |b| {
+        b.iter(|| read_all_records_iterator(&medium_file))
+    });
+
+    // Large records: 10 records of 100 KB each
+    let large_records = generate_test_records(10, 100_000);
+    let large_file = write_records_to_file(&large_records);
+    group.bench_function(BenchmarkId::new("large", "10×100KB"), |b| {
+        b.iter(|| read_all_records_iterator(&large_file))
     });
 
     group.finish();
@@ -426,6 +481,7 @@ criterion_group!(
     bench_write_audio_dataset,
     bench_read,
     bench_read_audio_dataset,
+    bench_read_iterator,
     bench_stream_processing,
     bench_block_write_chunks,
     bench_block_read_chunks,

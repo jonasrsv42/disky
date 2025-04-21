@@ -24,6 +24,8 @@ use std::time::Duration;
 use tempfile::NamedTempFile;
 use bytes::Bytes;
 
+use disky::blocks::reader::{BlockReader, BlocksPiece};
+use disky::chunks::chunks_parser::{ChunksParser, ChunkPiece};
 use disky::reader::{DiskyPiece, RecordReader};
 use disky::writer::RecordWriter;
 
@@ -257,6 +259,167 @@ fn bench_block_write_chunks(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark the BlockReader.read_chunks method with large chunks.
+/// This helps identify if the bottleneck is in the low-level block reading process.
+fn bench_block_read_chunks(c: &mut Criterion) {
+    use disky::blocks::writer::BlockWriter;
+    
+    let mut group = c.benchmark_group("block_read_chunks");
+    group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+    group.sample_size(10);
+    
+    // Create 2MB chunk similar to audio dataset benchmark
+    let chunk_size = 2_000_000;
+    let chunk_data = Bytes::from(vec![0u8; chunk_size]);
+    
+    // Create a temporary file with 2000 chunks
+    let file = NamedTempFile::new().expect("Failed to create temp file");
+    {
+        let mut writer = BlockWriter::new(file.reopen().unwrap()).unwrap();
+        
+        // Write 2000 chunks directly to simulate audio dataset workload
+        for _ in 0..2000 {
+            writer.write_chunk(chunk_data.clone()).unwrap();
+        }
+        
+        writer.flush().unwrap();
+    }
+    
+    // Read chunks directly through BlockReader
+    group.bench_function(BenchmarkId::new("large_chunks", "2000×2MB"), |b| {
+        b.iter(|| {
+            // Open a fresh reader for each iteration
+            let mut reader = BlockReader::new(file.reopen().unwrap()).unwrap();
+            
+            // Read all chunks
+            let mut chunk_count = 0;
+            let mut total_size = 0;
+            
+            loop {
+                match reader.read_chunks().unwrap() {
+                    BlocksPiece::Chunks(data) => {
+                        chunk_count += 1;
+                        total_size += data.len();
+                    }
+                    BlocksPiece::EOF => break,
+                }
+            }
+            
+            (chunk_count, total_size)
+        })
+    });
+    
+    group.finish();
+}
+
+/// Benchmark the ChunksParser processing.
+/// This helps identify if the bottleneck is in the chunk parsing process.
+fn bench_chunks_parser(c: &mut Criterion) {
+    let mut group = c.benchmark_group("chunks_parser");
+    group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+    group.sample_size(10);
+    
+    // Create a temporary file with the audio dataset
+    let audio_records = generate_test_records(2000, 2000_000);
+    let audio_file = write_records_to_file(&audio_records);
+    
+    // First, read all chunks with BlockReader to collect them
+    let mut chunks_data = Vec::new();
+    {
+        let mut reader = BlockReader::new(audio_file.reopen().unwrap()).unwrap();
+        
+        loop {
+            match reader.read_chunks().unwrap() {
+                BlocksPiece::Chunks(data) => {
+                    chunks_data.push(data);
+                },
+                BlocksPiece::EOF => break,
+            }
+        }
+    }
+    
+    // Now benchmark just the ChunksParser on the collected chunks
+    group.bench_function(BenchmarkId::new("parse_chunks", "2000×2MB"), |b| {
+        b.iter(|| {
+            let mut record_count = 0;
+            let mut total_size = 0;
+            
+            // Process each chunk with ChunksParser
+            for chunk_data in &chunks_data {
+                let mut parser = ChunksParser::new(chunk_data.clone());
+                
+                // Parse all pieces in this chunk
+                loop {
+                    match parser.next() {
+                        Ok(ChunkPiece::Record(data)) => {
+                            record_count += 1;
+                            total_size += data.len();
+                        },
+                        Ok(ChunkPiece::ChunksEnd) => break,
+                        Ok(_) => {}, // Ignore other piece types
+                        Err(_) => break, // Stop on error
+                    }
+                }
+            }
+            
+            (record_count, total_size)
+        })
+    });
+    
+    group.finish();
+}
+
+/// Benchmark the combined BlockReader + ChunksParser processing.
+/// This helps identify if the bottleneck is in the state transitions and combined overhead.
+fn bench_block_reader_and_chunks_parser(c: &mut Criterion) {
+    let mut group = c.benchmark_group("block_reader_and_chunks_parser");
+    group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+    group.sample_size(10);
+    
+    // Create a temporary file with the audio dataset
+    let audio_records = generate_test_records(2000, 2000_000);
+    let audio_file = write_records_to_file(&audio_records);
+    
+    // Benchmark the combination of BlockReader and ChunksParser directly
+    group.bench_function(BenchmarkId::new("combined", "2000×2MB"), |b| {
+        b.iter(|| {
+            // Fresh reader for each iteration
+            let mut reader = BlockReader::new(audio_file.reopen().unwrap()).unwrap();
+            
+            let mut record_count = 0;
+            let mut total_size = 0;
+            
+            // Process all chunks from the file
+            loop {
+                match reader.read_chunks().unwrap() {
+                    BlocksPiece::Chunks(chunk_data) => {
+                        // Parse this chunk with ChunksParser
+                        let mut parser = ChunksParser::new(chunk_data);
+                        
+                        // Process all pieces in this chunk
+                        loop {
+                            match parser.next() {
+                                Ok(ChunkPiece::Record(data)) => {
+                                    record_count += 1;
+                                    total_size += data.len();
+                                },
+                                Ok(ChunkPiece::ChunksEnd) => break,
+                                Ok(_) => {}, // Ignore other piece types
+                                Err(_) => break, // Stop on error
+                            }
+                        }
+                    },
+                    BlocksPiece::EOF => break,
+                }
+            }
+            
+            (record_count, total_size)
+        })
+    });
+    
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_write,
@@ -264,7 +427,10 @@ criterion_group!(
     bench_read,
     bench_read_audio_dataset,
     bench_stream_processing,
-    bench_block_write_chunks
+    bench_block_write_chunks,
+    bench_block_read_chunks,
+    bench_chunks_parser,
+    bench_block_reader_and_chunks_parser
 );
 criterion_main!(benches);
 

@@ -22,6 +22,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 use tempfile::NamedTempFile;
+use bytes::Bytes;
 
 use disky::reader::{DiskyPiece, RecordReader};
 use disky::writer::RecordWriter;
@@ -223,13 +224,47 @@ fn bench_stream_processing(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark just the BlockWriter.write_chunk method with large chunks.
+/// This helps identify if the bottleneck is in the block writing process
+/// rather than the higher-level record writing logic.
+fn bench_block_write_chunks(c: &mut Criterion) {
+    use disky::blocks::writer::BlockWriter;
+    
+    let mut group = c.benchmark_group("block_write_chunks");
+    group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+    group.sample_size(10);
+    
+    // Create 2MB chunk similar to audio dataset benchmark
+    let chunk_size = 2_000_000;
+    let chunk_data = Bytes::from(vec![0u8; chunk_size]);
+    
+    // Write 2000 chunks directly through BlockWriter
+    group.bench_function(BenchmarkId::new("large_chunks", "2000×2MB"), |b| {
+        b.iter(|| {
+            // Use a temporary file to match other benchmarks
+            let file = NamedTempFile::new().expect("Failed to create temp file");
+            let mut writer = BlockWriter::new(file.reopen().unwrap()).unwrap();
+            
+            // Write 2000 chunks directly to simulate audio dataset workload
+            for _ in 0..2000 {
+                writer.write_chunk(chunk_data.clone()).unwrap();
+            }
+            
+            writer.flush().unwrap()
+        })
+    });
+    
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_write,
     bench_write_audio_dataset,
     bench_read,
     bench_read_audio_dataset,
-    bench_stream_processing
+    bench_stream_processing,
+    bench_block_write_chunks
 );
 criterion_main!(benches);
 

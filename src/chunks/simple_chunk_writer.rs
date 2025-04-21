@@ -18,7 +18,7 @@
 //! according to the Riegeli file format specification.
 
 use crate::chunks::{ChunkWriter, RecordsSize};
-use crate::chunks::header::{ChunkHeader, ChunkType};
+use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
 use crate::chunks::header_writer::write_chunk_header;
 use crate::compression::core::CompressionType;
 use crate::error::Result;
@@ -48,6 +48,9 @@ pub struct SimpleChunkWriter {
 
     // Number of records inside this chunk.
     num_records: u64,
+    
+    // Reusable buffer for serialized chunks to reduce allocations
+    serialized_chunk: BytesMut,
 }
 
 impl ChunkWriter for SimpleChunkWriter {
@@ -63,71 +66,90 @@ impl ChunkWriter for SimpleChunkWriter {
     /// - compressed_sizes (compressed_sizes_size bytes) - compressed buffer with record sizes
     /// - compressed_values (the rest of data) - compressed buffer with record values
     fn serialize_chunk(&mut self) -> Result<Bytes> {
-        // First, prepare the chunk data (without the header)
-        let mut chunk_data = BytesMut::new();
-
-        // Reserve space for:
-        // 1. one byte for `compression_type`.
-        // 2. varint for size of record sizes.
-        // 3. number of bytes needed for record sizes.
-        // 4. Number of bytes needed for records.
-        chunk_data.reserve(1 + 9 + self.sizes.len() + self.records.len());
-
-        // Write compression type
-        chunk_data.put_u8(self.compression_type.as_byte());
-
+        // Clear our reusable buffer to start fresh
+        self.serialized_chunk.clear();
+        
+        // Leave space for the header which we'll fill in later
+        // according to the Riegeli format (40 bytes)
+        self.serialized_chunk.extend_from_slice(&[0; CHUNK_HEADER_SIZE as usize]);
+        
+        // Start of chunk data position
+        let data_start = CHUNK_HEADER_SIZE as usize;
+        
+        // Write compression type (1 byte)
+        self.serialized_chunk.put_u8(self.compression_type.as_byte());
+        
         // Write size of the sizes array as varint
         // For CompressionType::None we don't need a decompressed size prefix
-        varint::write_vu64(self.sizes.len() as u64, &mut chunk_data);
-
+        varint::write_vu64(self.sizes.len() as u64, &mut self.serialized_chunk);
+        
         // Write the record sizes
-        chunk_data.extend_from_slice(&self.sizes);
-
+        self.serialized_chunk.extend_from_slice(&self.sizes);
+        
         // Write the record values
         // For CompressionType::None we don't need a decompressed size prefix
-        chunk_data.extend_from_slice(&self.records);
-
-        // Freeze the chunk data
-        let chunk_data = chunk_data.freeze();
+        self.serialized_chunk.extend_from_slice(&self.records);
         
-        // Calculate the hash of the chunk data
-        let data_hash = highway_hash(&chunk_data);
+        // Calculate the hash of just the chunk data portion (excluding header)
+        let data_size = self.serialized_chunk.len() - data_start;
+        let data_hash = highway_hash(&self.serialized_chunk[data_start..]);
         
         // Create the chunk header
         let header = ChunkHeader::new(
-            chunk_data.len() as u64,        // data_size - size of the entire chunk data
-            data_hash,                      // data_hash - hash of chunk data
-            ChunkType::SimpleRecords,       // chunk_type - 'r' for simple records
-            self.num_records,               // num_records - number of records in the chunk
-            self.records.len() as u64,      // decoded_data_size - sum of all record sizes (uncompressed)
+            data_size as u64,              // data_size - size of the chunk data
+            data_hash,                     // data_hash - hash of chunk data 
+            ChunkType::SimpleRecords,      // chunk_type - 'r' for simple records
+            self.num_records,              // num_records - number of records in the chunk
+            self.records.len() as u64,     // decoded_data_size - sum of all record sizes (uncompressed)
         );
-        let header_bytes = write_chunk_header(&header)?;
         
-        // Combine the header and data into the final chunk
-        let mut final_chunk = BytesMut::with_capacity(header_bytes.len() + chunk_data.len());
-        final_chunk.extend_from_slice(&header_bytes);
-        final_chunk.extend_from_slice(&chunk_data);
+        // Write the header into the reserved space at the beginning of the buffer
+        let header_bytes = write_chunk_header(&header)?;
+        self.serialized_chunk[0..CHUNK_HEADER_SIZE as usize].copy_from_slice(&header_bytes);
         
         // Reset state for next chunk
         self.records.clear();
         self.sizes.clear();
         self.num_records = 0;
-
-        // Return the complete chunk
-        Ok(final_chunk.freeze())
+        
+        // Clone and freeze the buffer - this creates a reference-counted view
+        // The clone is efficient as it only clones the BytesMut structure, not the underlying data
+        Ok(self.serialized_chunk.clone().freeze())
     }
 }
 
 impl SimpleChunkWriter {
     /// Creates a new SimpleChunkWriter with the specified compression type.
+    ///
+    /// # Arguments
+    ///
+    /// * `compression_type` - The compression type to use
     pub fn new(compression_type: CompressionType) -> Self {
-        // Pre-allocate with reasonable capacity for records and sizes
+        Self::with_chunk_size(compression_type, 1024 * 1024) // Default to 1MB chunks
+    }
+    
+    /// Creates a new SimpleChunkWriter with the specified compression type and expected chunk size.
+    ///
+    /// This allows for better memory pre-allocation based on the expected data size.
+    ///
+    /// # Arguments
+    ///
+    /// * `compression_type` - The compression type to use
+    /// * `chunk_size_bytes` - Expected size of chunks in bytes, used for pre-allocation
+    pub fn with_chunk_size(compression_type: CompressionType, chunk_size_bytes: usize) -> Self {
+        // Pre-allocate with capacity based on expected chunk size
         // This avoids frequent reallocations for typical use cases
+        let records_capacity = chunk_size_bytes;
+        let sizes_capacity = 1024; // Approximate size needed for varints
+        
         SimpleChunkWriter {
             compression_type,
-            records: BytesMut::with_capacity(1024 * 1024), // Start with 1MB capacity
-            sizes: BytesMut::with_capacity(1024), // Enough for hundreds of varint-encoded sizes
+            records: BytesMut::with_capacity(records_capacity),
+            sizes: BytesMut::with_capacity(sizes_capacity),
             num_records: 0,
+            // Pre-allocate for serialized chunks - header + data
+            serialized_chunk: BytesMut::with_capacity(
+                CHUNK_HEADER_SIZE as usize + chunk_size_bytes + sizes_capacity),
         }
     }
     

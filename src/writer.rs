@@ -124,9 +124,15 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
     pub fn with_config(sink: Sink, config: RecordWriterConfig) -> Result<Self> {
         let block_writer = BlockWriter::with_config(sink, config.block_config.clone())?;
         
+        // Create a chunk writer with the appropriate chunk size pre-allocation
+        let chunk_writer = SimpleChunkWriter::with_chunk_size(
+            config.compression_type,
+            config.chunk_size_bytes as usize
+        );
+        
         let mut writer = Self {
             block_writer,
-            chunk_writer: SimpleChunkWriter::new(config.compression_type),
+            chunk_writer,
             config,
             state: WriterState::New,
         };
@@ -152,9 +158,15 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
             config.block_config.clone()
         )?;
         
+        // Create a chunk writer with the appropriate chunk size pre-allocation
+        let chunk_writer = SimpleChunkWriter::with_chunk_size(
+            config.compression_type,
+            config.chunk_size_bytes as usize
+        );
+        
         Ok(Self {
             block_writer,
-            chunk_writer: SimpleChunkWriter::new(config.compression_type),
+            chunk_writer,
             config,
             state: WriterState::SignatureWritten,
         })

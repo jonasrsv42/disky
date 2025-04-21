@@ -242,8 +242,8 @@ fn test_skip_chunk_after_error() {
     let result = parser.next();
     assert!(result.is_err());
 
-    // Refresh the parser state
-    parser.skip_chunk();
+    // Refresh the parser state - ignore error since the test expects it to succeed
+    let _ = parser.skip_chunk().expect("skip_chunk should succeed for UnsupportedChunkType");
 
     // Try to parse the next chunk (should succeed with SimpleChunkStart)
     match parser.next().unwrap() {
@@ -291,11 +291,111 @@ fn test_corrupted_chunk_data() {
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
-            DiskyError::MissingChunkData(_) => {
-                // Expected error
+            DiskyError::MissingChunkData(msg) => {
+                // Verify error message contains useful information
+                assert!(msg.contains("expected"), 
+                    "Error message should explain what was expected: {}", msg);
+                assert!(msg.contains("got"), 
+                    "Error message should mention what was actually found: {}", msg);
+                assert!(msg.contains("bytes"), 
+                    "Error message should mention byte counts: {}", msg);
             }
             _ => panic!("Expected MissingChunkData error, got: {:?}", err),
         }
+    }
+    
+    // After a header error, skip_chunk should fail
+    let skip_result = parser.skip_chunk();
+    assert!(skip_result.is_err(), "Expected skip_chunk to fail after header parsing error");
+    
+    // Verify skip_chunk error message explains why skipping isn't possible
+    if let Err(err) = skip_result {
+        let err_str = format!("{}", err);
+        assert!(err_str.contains("Cannot skip chunk"), 
+            "Error message should indicate skipping is not possible: {}", err_str);
+        assert!(err_str.contains("cannot determine next chunk position"), 
+            "Error message should explain why skipping isn't possible: {}", err_str);
+        assert!(err_str.contains("corruption"), 
+            "Error message should mention corruption: {}", err_str);
+    }
+    
+    // Trying to call next() again should also return a similar error
+    let next_result = parser.next();
+    assert!(next_result.is_err(), "Expected next() to fail in CorruptChunk state");
+    
+    // Verify the next() error message is consistent
+    if let Err(err) = next_result {
+        let err_str = format!("{}", err);
+        assert!(err_str.contains("Cannot advance"), 
+            "Error message should indicate we cannot advance: {}", err_str);
+        assert!(err_str.contains("corrupted"), 
+            "Error message should mention corruption: {}", err_str);
+    }
+}
+
+#[test]
+fn test_corrupted_header_prevents_infinite_loop() {
+    // Create corrupted data where the header itself is invalid
+    let mut corrupted_bytes = BytesMut::with_capacity(20);
+    
+    // Add 20 bytes of junk data that won't parse as a valid header
+    for i in 0..20 {
+        corrupted_bytes.put_u8(i as u8);
+    }
+    let corrupted_data = corrupted_bytes.freeze();
+    
+    // Create a parser with the corrupted data
+    let mut parser = ChunksParser::new(corrupted_data);
+    
+    // First next() call should fail with header parsing error
+    let result = parser.next();
+    assert!(result.is_err(), "Expected error parsing corrupted header");
+    
+    // Verify error message contains information about corruption
+    if let Err(err) = result {
+        let err_str = format!("{}", err);
+        assert!(err_str.contains("Unexpected") || err_str.contains("Unable"), 
+            "Error message should indicate invalid data: {}", err_str);
+    }
+    
+    // Second next() call should return the same error but in the CorruptChunk state
+    let second_result = parser.next();
+    assert!(second_result.is_err(), "Expected error on second next() call");
+    
+    // Verify second error message indicates we can't advance
+    if let Err(err) = second_result {
+        let err_str = format!("{}", err);
+        assert!(err_str.contains("Cannot advance"), 
+            "Error message should indicate we cannot advance: {}", err_str);
+        assert!(err_str.contains("corrupted"), 
+            "Error message should mention corruption: {}", err_str);
+        assert!(err_str.contains("position of next chunk cannot be determined"), 
+            "Error message should explain why we can't advance: {}", err_str);
+    }
+    
+    // skip_chunk() should also fail with a clear error
+    let skip_result = parser.skip_chunk();
+    assert!(skip_result.is_err(), "Expected skip_chunk to fail after header parsing error");
+    
+    // Verify skip_chunk error message explains why skipping isn't possible
+    if let Err(err) = skip_result {
+        let err_str = format!("{}", err);
+        assert!(err_str.contains("Cannot skip chunk"), 
+            "Error message should indicate skipping is not possible: {}", err_str);
+        assert!(err_str.contains("cannot determine next chunk position"), 
+            "Error message should explain why skipping isn't possible: {}", err_str);
+    }
+    
+    // We should never be able to proceed with parsing
+    // This ensures we can't get into an infinite loop
+    let third_result = parser.next();
+    assert!(third_result.is_err(), "Expected error on third next() call even after skip_chunk");
+    
+    // Verify third error is still consistent
+    if let Err(err) = third_result {
+        let err_str = format!("{}", err);
+        assert!(err_str.contains("Cannot advance"), 
+            "Error message should indicate we cannot advance: {}", err_str);
     }
 }
 
@@ -647,7 +747,7 @@ fn test_recovery_during_simple_chunk_parsing() {
     );
 
     // Refresh the parser to recover
-    parser.skip_chunk();
+    parser.skip_chunk().unwrap();
 
     // Should be able to continue with next (signature) chunk
     match parser.next().unwrap() {

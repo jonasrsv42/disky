@@ -110,6 +110,10 @@ pub enum ChunkPiece {
 enum State {
     /// Ready to parse a new chunk - initial state or after completing a chunk
     Fresh,
+    
+    /// Failed while reading a chunk's header or validating chunk data - contains the error message
+    /// In this state, we cannot determine where the next chunk begins, making skipping impossible
+    CorruptChunk(String),
 
     /// In the process of parsing a simple chunk - contains the SimpleChunkParser
     SimpleChunk(SimpleChunkParser),
@@ -173,6 +177,11 @@ impl ChunksParser {
     /// After calling skip_chunk(), the next call to next() will attempt to parse
     /// the next chunk in the buffer, skipping any problematic chunk.
     ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the chunk was successfully skipped
+    /// * `Err(DiskyError)` - If skipping is not possible (e.g., during header reading)
+    ///
     /// # Example
     ///
     /// ```
@@ -184,15 +193,33 @@ impl ChunksParser {
     /// let mut parser = ChunksParser::new(chunk_data);
     ///
     /// // If an error occurs during parsing
-    /// if let Err(_) = parser.next() {
+    /// if let Err(err) = parser.next() {
     ///     // Refresh state to skip the problematic chunk
-    ///     parser.skip_chunk();
+    ///     if let Err(skip_err) = parser.skip_chunk() {
+    ///         // Cannot skip chunk, handle this case
+    ///         println!("Cannot skip chunk: {}", skip_err);
+    ///     }
     ///     // Continue parsing with the next chunk
     /// }
     /// # }
     /// ```
-    pub fn skip_chunk(&mut self) {
-        self.state = State::Fresh;
+    pub fn skip_chunk(&mut self) -> Result<()> {
+        match &self.state {
+            State::Fresh | State::SimpleChunk(_) => {
+                self.state = State::Fresh;
+                Ok(())
+            },
+            State::CorruptChunk(err_msg) => {
+                Err(DiskyError::Other(
+                    format!("Cannot skip chunk: cannot determine next chunk position due to corruption: {}", err_msg)
+                ))
+            },
+            State::Finish => {
+                Err(DiskyError::Other(
+                    "Cannot skip chunk: parser has finished".to_string()
+                ))
+            }
+        }
     }
 
     /// Parses the next chunk in the buffer
@@ -218,19 +245,35 @@ impl ChunksParser {
         }
 
         // Parse the chunk header
-        let header = parse_chunk_header(&mut self.buffer)?;
+        let header = match parse_chunk_header(&mut self.buffer) {
+            Ok(header) => header,
+            Err(err) => {
+                // If we can't parse the header, store the error message and return it
+                // When in this state, we don't know how to advance to the next chunk
+                self.state = State::CorruptChunk(err.to_string());
+                return Err(err);
+            }
+        };
 
         // Make sure we have the full chunk data
         if self.buffer.len() < header.data_size as usize {
-            return Err(DiskyError::MissingChunkData(format!(
+            let err = DiskyError::MissingChunkData(format!(
                 "Chunk data is smaller than expected: expected {} bytes, got {} bytes",
                 header.data_size,
                 self.buffer.remaining()
-            )));
+            ));
+            // We can't proceed because we don't have enough data, and we can't
+            // determine where the next chunk starts
+            self.state = State::CorruptChunk(err.to_string());
+            return Err(err);
         }
 
         // Split out the current chunk and advance buffer to the next chunk.
         let buffer_view = self.buffer.split_to(header.data_size as usize);
+        
+        // After split_to, we've advanced the buffer, so we can set state to Fresh
+        // This ensures we can skip to the next chunk if there's an error later
+        self.state = State::Fresh;
 
         // Parse the chunk based on its type
         match header.chunk_type {
@@ -310,6 +353,13 @@ impl ChunksParser {
                     self.state = State::Fresh;
                     Ok(ChunkPiece::SimpleChunkEnd)
                 }
+            },
+            State::CorruptChunk(err_msg) => {
+                // Return the same error again to prevent any attempt to continue parsing
+                Err(DiskyError::Other(format!(
+                    "Cannot advance: chunk is corrupted and position of next chunk cannot be determined: {}",
+                    err_msg
+                )))
             },
             State::Finish => Err(DiskyError::Other(
                 "Cannot advance on a finished ChunksParser.".to_string(),

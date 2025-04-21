@@ -463,22 +463,20 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 ReaderState::ChunkCorruption(error, mut parser) => {
                     // Error during parsing
                     if self.config.corruption_strategy == CorruptionStrategy::Recover {
-                        match error {
-                            chunk_err @ (DiskyError::ChunkDataHashMismatch
-                            | DiskyError::UnsupportedChunkType(_)
-                            | DiskyError::UnsupportedCompressionType(_)
-                            | DiskyError::UnexpectedEndOfChunk(_)
-                            | DiskyError::VarintParseError(_)) => {
-                                warn!("Attempting to recover from chunk corruption: {}", chunk_err);
-                                // Try to recover by skipping the chunk.
-                                parser.skip_chunk();
+                        warn!("Attempting to recover from chunk corruption: {}", error);
+                        
+                        // Try to recover by skipping the chunk
+                        match parser.skip_chunk() {
+                            Ok(_) => {
+                                // Successfully skipped the chunk
                                 info!("Skipped corrupted chunk, continuing with next chunk");
                                 self.state = ReaderState::ParsingChunks(parser);
                             }
-                            other_err => {
+                            Err(skip_err) => {
+                                // Cannot skip the chunk (likely due to header corruption)
                                 info!(
-                                    "Skipping chunks, continuing to read new blocks: {}",
-                                    other_err
+                                    "Cannot skip corrupted chunk, continuing to read new blocks: {}",
+                                    skip_err
                                 );
                                 self.state = ReaderState::ReadingSubsequentBlocks;
                             }

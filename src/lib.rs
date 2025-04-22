@@ -27,6 +27,10 @@ pub mod reader;
 pub(crate) mod varint;
 pub mod writer;
 
+// Conditionally include parallel module behind the 'parallel' feature flag
+#[cfg(feature = "parallel")]
+pub mod parallel;
+
 #[cfg(test)]
 mod tests;
 

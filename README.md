@@ -2,12 +2,6 @@
 
 Disky is a Rust implementation of the [Riegeli file format](https://github.com/google/riegeli). Riegeli is a file format for storing records, where a record is conceptually a binary string, typically a serialized protocol buffer message.
 
-## Features
-
-- Read and write Riegeli files
-- Simple record encoding/decoding
-- Position tracking for records
-- Support for seeking to specific records
 
 ## Basic Example
 
@@ -36,15 +30,6 @@ while let Ok(record) = reader.read_record() {
 }
 ```
 
-## Current Status
-
-This is a basic implementation with the following limitations:
-
-- Only supports uncompressed records for now
-- Limited error recovery
-- No support for transposed records
-- No proto message handling (though you can manually serialize them)
-
 ## Testing and Benchmarking
 
 The library includes comprehensive test suites:
@@ -65,14 +50,6 @@ cargo test --test '*'
 # Run benchmarks (using Criterion, works on stable Rust)
 cargo bench
 ```
-
-## Future Work
-
-- Add compression support (Brotli, Zstd, Snappy)
-- Implement transposed record format for better proto compression
-- Add better error recovery
-- Add proto message integration
-- Improve performance with vectorized operations
 
 ## License
 

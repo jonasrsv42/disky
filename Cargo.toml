@@ -6,6 +6,10 @@ description = "A Rust implementation of the Riegeli file format"
 authors = ["Jonas Valfridsson jonasrsv42@gmail.com"]
 license = "Apache-2.0"
 
+[features]
+# Parallel implementation using multiple threads for improved performance
+parallel = []
+
 [dependencies]
 thiserror = "1.0.60"
 bytes = "1.6.0"

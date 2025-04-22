@@ -196,9 +196,6 @@ pub struct BlockReader<Source: Read + Seek> {
 
     /// Buffer for storing chunk data that has been read.
     buffer: BytesMut,
-    
-    /// Reusable read buffer to avoid repeated allocations
-    read_buf: Vec<u8>,
 
     /// State of the reader
     state: BlockReaderState,
@@ -216,17 +213,14 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         let position = source.position();
 
-        // Pre-allocate read buffer with capacity matching the block size
-        // Initialize it with zeros to allow for safe slicing operations
-        let initial_read_buf_capacity = config.block_size as usize;
-        let read_buf = vec![0u8; initial_read_buf_capacity];
+        // Create a BytesMut with some initial capacity
+        let buffer = BytesMut::with_capacity(config.block_size as usize);
 
         Ok(Self {
             source,
             config,
             chunk_begin: position,
-            buffer: BytesMut::new(),
-            read_buf,
+            buffer,
             state: BlockReaderState::Fresh,
         })
     }
@@ -334,12 +328,28 @@ impl<Source: Read + Seek> BlockReader<Source> {
             return Ok(0);
         }
 
-        // Use our pre-allocated buffer to read directly into a slice of the appropriate size
-        let bytes_read = self.source.read(&mut self.read_buf[..to_read])?;
-
-        if bytes_read > 0 {
-            // Add to our chunk buffer - position is automatically updated by ReadPositionTracker
-            self.buffer.extend_from_slice(&self.read_buf[..bytes_read]);
+        // Get the current length before reading
+        let old_len = self.buffer.len();
+        
+        // Check if we need more capacity
+        let remaining = self.buffer.capacity() - old_len;
+        if remaining < to_read {
+            // Only reserve additional space if needed
+            self.buffer.reserve(to_read - remaining);
+        }
+        
+        // Resize the buffer to have enough initialized space
+        self.buffer.resize(old_len + to_read, 0);
+        
+        // Create a mutable slice of the newly allocated portion
+        let mut_slice = &mut self.buffer.as_mut()[old_len..old_len + to_read];
+        
+        // Read directly into the allocated slice of BytesMut
+        let bytes_read = self.source.read(mut_slice)?;
+        
+        if bytes_read < to_read {
+            // If we read less than expected, truncate the buffer back to actual size
+            self.buffer.truncate(old_len + bytes_read);
         }
 
         Ok(bytes_read)

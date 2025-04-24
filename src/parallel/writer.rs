@@ -225,6 +225,16 @@ impl<W: Write + Seek + Send + 'static> ParallelWriter<W> {
     }
 }
 
+// Make the Clone implementation for ParallelWriter
+impl<W: Write + Seek + Send + 'static> Clone for ParallelWriter<W> {
+    fn clone(&self) -> Self {
+        Self {
+            task_queue: Arc::clone(&self.task_queue),
+            resource_queue: Arc::clone(&self.resource_queue),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,12 +290,3 @@ mod tests {
     }
 }
 
-// Make the Clone implementation for ParallelWriter
-impl<W: Write + Seek + Send + 'static> Clone for ParallelWriter<W> {
-    fn clone(&self) -> Self {
-        Self {
-            task_queue: Arc::clone(&self.task_queue),
-            resource_queue: Arc::clone(&self.resource_queue),
-        }
-    }
-}

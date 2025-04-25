@@ -45,15 +45,6 @@ impl<T> Queue<T> {
         }
     }
 
-    /// poll element from front of queue
-    pub fn poll(&self) -> Result<Option<T>> {
-        let mut buffer = self
-            .buffer
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
-        Ok(buffer.pop_front())
-    }
-
     /// read element from front of queue
     pub fn read_all(&self) -> Result<Vec<T>> {
         let mut buffer = self
@@ -71,20 +62,6 @@ impl<T> Queue<T> {
         }
 
         Ok(all)
-    }
-
-    /// wait for element from front of queue
-    pub fn wait_front(&self) -> Result<()> {
-        let mut buffer = self
-            .buffer
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
-
-        while buffer.len() == 0 {
-            buffer = self.signal.wait(buffer).unwrap();
-        }
-
-        Ok(())
     }
 
     /// return number of elements in queue
@@ -123,15 +100,6 @@ mod tests {
         queue.push_back(3.5).unwrap();
         assert_eq!(queue.read_front().unwrap(), 3.5);
         assert_eq!(queue.len().unwrap(), 0);
-    }
-
-    #[test]
-    fn test_poll() {
-        let queue = Queue::<f64>::new();
-        assert_eq!(queue.poll().unwrap(), None);
-        queue.push_back(3.5).unwrap();
-        assert_eq!(queue.poll().unwrap(), Some(3.5));
-        assert_eq!(queue.poll().unwrap(), None);
     }
 
     #[test]

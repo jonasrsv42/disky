@@ -70,6 +70,13 @@ where
             .lock()
             .map_err(|e| DiskyError::Other(format!("Failed to lock state mutex: {}", e)))?;
 
+        // Early-return on Consumed.
+        if let PromiseState::Consumed = *state {
+            return Err(DiskyError::Other(
+                "Cannot `wait` for a PromiseState::Consumed Promise.".to_string(),
+            ));
+        }
+
         // Wait until the promise is fulfilled
         while let PromiseState::Waiting = *state {
             state = self
@@ -269,6 +276,3 @@ mod tests {
         assert_eq!(successful_results, 1);
     }
 }
-
-
-

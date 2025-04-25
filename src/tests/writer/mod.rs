@@ -31,7 +31,7 @@ use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
 // Test-only implementation for RecordWriter with Cursor<Vec<u8>>
 impl RecordWriter<Cursor<Vec<u8>>> {
     // Extract the written data for testing
-    fn get_data(mut self) -> crate::error::Result<Vec<u8>> {
+    pub(crate) fn get_data(mut self) -> crate::error::Result<Vec<u8>> {
         self.flush()?;
         self.set_state(WriterState::Closed);
 

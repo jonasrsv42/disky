@@ -299,16 +299,6 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         resource.writer.write_record(data)
     }
 
-    /// Process a single task
-    ///
-    /// This method processes a given task (write, flush, or close)
-    /// and fulfills the associated promise with the result.
-    ///
-    /// # Arguments
-    /// * `task` - The Task to process
-    ///
-    /// # Returns
-    /// A Result indicating success or failure of the task processing
     pub fn process_task(&self, task: Task) -> Result<()> {
         match task {
             Task::Write { data, completion } => {

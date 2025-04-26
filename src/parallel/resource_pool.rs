@@ -1,25 +1,3 @@
-//! Thread-safe resource queue with state management
-//!
-//! This module provides a thread-safe resource queue implementation with support
-//! for tracking active resources, pausing/resuming operations, and safely
-//! processing resources using the visitor pattern.
-//!
-//! # Visitor Pattern
-//!
-//! The `ResourcePool` uses the visitor pattern via its `process_resource` method
-//! to ensure proper resource management. This approach has several advantages:
-//!
-//! - **Resource Safety**: Resources are automatically returned to the queue after
-//!   processing, preventing leaks even if errors occur
-//!
-//! - **Deadlock Prevention**: The resource lifecycle is managed within an atomic
-//!   operation, significantly reducing the risk of deadlocks
-//!
-//! - **State Management**: The queue can safely handle state transitions with
-//!   proper resource tracking
-//!
-//! - **Simplified API**: Clients don't need to manually check out and return
-//!   resources, reducing the risk of programmer error
 
 use crate::error::{DiskyError, Result};
 use std::collections::VecDeque;
@@ -27,7 +5,6 @@ use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
-/// Represents the operational state of the resource queue
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ResourcePoolState {
     /// Normal operation - resources can be checked out and returned
@@ -46,14 +23,13 @@ pub struct ResourcePool<T> {
     signal: Arc<Condvar>,
 }
 
-/// Inner state of the resource queue, protected by a mutex
 #[derive(Debug)]
 struct ResourcePoolInner<T> {
     /// Queue of available resources
     queue: VecDeque<T>,
     /// Count of resources that have been checked out
     active_count: usize,
-    /// Operational state of the queue
+    /// Operational state of the pool
     state: ResourcePoolState,
 }
 
@@ -127,7 +103,7 @@ impl<T> Drop for Resource<T> {
 }
 
 impl<T> ResourcePool<T> {
-    /// Create a new empty resource queue
+    /// Create a new empty resource pool
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(ResourcePoolInner {
@@ -139,10 +115,6 @@ impl<T> ResourcePool<T> {
         }
     }
 
-    /// Add a resource to the queue
-    ///
-    /// Resources can only be added in Normal state.
-    /// Attempting to add resources in Paused or Closed states will return an error.
     pub fn add_resource(&self, resource: T) -> Result<()> {
         let mut inner = self
             .inner
@@ -273,7 +245,7 @@ impl<T> ResourcePool<T> {
         Ok(inner)
     }
 
-    /// Set the queue to closed state
+    /// Set the pool to closed state
     ///
     /// This will prevent further checkouts and returns.
     /// Cannot close an already closed queue.

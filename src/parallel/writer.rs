@@ -586,6 +586,14 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// It's safe to use in a single thread without causing deadlocks because
     /// it uses the pause mechanism to ensure no resources are being processed.
     ///
+    /// This method first closes all writer resources, then closes the task queue.
+    /// If either operation returns an error, the error is propagated, with
+    /// resource errors taking precedence over task queue errors.
+    ///
+    /// # Returns
+    /// * `Ok(())` - If both resource pool and task queue were closed successfully
+    /// * `Err` - If an error occurred while closing either the resource pool or task queue
+    ///
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
@@ -605,13 +613,20 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// parallel_writer.close().unwrap();
     /// ```
     pub fn close(&self) -> Result<()> {
-        // TODO check first
-        let _resource_close_error = self
+        // First, try to close all writer resources
+        let resource_close_result = self
             .resource_queue
             .process_then_close(|resource| resource.writer.close());
-        let task_close_error = self.task_queue.close();
-
-        return task_close_error;
+            
+        // Then, try to close the task queue, regardless of whether the resource close succeeded
+        let task_close_result = self.task_queue.close();
+        
+        // Return the first error encountered, prioritizing resource errors over task queue errors
+        match (resource_close_result, task_close_result) {
+            (Err(e), _) => Err(e),                    // Resource error takes precedence
+            (Ok(()), Err(e)) => Err(e),               // Task queue error if no resource error
+            (Ok(()), Ok(())) => Ok(())                // Success if both operations succeeded
+        }
     }
 
     /// Check if there are any pending tasks

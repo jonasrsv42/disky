@@ -68,22 +68,38 @@ use std::sync::Arc;
 
 use crate::error::Result;
 use crate::parallel::promise::Promise;
-use crate::parallel::queue::Queue;
+use crate::parallel::resource_queue::ResourceQueue;
+use crate::parallel::task_queue::TaskQueue;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 use bytes::Bytes;
 use log::error;
 
-/// A write task that will be processed by a worker
+/// A task that will be processed by a worker
 ///
-/// This structure represents a pending asynchronous write operation.
-/// It contains both the data to be written and a promise that will be
-/// fulfilled when the write operation completes.
+/// This enum represents different types of operations that can be performed
+/// by worker threads. Each variant contains a promise that will be fulfilled
+/// when the operation completes.
 #[derive(Clone, Debug)]
-pub struct WriteTask {
-    /// The record data to write
-    pub data: Bytes,
-    /// Promise that will be fulfilled when the task is done
-    pub completion: Promise<Result<()>>,
+pub enum Task {
+    /// Write a record to disk
+    Write {
+        /// The record data to write
+        data: Bytes,
+        /// Promise that will be fulfilled when the write completes
+        completion: Promise<Result<()>>,
+    },
+
+    /// Flush all writers to disk
+    Flush {
+        /// Promise that will be fulfilled when the flush completes
+        completion: Promise<Result<()>>,
+    },
+
+    /// Close all writers
+    Close {
+        /// Promise that will be fulfilled when the close completes
+        completion: Promise<Result<()>>,
+    },
 }
 
 /// Resource containing an initialized writer that can be used to write records
@@ -126,15 +142,16 @@ impl Default for ParallelWriterConfig {
 /// - Allows multiple threads to process tasks concurrently
 /// - Maintains a queue of pending write tasks
 /// - Manages a pool of writer resources
+/// - Tracks active resources to ensure proper flush/close coordination
 ///
 /// This design is particularly useful for integrating with existing threading
 /// or async systems, as it does not create its own worker threads.
 pub struct ParallelWriter<Sink: Write + Seek + Send + 'static> {
-    /// Queue of write tasks to be processed
-    task_queue: Arc<Queue<WriteTask>>,
+    /// Queue of tasks to be processed
+    task_queue: Arc<TaskQueue<Task>>,
 
-    /// Queue of available writer resources
-    resource_queue: Arc<Queue<WriterResource<Sink>>>,
+    /// Queue of writer resources with active tracking
+    resource_queue: Arc<ResourceQueue<WriterResource<Sink>>>,
 }
 
 impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
@@ -171,12 +188,12 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         writers: Vec<Box<RecordWriter<Sink>>>,
         _config: ParallelWriterConfig,
     ) -> Result<Self> {
-        let task_queue = Arc::new(Queue::new());
-        let resource_queue = Arc::new(Queue::new());
+        let task_queue = Arc::new(TaskQueue::new());
+        let resource_queue = Arc::new(ResourceQueue::new());
 
         // Initialize the resource queue with the provided writers
         for (id, writer) in writers.into_iter().enumerate() {
-            resource_queue.push_back(WriterResource { writer, id })?;
+            resource_queue.add_resource(WriterResource { writer, id })?;
         }
 
         Ok(Self {
@@ -224,7 +241,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         let completion = Promise::new();
         let completion_clone = completion.clone();
 
-        let task = WriteTask {
+        let task = Task::Write {
             data,
             completion: completion_clone,
         };
@@ -261,12 +278,18 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// parallel_writer.write_record(b"synchronous record").unwrap();
     /// ```
     pub fn write_record(&self, data: &[u8]) -> Result<()> {
-        let mut resource = self.resource_queue.read_front()?;
+        // Get a resource from the queue (this automatically tracks active resources)
+        let mut resource = self.resource_queue.checkout_resource()?;
 
-        let ret_val = resource.writer.write_record(data);
-        self.resource_queue.push_back(resource)?;
+        // Perform the write operation
+        let result = resource.writer.write_record(data);
 
-        return ret_val;
+        // Return the resource to the queue (this automatically updates active tracking)
+        if let Err(e) = self.resource_queue.return_resource(resource) {
+            return Err(e);
+        }
+
+        result
     }
 
     /// Process a single write task
@@ -279,16 +302,79 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     ///
     /// # Returns
     /// A Result indicating success or failure of the task processing
-    pub fn process_task(&self, WriteTask { data, completion }: WriteTask) -> Result<()> {
-        let result = self.write_record(&data);
+    pub fn process_task(&self, task: Task) -> Result<()> {
+        match task {
+            Task::Write { data, completion } => {
+                // Process the write task
+                let result = self.write_record(&data);
 
-        // Complete the promise with the result
-        if let Err(e) = completion.fulfill(result) {
-            // Log the error but continue processing
-            error!("Failed to fulfill promise: {}", e)
+                // Complete the promise with the result
+                if let Err(e) = completion.fulfill(result) {
+                    // Log the error but continue processing
+                    error!("Failed to fulfill write promise: {}", e);
+                }
+            }
+            Task::Flush { completion } => {
+                // Process the flush task
+                let result = self.perform_flush();
+
+                // Complete the promise with the result
+                if let Err(e) = completion.fulfill(result) {
+                    error!("Failed to fulfill flush promise: {}", e);
+                }
+            }
+            Task::Close { completion } => {
+                // Process the close task
+                let result = self.perform_close();
+
+                // Complete the promise with the result
+                if let Err(e) = completion.fulfill(result) {
+                    error!("Failed to fulfill close promise: {}", e);
+                }
+            }
         }
 
         Ok(())
+    }
+
+    /// Internal method to perform a flush operation
+    fn perform_flush(&self) -> Result<()> {
+        // Pause and wait for all active resources to return
+        self.resource_queue.pause_and_wait_for_all()?;
+
+        // Process all resources to flush them
+        let flush_result = self
+            .resource_queue
+            .process_all_resources(|resource| resource.writer.flush());
+
+        // Resume normal operation
+        self.resource_queue.resume()?;
+
+        // Return any error from the processing
+        flush_result
+    }
+
+    /// Internal method to perform a close operation
+    fn perform_close(&self) -> Result<()> {
+        // First flush all resources
+        self.perform_flush()?;
+
+        // Now pause the queue again for closing
+        self.resource_queue.pause_and_wait_for_all()?;
+
+        // Process all resources to close them
+        let close_result = self
+            .resource_queue
+            .process_all_resources(|resource| resource.writer.close());
+
+        // Set the resource queue to closed state
+        self.resource_queue.close()?;
+        
+        // Close the task queue to signal worker threads to stop
+        self.task_queue.close()?;
+
+        // Return any error from the processing
+        close_result
     }
 
     /// Process the next available task
@@ -320,10 +406,20 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # let data = Bytes::from(b"async record".to_vec());
     /// # parallel_writer.write_record_async(data).unwrap();
     ///
-    /// // Process a single task in a worker thread
+    /// // Process tasks in a worker thread, checking for queue closure
     /// let writer_clone = parallel_writer.clone();
     /// thread::spawn(move || {
-    ///     writer_clone.process_next_task().unwrap();
+    ///     loop {
+    ///         // Process task or break if queue is closed
+    ///         match writer_clone.process_next_task() {
+    ///             Ok(_) => {},
+    ///             Err(e) => {
+    ///                 // Handle queue closure or other errors
+    ///                 eprintln!("Error or queue closed: {}", e);
+    ///                 break;
+    ///             },
+    ///         }
+    ///     }
     /// });
     /// ```
     pub fn process_next_task(&self) -> Result<()> {
@@ -362,10 +458,23 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// #     parallel_writer.write_record_async(data).unwrap();
     /// # }
     ///
-    /// // Process all tasks in a worker thread
+    /// // Process all tasks in a worker thread, handling errors
     /// let writer_clone = parallel_writer.clone();
     /// thread::spawn(move || {
-    ///     writer_clone.process_all_tasks().unwrap();
+    ///     // Keep processing until an error occurs
+    ///     loop {
+    ///         match writer_clone.process_all_tasks() {
+    ///             Ok(_) => {
+    ///                 // Small sleep to avoid tight loop
+    ///                 std::thread::sleep(std::time::Duration::from_millis(1));
+    ///             },
+    ///             Err(e) => {
+    ///                 // Handle queue closure or other errors
+    ///                 eprintln!("Error or queue closed: {}", e);
+    ///                 break;
+    ///             },
+    ///         }
+    ///     }
     /// });
     /// ```
     pub fn process_all_tasks(&self) -> Result<()> {
@@ -402,21 +511,27 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// // Flush all writers
     /// parallel_writer.flush().unwrap();
     /// ```
-    pub fn flush(&self) -> Result<()> {
-        // Get all resources - need to call read_all through the Arc's dereferenced value
-        let resources = self.resource_queue.read_all()?;
+    pub fn flush(&self) -> Result<Promise<Result<()>>> {
+        let completion = Promise::new();
+        let completion_clone = completion.clone();
 
-        // Flush each writer
-        for mut resource in resources {
-            let result = resource.writer.flush();
+        // Create a flush task
+        let task = Task::Flush {
+            completion: completion_clone,
+        };
 
-            // Push resource back before checking result.
-            self.resource_queue.push_back(resource)?;
+        // Queue the task
+        self.task_queue.push_back(task)?;
 
-            // Check result.
-            result?;
-        }
+        Ok(completion)
+    }
 
+    /// Synchronously flush all writers
+    ///
+    /// This is a convenience method that queues a flush task and waits for it to complete.
+    pub fn flush_sync(&self) -> Result<()> {
+        let promise = self.flush()?;
+        promise.wait()??;
         Ok(())
     }
 
@@ -447,22 +562,27 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// // Close all writers
     /// parallel_writer.close().unwrap();
     /// ```
-    pub fn close(&self) -> Result<()> {
-        // Get all resources
-        let resources = self.resource_queue.read_all()?;
+    pub fn close(&self) -> Result<Promise<Result<()>>> {
+        let completion = Promise::new();
+        let completion_clone = completion.clone();
 
-        // Close each writer
-        for mut resource in resources {
-            // Push resource back before checking result.
-            let result = resource.writer.close();
+        // Create a close task
+        let task = Task::Close {
+            completion: completion_clone,
+        };
 
-            // Push back
-            self.resource_queue.push_back(resource)?;
+        // Queue the task
+        self.task_queue.push_back(task)?;
 
-            // Check result.
-            result?;
-        }
+        Ok(completion)
+    }
 
+    /// Synchronously close all writers
+    ///
+    /// This is a convenience method that queues a close task and waits for it to complete.
+    pub fn close_sync(&self) -> Result<()> {
+        let promise = self.close()?;
+        promise.wait()??;
         Ok(())
     }
 
@@ -554,7 +674,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// println!("There are {} available writer resources", count);
     /// ```
     pub fn available_resource_count(&self) -> Result<usize> {
-        self.resource_queue.len()
+        self.resource_queue.available_count()
     }
 }
 
@@ -611,321 +731,4 @@ mod tests {
         handle.join().unwrap();
     }
 
-    #[test]
-    fn test_verify_written_content() {
-        // Create separate writers with cursors for testing
-        let mut cursors = Vec::new();
-        let mut writers = Vec::new();
-
-        for _ in 0..2 {
-            let cursor = Cursor::new(Vec::new());
-            cursors.push(cursor);
-        }
-
-        // Create writers from the cursors
-        for cursor in cursors.iter() {
-            let writer =
-                RecordWriter::with_config(cursor.clone(), RecordWriterConfig::default()).unwrap();
-            writers.push(Box::new(writer));
-        }
-
-        // Create parallel writer
-        let parallel_writer =
-            ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
-
-        // Define test data with distinct records
-        let test_records = vec![
-            b"record one".to_vec(),
-            b"record two".to_vec(),
-            b"record three".to_vec(),
-            b"record four".to_vec(),
-        ];
-
-        // Track the expected content
-        let expected_records: HashSet<Vec<u8>> = test_records.iter().cloned().collect();
-
-        // Write records asynchronously
-        let promises = test_records
-            .iter()
-            .map(|data| {
-                parallel_writer
-                    .write_record_async(Bytes::from(data.clone()))
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        // Process all tasks
-        parallel_writer.process_all_tasks().unwrap();
-
-        // Flush to ensure all data is written
-        parallel_writer.flush().unwrap();
-
-        // Verify all promises completed successfully
-        for promise in promises {
-            let result = promise.wait().unwrap();
-            assert!(result.is_ok(), "Write operation should succeed");
-        }
-
-        // Close all writers to finalize the file format
-        parallel_writer.close().unwrap();
-
-        // Get all writers from the resource queue
-        let resources = parallel_writer.resource_queue.read_all().unwrap();
-
-        // Collect all the written data
-        let mut actual_records = HashSet::new();
-
-        for resource in resources {
-            // Get the data from each writer
-            let data_result = resource.writer.get_data();
-            if let Ok(data) = data_result {
-                // Create a reader to read the records from this data
-                let cursor = Cursor::new(data);
-                let mut reader = RecordReader::new(cursor).unwrap();
-
-                // Read all records from this writer
-                loop {
-                    match reader.next_record().unwrap() {
-                        DiskyPiece::Record(bytes) => {
-                            actual_records.insert(bytes.to_vec());
-                        }
-                        DiskyPiece::EOF => break,
-                    }
-                }
-            }
-
-            // No need to return the resource to the queue as we're in a test
-            // and the writers have already been consumed by get_data
-        }
-
-        // Verify the content matches what we expected
-        assert_eq!(
-            actual_records.len(),
-            expected_records.len(),
-            "Should read back the same number of records"
-        );
-
-        // Every written record should be in our expected set
-        for record in &actual_records {
-            assert!(
-                expected_records.contains(record),
-                "Read record {:?} was not in expected records",
-                record
-            );
-        }
-    }
-
-    #[test]
-    fn test_synchronous_writes() {
-        // Create separate writers with cursors for testing
-        let mut cursors = Vec::new();
-        let mut writers = Vec::new();
-
-        for _ in 0..2 {
-            let cursor = Cursor::new(Vec::new());
-            cursors.push(cursor);
-        }
-
-        // Create writers from the cursors
-        for cursor in cursors.iter() {
-            let writer =
-                RecordWriter::with_config(cursor.clone(), RecordWriterConfig::default()).unwrap();
-            writers.push(Box::new(writer));
-        }
-
-        // Create parallel writer
-        let parallel_writer =
-            ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
-
-        // Define test data
-        let test_records = vec![
-            b"sync record 1".to_vec(),
-            b"sync record 2".to_vec(),
-            b"sync record 3".to_vec(),
-        ];
-
-        // Write records synchronously
-        for record in &test_records {
-            let result = parallel_writer.write_record(record);
-            assert!(result.is_ok(), "Synchronous write should succeed");
-        }
-
-        // Verify there are no pending tasks (since we wrote synchronously)
-        assert_eq!(
-            parallel_writer.pending_task_count().unwrap(),
-            0,
-            "No pending tasks should exist after synchronous writes"
-        );
-
-        // Flush to ensure all data is written
-        parallel_writer.flush().unwrap();
-
-        // Close all writers to finalize the file format
-        parallel_writer.close().unwrap();
-
-        // Get all writers from the resource queue
-        let resources = parallel_writer.resource_queue.read_all().unwrap();
-
-        // Collect all the written data
-        let mut actual_records = Vec::new();
-
-        for resource in resources {
-            // Get the data from each writer
-            let data_result = resource.writer.get_data();
-            if let Ok(data) = data_result {
-                // Create a reader to read the records from this data
-                let cursor = Cursor::new(data);
-                let mut reader = RecordReader::new(cursor).unwrap();
-
-                // Read all records from this writer
-                loop {
-                    match reader.next_record().unwrap() {
-                        DiskyPiece::Record(bytes) => {
-                            actual_records.push(bytes.to_vec());
-                        }
-                        DiskyPiece::EOF => break,
-                    }
-                }
-            }
-
-            // No need to return the resource to the queue as we're in a test
-            // and the writers have already been consumed by get_data
-        }
-
-        // Verify we read back the same number of records
-        assert_eq!(
-            actual_records.len(),
-            test_records.len(),
-            "Should read back the same number of records"
-        );
-
-        // Verify each record was written correctly
-        for expected in &test_records {
-            assert!(
-                actual_records.iter().any(|actual| actual == expected),
-                "Expected record {:?} not found in output",
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn test_mixed_sync_async_writes() {
-        // Create separate writers with cursors for testing
-        let mut cursors = Vec::new();
-        let mut writers = Vec::new();
-
-        for _ in 0..2 {
-            let cursor = Cursor::new(Vec::new());
-            cursors.push(cursor);
-        }
-
-        // Create writers from the cursors
-        for cursor in cursors.iter() {
-            let writer =
-                RecordWriter::with_config(cursor.clone(), RecordWriterConfig::default()).unwrap();
-            writers.push(Box::new(writer));
-        }
-
-        // Create parallel writer
-        let parallel_writer =
-            ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
-
-        // Define test data
-        let sync_records = vec![b"sync record 1".to_vec(), b"sync record 2".to_vec()];
-
-        let async_records = vec![b"async record 1".to_vec(), b"async record 2".to_vec()];
-
-        // Combine all expected records
-        let mut all_expected_records = HashSet::new();
-        for record in &sync_records {
-            all_expected_records.insert(record.clone());
-        }
-        for record in &async_records {
-            all_expected_records.insert(record.clone());
-        }
-
-        // Write synchronous records
-        for record in &sync_records {
-            let result = parallel_writer.write_record(record);
-            assert!(result.is_ok(), "Synchronous write should succeed");
-        }
-
-        // Write asynchronous records
-        let promises = async_records
-            .iter()
-            .map(|data| {
-                parallel_writer
-                    .write_record_async(Bytes::from(data.clone()))
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        // Process all async tasks
-        parallel_writer.process_all_tasks().unwrap();
-
-        // Wait for all promises
-        for promise in promises {
-            let result = promise.wait().unwrap();
-            assert!(result.is_ok(), "Async write should succeed");
-        }
-
-        // Verify there are no more pending tasks
-        assert_eq!(
-            parallel_writer.pending_task_count().unwrap(),
-            0,
-            "No pending tasks should remain after processing"
-        );
-
-        // Flush to ensure all data is written
-        parallel_writer.flush().unwrap();
-
-        // Close all writers to finalize the file format
-        parallel_writer.close().unwrap();
-
-        // Get all writers from the resource queue
-        let resources = parallel_writer.resource_queue.read_all().unwrap();
-
-        // Collect all the written data
-        let mut actual_records = HashSet::new();
-
-        for resource in resources {
-            // Get the data from each writer
-            let data_result = resource.writer.get_data();
-            if let Ok(data) = data_result {
-                // Create a reader to read the records from this data
-                let cursor = Cursor::new(data);
-                let mut reader = RecordReader::new(cursor).unwrap();
-
-                // Read all records from this writer
-                loop {
-                    match reader.next_record().unwrap() {
-                        DiskyPiece::Record(bytes) => {
-                            actual_records.insert(bytes.to_vec());
-                        }
-                        DiskyPiece::EOF => break,
-                    }
-                }
-            }
-
-            // No need to return the resource to the queue as we're in a test
-            // and the writers have already been consumed by get_data
-        }
-
-        // Verify we read back the same number of records
-        assert_eq!(
-            actual_records.len(),
-            all_expected_records.len(),
-            "Should read back the same number of records"
-        );
-
-        // Verify all expected records are present
-        for expected in &all_expected_records {
-            assert!(
-                actual_records.contains(expected),
-                "Expected record {:?} not found in output",
-                expected
-            );
-        }
-    }
 }

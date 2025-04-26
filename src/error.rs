@@ -113,6 +113,10 @@ pub enum DiskyError {
     #[error("Invalid reader state: {0}")]
     InvalidReaderState(String),
 
+    /// Occurs when attempting to interact with a closed queue.
+    #[error("Queue is closed: {0}")]
+    QueueClosed(String),
+    
     /// A general error occurred.
     #[error("{0}")]
     Other(String),

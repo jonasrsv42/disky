@@ -15,5 +15,6 @@ pub mod reader;
 pub mod writer;
 pub mod promise;
 
-pub(crate) mod queue;
+pub(crate) mod task_queue;
+pub(crate) mod resource_queue;
 

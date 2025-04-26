@@ -299,6 +299,22 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         resource.writer.write_record(data)
     }
 
+    /// Process a single task
+    ///
+    /// This method processes a single task of any type (Write, Flush, or Close).
+    /// The task is processed immediately using the appropriate method, and the
+    /// completion promise is fulfilled with the result.
+    ///
+    /// # Arguments
+    /// * `task` - The task to process
+    ///
+    /// # Returns
+    /// * `Ok(())` - If the task was processed successfully
+    /// * `Err` - If an error occurred during processing
+    ///
+    /// Note that even if the task itself fails (e.g., a write fails), this method
+    /// will still return Ok() since the task was processed. The error is stored in
+    /// the completion promise.
     pub fn process_task(&self, task: Task) -> Result<()> {
         match task {
             Task::Write { data, completion } => {
@@ -835,5 +851,100 @@ mod tests {
 
         // The queue should now be closed
         assert!(parallel_writer.write_record(b"should fail").is_err());
+    }
+    
+    #[test]
+    fn test_task_queue_operations() {
+        // Create a parallel writer with a few in-memory writers
+        let mut writers = Vec::new();
+        for _ in 0..3 {
+            let cursor = Cursor::new(Vec::new());
+            let writer = RecordWriter::with_config(cursor, RecordWriterConfig::default()).unwrap();
+            writers.push(Box::new(writer));
+        }
+        
+        let parallel_writer = Arc::new(
+            ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap()
+        );
+        
+        // Test task queue operations
+        assert_eq!(parallel_writer.pending_task_count().unwrap(), 0);
+        assert!(!parallel_writer.has_pending_tasks().unwrap());
+        
+        // Add some async tasks
+        let data1 = Bytes::from(b"task 1".to_vec());
+        let data2 = Bytes::from(b"task 2".to_vec());
+        
+        let promise1 = parallel_writer.write_record_async(data1).unwrap();
+        let promise2 = parallel_writer.write_record_async(data2).unwrap();
+        
+        // Check task count
+        assert_eq!(parallel_writer.pending_task_count().unwrap(), 2);
+        assert!(parallel_writer.has_pending_tasks().unwrap());
+        
+        // Process tasks in a separate thread to test concurrency
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer_clone = parallel_writer.clone();
+        
+        let handle = thread::spawn(move || {
+            // Signal ready to process
+            ready_tx.send(()).unwrap();
+            
+            // Process all tasks
+            writer_clone.process_all_tasks().unwrap();
+            
+            // Signal completion
+            done_tx.send(()).unwrap();
+        });
+        
+        // Wait for thread to be ready
+        ready_rx.recv().unwrap();
+        
+        // Queue an async flush operation
+        let flush_promise = parallel_writer.flush_async().unwrap();
+        
+        // Wait for processing to complete
+        done_rx.recv().unwrap();
+        
+        // Wait for promises to be fulfilled
+        assert!(promise1.wait().unwrap().is_ok());
+        assert!(promise2.wait().unwrap().is_ok());
+        
+        // Process the flush task
+        parallel_writer.process_next_task().unwrap();
+        assert!(flush_promise.wait().unwrap().is_ok());
+        
+        // Queue should be empty now
+        assert_eq!(parallel_writer.pending_task_count().unwrap(), 0);
+        assert!(!parallel_writer.has_pending_tasks().unwrap());
+        
+        // Test resource count
+        assert!(parallel_writer.available_resource_count().unwrap() >= 3);
+        
+        // Wait for the thread to complete
+        handle.join().unwrap();
+    }
+    
+    #[test]
+    fn test_async_write_failure() {
+        // Create parallel writer with just a single writer for simplicity
+        let mut writers = Vec::new();
+        let cursor = Cursor::new(Vec::new());
+        let writer = RecordWriter::with_config(cursor, RecordWriterConfig::default()).unwrap();
+        writers.push(Box::new(writer));
+        
+        let parallel_writer = 
+            ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+            
+        // First close the task queue to make write_record_async fail
+        parallel_writer.close().unwrap();
+        
+        // Now try to queue an async write - should fail
+        let data = Bytes::from(b"test data".to_vec());
+        assert!(parallel_writer.write_record_async(data).is_err());
+        
+        // Sync writes should also fail
+        assert!(parallel_writer.write_record(b"test data").is_err());
     }
 }

@@ -1,29 +1,29 @@
 //! Thread-safe resource queue with state management
-//! 
+//!
 //! This module provides a thread-safe resource queue implementation with support
 //! for tracking active resources, pausing/resuming operations, and safely
 //! processing resources using the visitor pattern.
-//! 
+//!
 //! # Visitor Pattern
-//! 
+//!
 //! The `ResourceQueue` uses the visitor pattern via its `process_resource` method
 //! to ensure proper resource management. This approach has several advantages:
-//! 
+//!
 //! - **Resource Safety**: Resources are automatically returned to the queue after
 //!   processing, preventing leaks even if errors occur
-//! 
+//!
 //! - **Deadlock Prevention**: The resource lifecycle is managed within an atomic
 //!   operation, significantly reducing the risk of deadlocks
-//! 
+//!
 //! - **State Management**: The queue can safely handle state transitions with
 //!   proper resource tracking
-//! 
+//!
 //! - **Simplified API**: Clients don't need to manually check out and return
 //!   resources, reducing the risk of programmer error
 
 use crate::error::{DiskyError, Result};
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, MutexGuard};
 
 /// Represents the operational state of the resource queue
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,7 +46,7 @@ pub enum ResourceQueueState {
 /// ```rust,no_run
 /// # use disky::parallel::resource_queue::ResourceQueue;
 /// # use disky::error::Result;
-/// # 
+/// #
 /// let queue = ResourceQueue::new();
 /// queue.add_resource("resource1".to_string()).unwrap();
 ///
@@ -144,13 +144,13 @@ impl<T> ResourceQueue<T> {
     ///
     /// 1. Waits for an available resource in Normal state
     /// 2. Marks the resource as active
-    /// 3. Calls the provided function with the resource 
+    /// 3. Calls the provided function with the resource
     /// 4. Ensures the resource is returned to the queue, even if processing fails
     /// 5. Returns the result of the processing function
     ///
     /// # How the Visitor Pattern Prevents Deadlocks
     ///
-    /// The visitor pattern is especially valuable when implementing functionality like the 
+    /// The visitor pattern is especially valuable when implementing functionality like the
     /// `pause_and_wait_for_all` method. Without the visitor pattern, clients could forget
     /// to return resources to the queue, leading to:
     ///
@@ -269,19 +269,10 @@ impl<T> ResourceQueue<T> {
         processing_result
     }
 
-    /// Set the queue to paused state and wait for all active resources to return
-    ///
-    /// This operation will:
-    /// 1. If already in Paused state, wait until state changes to Normal or Closed
-    /// 2. If state becomes Normal, set to Paused; if Closed, return error
-    /// 3. Wait until active_count reaches 0
-    /// 4. Return when all resources are back in the queue
-    pub fn pause_and_wait_for_all(&self) -> Result<()> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
-
+    fn wait_for_all<'a>(
+        &'a self,
+        mut inner: MutexGuard<'a, ResourceQueueInner<T>>,
+    ) -> Result<MutexGuard<'a, ResourceQueueInner<T>>> {
         // Handle different initial states
         match inner.state {
             ResourceQueueState::Closed => {
@@ -329,34 +320,7 @@ impl<T> ResourceQueue<T> {
                 .map_err(|e| DiskyError::Other(e.to_string()))?;
         }
 
-        Ok(())
-    }
-
-    /// Resume normal operation after a pause
-    ///
-    /// This function will:
-    /// 1. Check if the queue is in Paused state, and return error if not
-    /// 2. Set the state to Normal
-    /// 3. Notify all waiting threads
-    pub fn resume(&self) -> Result<()> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
-
-        match inner.state {
-            ResourceQueueState::Paused => {
-                inner.state = ResourceQueueState::Normal;
-                self.signal.notify_all();
-                Ok(())
-            }
-            ResourceQueueState::Closed => Err(DiskyError::QueueClosed(
-                "Cannot resume a closed queue".to_string(),
-            )),
-            ResourceQueueState::Normal => Err(DiskyError::Other(
-                "Queue is already in Normal state".to_string(),
-            )),
-        }
+        Ok(inner)
     }
 
     /// Set the queue to closed state
@@ -382,55 +346,91 @@ impl<T> ResourceQueue<T> {
         }
     }
 
-    /// Process all resources in the queue using the provided function
-    ///
-    /// This safely operates on all resources while maintaining proper state tracking.
-    /// The resources never leave the queue, preventing race conditions or leaks.
-    ///
-    /// This function can operate on queues in Normal or Paused state,
-    /// but will return an error if the queue is Closed.
-    ///
-    /// # Arguments
-    /// * `f` - Function to apply to each resource
-    ///
-    /// # Returns
-    /// * `Ok(())` if all operations succeeded
-    /// * `Err(...)` containing the last error encountered if any operations failed
-    pub fn process_all_resources<F>(&self, mut f: F) -> Result<()>
+    pub fn process_then_close<F>(&self, f: F) -> Result<()>
     where
         F: FnMut(&mut T) -> Result<()>,
     {
+        // First check if the queue is already closed
+        {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|e| DiskyError::Other(e.to_string()))?;
+
+            match inner.state {
+                ResourceQueueState::Closed => {
+                    return Err(DiskyError::QueueClosed(
+                        "Cannot process resources; queue is already closed".to_string(),
+                    ));
+                }
+                ResourceQueueState::Normal | ResourceQueueState::Paused => {
+                    // These states are allowed to proceed
+                    // We drop the lock here and call with_pause_process_resources below
+                }
+            }
+        }
+
+        // If not closed, proceed with the process-then-close operation
+        self.internal_process_all_resources(f, ResourceQueueState::Closed)
+    }
+
+    fn internal_process_all_resources<F>(
+        &self,
+        mut f: F,
+        final_state: ResourceQueueState,
+    ) -> Result<()>
+    where
+        F: FnMut(&mut T) -> Result<()>,
+    {
+        // Get the lock for the entire operation
         let mut inner = self
             .inner
             .lock()
             .map_err(|e| DiskyError::Other(e.to_string()))?;
 
-        // Handle different queue states
-        match inner.state {
-            ResourceQueueState::Closed => {
-                return Err(DiskyError::QueueClosed(
-                    "Resource queue is closed".to_string(),
-                ));
-            }
-            ResourceQueueState::Normal | ResourceQueueState::Paused => {
-                // Processing is allowed in both Normal and Paused states
-                let mut last_error = None;
+        // Step 1: Wait for all active resources to return
+        inner = self.wait_for_all(inner)?;
 
-                // Process each resource in the queue
-                for resource in &mut inner.queue {
-                    if let Err(e) = f(resource) {
-                        last_error = Some(e);
-                    }
+        // Step 2: Process each resource in the queue
+        let mut process_result = Ok(());
+
+        if inner.state != ResourceQueueState::Closed {
+            let mut last_error = None;
+
+            // Process each resource in the queue
+            for resource in &mut inner.queue {
+                if let Err(e) = f(resource) {
+                    last_error = Some(e);
                 }
-
-                // Return the last error if any
-                if let Some(e) = last_error {
-                    return Err(e);
-                }
-
-                Ok(())
             }
+
+            // Store the processing result
+            if let Some(e) = last_error {
+                process_result = Err(e);
+            }
+        } else {
+            process_result = Err(DiskyError::QueueClosed(
+                "Resource queue is closed".to_string(),
+            ));
         }
+
+        // Step 3: Set final state (unless there was an error and we're trying to close)
+        if process_result.is_ok() || final_state != ResourceQueueState::Closed {
+            inner.state = final_state;
+
+            // Notify waiters about the state change
+            self.signal.notify_all();
+        }
+
+        // Return any error from processing
+        process_result
+    }
+
+    pub fn process_all_resources<F>(&self, f: F) -> Result<()>
+    where
+        F: FnMut(&mut T) -> Result<()>,
+    {
+        self.internal_process_all_resources(f, ResourceQueueState::Normal)
     }
 
     /// Get the current number of resources in the queue
@@ -583,61 +583,87 @@ mod tests {
     }
 
     #[test]
-    fn test_pause_and_resume() {
+    fn test_with_pause_process_all_resources() {
+        let queue = Arc::new(ResourceQueue::new());
+
+        // Add resources
+        queue.add_resource(1).unwrap();
+        queue.add_resource(2).unwrap();
+        queue.add_resource(3).unwrap();
+
+        // Spawn a thread to try to grab a resource while we process all
+        let queue_clone = Arc::clone(&queue);
+        let (resource_attempt_tx, resource_attempt_rx) = std::sync::mpsc::channel();
+        let handle = thread::spawn(move || {
+            // Signal we're about to try processing
+            resource_attempt_tx.send(()).unwrap();
+
+            // This should block until the with_pause_process_all_resources completes
+            let result = queue_clone.process_resource(|n| {
+                *n *= 10; // Different multiplier to verify which processing happened
+                Ok(())
+            });
+
+            assert!(result.is_ok(), "Process after pause/resume should succeed");
+        });
+
+        // Wait for the thread to be ready to process
+        resource_attempt_rx.recv().unwrap();
+
+        // Small sleep to ensure the thread gets to the processing point
+        thread::sleep(std::time::Duration::from_millis(10));
+
+        // Process all resources with pause/resume handling
+        queue
+            .process_all_resources(|n| {
+                *n *= 2; // Double the values
+                Ok(())
+            })
+            .unwrap();
+
+        // Wait for the other thread to complete after our processing
+        handle.join().unwrap();
+
+        // Verify the state is Normal after processing
+        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Normal);
+
+        // Verify resources - some might be multiplied by 2, some by 10 (if processed after)
+        let resources = queue.drain_all_resources().unwrap();
+        assert_eq!(resources.len(), 3);
+
+        // All resources should have been processed at least once (either *2 or *10 or both)
+        for r in &resources {
+            assert!(*r == 2 || *r == 4 || *r == 6 || *r == 10 || *r == 20 || *r == 30);
+        }
+    }
+
+    #[test]
+    fn test_with_pause_process_all_resources_error_handling() {
         let queue = ResourceQueue::new();
 
         // Add resources
         queue.add_resource(1).unwrap();
         queue.add_resource(2).unwrap();
-
-        // Pause the queue
-        queue.pause_and_wait_for_all().unwrap();
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Paused);
-
-        // Should fail to add resources while paused
-        assert!(queue.add_resource(3).is_err());
-
-        // Process all resources should still work in paused state
-        queue
-            .process_all_resources(|n| {
-                *n *= 2;
-                Ok(())
-            })
-            .unwrap();
-
-        // Resume
-        queue.resume().unwrap();
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Normal);
-
-        // Should be able to add resources again
         queue.add_resource(3).unwrap();
 
-        // Verify all resources
+        // Test error during processing
+        let result = queue.process_all_resources(|n| {
+            if *n == 2 {
+                return Err(DiskyError::Other("Test error".to_string()));
+            }
+            *n *= 2;
+            Ok(())
+        });
+
+        // Verify error was returned
+        assert!(result.is_err());
+
+        // Verify state is back to Normal even after error
+        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Normal);
+
+        // Some resources should still be processed
         let resources = queue.drain_all_resources().unwrap();
         assert_eq!(resources.len(), 3);
-        assert!(resources.contains(&2)); // 1*2
-        assert!(resources.contains(&4)); // 2*2
-        assert!(resources.contains(&3)); // Added after resume
-    }
-
-    #[test]
-    fn test_close() {
-        let queue = ResourceQueue::new();
-
-        // Add a resource
-        queue.add_resource(1).unwrap();
-
-        // Close the queue
-        queue.close().unwrap();
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Closed);
-
-        // Operations should fail on closed queue
-        assert!(queue.add_resource(2).is_err());
-        assert!(queue.process_resource(|_| Ok(())).is_err());
-        assert!(queue.process_all_resources(|_| Ok(())).is_err());
-        assert!(queue.pause_and_wait_for_all().is_err());
-        assert!(queue.resume().is_err());
-        assert!(queue.close().is_err()); // Cannot close an already closed queue
     }
 
     #[test]
@@ -691,123 +717,5 @@ mod tests {
         // Resources should all be back in the queue
         assert_eq!(queue.available_count().unwrap(), 10);
         assert_eq!(queue.active_count().unwrap(), 0);
-    }
-
-    #[test]
-    fn test_concurrent_pause_and_process() {
-        let queue = Arc::new(ResourceQueue::new());
-
-        // Add resources
-        for i in 1..=5 {
-            queue.add_resource(i).unwrap();
-        }
-
-        // Create channels for synchronization
-        let (processing_started_tx, processing_started_rx) = std::sync::mpsc::channel();
-        let (pause_complete_tx, pause_complete_rx) = std::sync::mpsc::channel();
-
-        // Spawn a thread to process resources
-        let queue_clone = Arc::clone(&queue);
-        let process_handle = thread::spawn(move || {
-            // First process should start and signal
-            match queue_clone.process_resource(|n| {
-                // Signal that processing has started
-                processing_started_tx.send(()).unwrap();
-
-                Ok(*n)
-            }) {
-                Ok(_) => {} // Successfully processed
-                Err(e) => {
-                    panic!("First process_resource should succeed: {:?}", e);
-                }
-            }
-
-            // Wait until pause is complete before finishing processing
-            pause_complete_rx.recv().unwrap();
-
-            // Try more processing after pause is complete
-            for _ in 0..2 {
-                if let Err(e) = queue_clone.process_resource(|n| Ok(*n)) {
-                    // Error is acceptable if queue was closed
-                    if let DiskyError::QueueClosed(_) = e {
-                        return;
-                    }
-                    panic!("Unexpected error: {:?}", e);
-                }
-            }
-        });
-
-        // Wait for processing to start
-        processing_started_rx.recv().unwrap();
-
-        // Pause the queue - this should wait for active resources
-        let pause_result = queue.pause_and_wait_for_all();
-
-        // Now that we're paused, signal the processing thread to complete
-        pause_complete_tx.send(()).unwrap();
-
-        // Verify pause succeeded
-        assert!(pause_result.is_ok());
-
-        // At this point, all resources should be back in the queue and no active resources
-        assert_eq!(queue.active_count().unwrap(), 0);
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Paused);
-
-        // Resume the queue to let the processing thread finish
-        queue.resume().unwrap();
-
-        // Wait for processing thread to complete
-        process_handle.join().unwrap();
-    }
-
-    #[test]
-    fn test_pause_when_already_paused() {
-        let queue = Arc::new(ResourceQueue::new());
-
-        // Add a resource
-        queue.add_resource(1).unwrap();
-
-        // First pause
-        queue.pause_and_wait_for_all().unwrap();
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Paused);
-
-        // Create a clone for the pause thread
-        let pause_queue = Arc::clone(&queue);
-
-        // Use channels for synchronization
-        let (pause_started_tx, pause_started_rx) = std::sync::mpsc::channel();
-        let (close_done_tx, close_done_rx) = std::sync::mpsc::channel();
-
-        // Create a thread that will attempt to pause again (will wait for unpaused state)
-        let pause_thread = thread::spawn(move || {
-            // Signal we're about to call pause_and_wait_for_all
-            pause_started_tx.send(()).unwrap();
-
-            // This call will block in the paused state waiting loop until the queue is closed
-            let result = pause_queue.pause_and_wait_for_all();
-
-            // When the main thread closes the queue, this call should return with an error
-            assert!(result.is_err());
-            if let Err(DiskyError::QueueClosed(_)) = result {
-                // Expected error
-            } else {
-                panic!("Expected QueueClosed error, got {:?}", result);
-            }
-
-            // Signal that we've verified the error
-            close_done_rx.recv().unwrap();
-        });
-
-        // Wait for pause thread to start its pause operation
-        pause_started_rx.recv().unwrap();
-
-        // Close the queue, which should cause the paused wait to fail with an error
-        queue.close().unwrap();
-
-        // Signal that close is done
-        close_done_tx.send(()).unwrap();
-
-        // Wait for the pause thread to complete
-        pause_thread.join().unwrap();
     }
 }

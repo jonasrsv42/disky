@@ -137,9 +137,18 @@ impl<T> Drop for Resource<T> {
 }
 
 impl<T> ResourcePool<T> {
+    /// Acquires the inner lock and maps mutex errors to DiskyError
+    ///
+    /// This is a helper function to reduce code duplication for lock acquisition.
+    fn acquire_lock(&self) -> Result<MutexGuard<ResourcePoolInner<T>>> {
+        self.inner
+            .lock()
+            .map_err(|e| DiskyError::Other(e.to_string()))
+    }
+    
     /// Create a new empty resource pool
     ///
-    /// Initializes a new ResourcePool in the Normal state with no resources.
+    /// Initializes a new ResourcePool in the Active state with no resources.
     /// Resources can be added to the pool using the `add_resource` method.
     ///
     /// # Example
@@ -177,10 +186,7 @@ impl<T> ResourcePool<T> {
     /// * `Ok(())` if the resource was added successfully
     /// * `Err` if the pool is shutdown or suspended
     pub fn add_resource(&self, resource: T) -> Result<()> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let mut inner = self.acquire_lock()?;
 
         // Handle different queue states
         match inner.state {
@@ -216,10 +222,7 @@ impl<T> ResourcePool<T> {
     /// * The pool is suspended (until it returns to Active state)
     pub fn get_resource(&self) -> Result<Resource<T>> {
         // First scope: get a resource and mark it as active
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let mut inner = self.acquire_lock()?;
 
         // Wait until we have a resource and are in Active state
         loop {
@@ -342,10 +345,7 @@ impl<T> ResourcePool<T> {
     /// This will prevent further checkouts and returns.
     /// Cannot shutdown an already shutdown pool.
     pub fn close(&self) -> Result<()> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let mut inner = self.acquire_lock()?;
 
         match inner.state {
             ResourcePoolState::Shutdown => Err(DiskyError::QueueClosed(
@@ -380,10 +380,7 @@ impl<T> ResourcePool<T> {
         F: FnMut(&mut T) -> Result<()>,
     {
         // Acquire lock for the entire operation
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
 
         // Check if the queue is already shutdown
         match inner.state {
@@ -484,10 +481,7 @@ impl<T> ResourcePool<T> {
         F: FnMut(&mut T) -> Result<()>,
     {
         // Acquire lock for the entire operation
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
             
         self.internal_process_all_resources(f, ResourcePoolState::Active, inner)
     }
@@ -498,10 +492,7 @@ impl<T> ResourcePool<T> {
     /// * `Ok(usize)` - The number of available resources
     /// * `Err` - If an error occurred while accessing the pool
     pub fn available_count(&self) -> Result<usize> {
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
 
         Ok(inner.queue.len())
     }
@@ -513,10 +504,7 @@ impl<T> ResourcePool<T> {
     /// * `Err` - If an error occurred while accessing the pool
     #[cfg(test)]
     pub fn is_empty(&self) -> Result<bool> {
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
 
         Ok(inner.queue.is_empty())
     }
@@ -528,10 +516,7 @@ impl<T> ResourcePool<T> {
     /// * `Err` - If an error occurred while accessing the pool
     #[cfg(test)]
     pub(crate) fn get_state(&self) -> Result<ResourcePoolState> {
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
 
         Ok(inner.state)
     }
@@ -543,10 +528,7 @@ impl<T> ResourcePool<T> {
     /// * `Err` - If an error occurred while accessing the pool
     #[cfg(test)]
     pub(crate) fn active_count(&self) -> Result<usize> {
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
 
         Ok(inner.active_count)
     }
@@ -561,10 +543,7 @@ impl<T> ResourcePool<T> {
     /// * `Err` - If the pool is not in Active state or another error occurred
     #[cfg(test)]
     pub fn drain_all_resources(&self) -> Result<Vec<T>> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let mut inner = self.acquire_lock()?;
 
         // Only allow draining in Active state
         if inner.state != ResourcePoolState::Active {
@@ -590,10 +569,7 @@ impl<T> ResourcePool<T> {
     /// * `Err` - If an error occurred while accessing the pool
     #[cfg(test)]
     pub fn total_count(&self) -> Result<usize> {
-        let inner = self
-            .inner
-            .lock()
-            .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let inner = self.acquire_lock()?;
 
         Ok(inner.queue.len() + inner.active_count)
     }

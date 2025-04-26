@@ -68,7 +68,7 @@ use std::sync::Arc;
 
 use crate::error::Result;
 use crate::parallel::promise::Promise;
-use crate::parallel::resource_queue::ResourceQueue;
+use crate::parallel::resource_pool::ResourceQueue;
 use crate::parallel::task_queue::TaskQueue;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 use bytes::Bytes;

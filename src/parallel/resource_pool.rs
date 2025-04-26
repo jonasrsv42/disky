@@ -44,7 +44,7 @@ pub enum ResourceQueueState {
 /// handles the complete resource lifecycle:
 ///
 /// ```rust,no_run
-/// # use disky::parallel::resource_queue::ResourceQueue;
+/// # use disky::parallel::resource_pool::ResourceQueue;
 /// # use disky::error::Result;
 /// #
 /// let queue = ResourceQueue::new();
@@ -170,7 +170,7 @@ impl<T> ResourceQueue<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use disky::parallel::resource_queue::ResourceQueue;
+    /// # use disky::parallel::resource_pool::ResourceQueue;
     /// # use disky::error::Result;
     /// #
     /// let queue = ResourceQueue::new();
@@ -523,7 +523,7 @@ mod tests {
     use std::thread;
 
     #[test]
-    fn test_basic_resource_queue_operations() {
+    fn test_basic_resource_pool_operations() {
         let queue = ResourceQueue::new();
 
         // Test initial state

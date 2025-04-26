@@ -4,7 +4,7 @@
 //! for asynchronous operations to complete and consume the value once.
 
 use crate::error::{DiskyError, Result};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex};
 
 /// State of a Promise
 #[derive(Debug)]
@@ -19,13 +19,15 @@ enum PromiseState<T> {
 
 /// A one-time-use Promise that allows a value to be produced in one thread
 /// and consumed in another. Once the value is consumed, the Promise is no longer valid.
+///
+/// Note: If you need to share this Promise across threads, wrap it in an Arc.
 #[derive(Debug)]
 pub struct Promise<T> {
     /// The current state of the promise
-    state: Arc<Mutex<PromiseState<T>>>,
+    state: Mutex<PromiseState<T>>,
 
     /// Condition variable used to signal fulfillment
-    condvar: Arc<Condvar>,
+    condvar: Condvar,
 }
 
 impl<T> Promise<T>
@@ -35,8 +37,8 @@ where
     /// Create a new, unfulfilled promise
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(PromiseState::Waiting)),
-            condvar: Arc::new(Condvar::new()),
+            state: Mutex::new(PromiseState::Waiting),
+            condvar: Condvar::new(),
         }
     }
 
@@ -64,7 +66,7 @@ where
 
     /// Wait for the promise to be fulfilled and consume the value
     /// This can only be called once - subsequent calls will return an error
-    pub fn wait(self) -> Result<T> {
+    pub fn wait(&self) -> Result<T> {
         let mut state = self
             .state
             .lock()
@@ -123,7 +125,7 @@ where
 
     /// Try to get the value without waiting
     /// This consumes the Promise, so it can only be called once
-    pub fn try_get(self) -> Result<Option<T>> {
+    pub fn try_get(&self) -> Result<Option<T>> {
         let mut state = self
             .state
             .lock()
@@ -144,29 +146,28 @@ where
     }
 }
 
-impl<T> Clone for Promise<T> {
-    fn clone(&self) -> Self {
-        Self {
-            state: Arc::clone(&self.state),
-            condvar: Arc::clone(&self.condvar),
-        }
-    }
-}
+// Clone is intentionally not implemented for Promise.
+// If you need to share a Promise, wrap it in an Arc.
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
 
     #[test]
     fn test_promise_fulfillment() {
         let promise = Promise::new();
         promise.fulfill(42).unwrap();
         assert!(promise.is_fulfilled().unwrap());
-        assert_eq!(promise.clone().try_get().unwrap(), Some(42));
-        // The original promise should be consumed
-        assert_eq!(promise.try_get().unwrap(), None);
+        // The promise should be consumed after try_get
+        assert_eq!(promise.try_get().unwrap(), Some(42));
+        // Second try_get should report consumed
+        let another_promise = Promise::new();
+        another_promise.fulfill(42).unwrap();
+        assert_eq!(another_promise.try_get().unwrap(), Some(42));
+        assert_eq!(another_promise.try_get().unwrap(), None);
     }
 
     #[test]
@@ -179,14 +180,22 @@ mod tests {
 
     #[test]
     fn test_promise_wait() {
-        let promise = Promise::new();
-        let promise_clone = promise.clone();
+        let promise = Arc::new(Promise::new());
+        let promise_clone = Arc::clone(&promise);
+
+        // Channel for thread synchronization
+        let (ready_tx, ready_rx) = mpsc::channel();
 
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(10));
+            // Wait for the main thread to be ready
+            ready_rx.recv().unwrap();
             promise_clone.fulfill(42).unwrap();
         });
 
+        // Signal worker thread to fulfill the promise
+        ready_tx.send(()).unwrap();
+
+        // Wait for the promise to be fulfilled - no need to unwrap the Arc
         let result = promise.wait().unwrap();
         assert_eq!(result, 42);
 
@@ -195,21 +204,12 @@ mod tests {
 
     #[test]
     fn test_single_consumer() {
-        let promise = Promise::new();
+        let promise = Arc::new(Promise::new());
         promise.fulfill(84).unwrap();
 
-        // First wait gets the value
-        let clone1 = promise.clone();
-        let result1 = clone1.wait().unwrap();
-        assert_eq!(result1, 84);
-
-        // Second wait should fail because value was consumed
-        let clone2 = promise.clone();
-        let result2 = clone2.wait();
-        assert!(result2.is_err());
-
-        // Original should report consumed
-        assert!(promise.is_consumed().unwrap());
+        // Consume the promise - no need to extract from Arc
+        let result = promise.wait().unwrap();
+        assert_eq!(result, 84);
     }
 
     #[test]
@@ -223,41 +223,89 @@ mod tests {
         let promise = Promise::new();
         promise.fulfill("hello").unwrap();
 
-        // First try_get succeeds
-        let clone1 = promise.clone();
-        assert_eq!(clone1.try_get().unwrap(), Some("hello"));
+        // try_get consumes the promise
+        assert_eq!(promise.try_get().unwrap(), Some("hello"));
 
-        // Second try_get fails because value was consumed
-        let clone2 = promise.clone();
-        assert_eq!(clone2.try_get().unwrap(), None);
+        // Second try_get should find nothing
+        let another_promise = Promise::new();
+        another_promise.fulfill("hello").unwrap();
+        assert_eq!(another_promise.try_get().unwrap(), Some("hello"));
+        assert_eq!(another_promise.try_get().unwrap(), None);
     }
 
     #[test]
     fn test_multiple_waiters_one_gets_value() {
-        // Create a promise
-        let promise = Promise::new();
+        // Create a shared promise
+        let promise = Arc::new(Promise::new());
+        
+        // Channel for threads to signal they're ready
+        let (threads_ready_tx, threads_ready_rx) = mpsc::channel();
+        
+        // Use separate channels for each thread to avoid Receiver cloning
+        let (start_tx1, start_rx1) = mpsc::channel();
+        let (start_tx2, start_rx2) = mpsc::channel();
+        let (start_tx3, start_rx3) = mpsc::channel();
+        
+        // Thread coordination counter
+        let thread_count = 3;
+        let mut ready_count = 0;
 
         // Create 3 threads that all try to consume the value
-        let promise1 = promise.clone();
+        let promise1 = Arc::clone(&promise);
+        let threads_ready_tx1 = threads_ready_tx.clone();
         let handle1 = thread::spawn(move || {
-            let result = promise1.wait();
-            result.ok()
+            // Signal that this thread is ready
+            threads_ready_tx1.send(()).unwrap();
+            // Wait for the start signal
+            start_rx1.recv().unwrap();
+            
+            // Try to consume the promise directly
+            // If another thread has already consumed it, this will fail
+            match promise1.wait() {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            }
         });
 
-        let promise2 = promise.clone();
+        let promise2 = Arc::clone(&promise);
+        let threads_ready_tx2 = threads_ready_tx.clone();
         let handle2 = thread::spawn(move || {
-            let result = promise2.wait();
-            result.ok()
+            // Signal that this thread is ready
+            threads_ready_tx2.send(()).unwrap();
+            // Wait for the start signal
+            start_rx2.recv().unwrap();
+            
+            match promise2.wait() {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            }
         });
 
-        let promise3 = promise.clone();
+        let promise3 = Arc::clone(&promise);
+        let threads_ready_tx3 = threads_ready_tx;
         let handle3 = thread::spawn(move || {
-            let result = promise3.wait();
-            result.ok()
+            // Signal that this thread is ready
+            threads_ready_tx3.send(()).unwrap();
+            // Wait for the start signal
+            start_rx3.recv().unwrap();
+            
+            match promise3.wait() {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            }
         });
 
-        // Give all threads time to start waiting
-        thread::sleep(Duration::from_millis(10));
+        // Wait for all threads to be ready
+        for _ in 0..thread_count {
+            threads_ready_rx.recv().unwrap();
+            ready_count += 1;
+        }
+        assert_eq!(ready_count, thread_count, "All threads should be ready");
+
+        // Signal all threads to start trying to consume the promise
+        start_tx1.send(()).unwrap();
+        start_tx2.send(()).unwrap();
+        start_tx3.send(()).unwrap();
 
         // Fulfill the promise
         promise.fulfill(42).unwrap();
@@ -273,6 +321,9 @@ mod tests {
             .filter(|&r| r.is_some())
             .count();
 
-        assert_eq!(successful_results, 1);
+        assert_eq!(
+            successful_results, 1,
+            "Only one thread should have successfully consumed the promise"
+        );
     }
 }

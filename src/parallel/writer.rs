@@ -20,7 +20,7 @@
 //!
 //! When a write request is received, it can be processed either:
 //! - Synchronously, by directly using an available writer
-//! - Asynchronously, by queuing the request and returning a `Promise` that will be fulfilled when the write completes
+//! - Asynchronously, by queuing the request and returning an `Arc<Promise>` that will be fulfilled when the write completes
 //!
 //! # Usage Examples
 //!
@@ -54,7 +54,7 @@
 //! // Process the async task (can be done in a separate thread)
 //! parallel_writer.process_all_tasks().unwrap();
 //!
-//! // Wait for completion
+//! // Wait for completion (consumes the promise)
 //! let result = promise.wait().unwrap();
 //! assert!(result.is_ok());
 //!
@@ -79,27 +79,44 @@ use log::error;
 /// This enum represents different types of operations that can be performed
 /// by worker threads. Each variant contains a promise that will be fulfilled
 /// when the operation completes.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Task {
     /// Write a record to disk
     Write {
         /// The record data to write
         data: Bytes,
         /// Promise that will be fulfilled when the write completes
-        completion: Promise<Result<()>>,
+        completion: Arc<Promise<Result<()>>>,
     },
 
     /// Flush all writers to disk
     Flush {
         /// Promise that will be fulfilled when the flush completes
-        completion: Promise<Result<()>>,
+        completion: Arc<Promise<Result<()>>>,
     },
 
     /// Close all writers
     Close {
         /// Promise that will be fulfilled when the close completes
-        completion: Promise<Result<()>>,
+        completion: Arc<Promise<Result<()>>>,
     },
+}
+
+impl Clone for Task {
+    fn clone(&self) -> Self {
+        match self {
+            Task::Write { data, completion } => Task::Write {
+                data: data.clone(),
+                completion: Arc::clone(completion),
+            },
+            Task::Flush { completion } => Task::Flush {
+                completion: Arc::clone(completion),
+            },
+            Task::Close { completion } => Task::Close {
+                completion: Arc::clone(completion),
+            },
+        }
+    }
 }
 
 /// Resource containing an initialized writer that can be used to write records
@@ -204,7 +221,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
 
     /// Write a record asynchronously
     ///
-    /// This method queues the record for writing and returns a Promise that will
+    /// This method queues the record for writing and returns an Arc<Promise> that will
     /// be fulfilled when the write is completed. The actual write operation will
     /// be performed when `process_task` or `process_all_tasks` is called.
     ///
@@ -212,7 +229,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// * `data` - The record data to write
     ///
     /// # Returns
-    /// A Promise that will be fulfilled with the result of the write operation
+    /// An Arc<Promise> that will be fulfilled with the result of the write operation
     ///
     /// # Example
     /// ```rust,no_run
@@ -237,13 +254,12 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// let result = promise.wait().unwrap();
     /// assert!(result.is_ok());
     /// ```
-    pub fn write_record_async(&self, data: Bytes) -> Result<Promise<Result<()>>> {
-        let completion = Promise::new();
-        let completion_clone = completion.clone();
+    pub fn write_record_async(&self, data: Bytes) -> Result<Arc<Promise<Result<()>>>> {
+        let completion = Arc::new(Promise::new());
 
         let task = Task::Write {
             data,
-            completion: completion_clone,
+            completion: Arc::clone(&completion),
         };
 
         self.task_queue.push_back(task)?;
@@ -278,27 +294,19 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// parallel_writer.write_record(b"synchronous record").unwrap();
     /// ```
     pub fn write_record(&self, data: &[u8]) -> Result<()> {
-        // Get a resource from the queue (this automatically tracks active resources)
-        let mut resource = self.resource_queue.checkout_resource()?;
-
-        // Perform the write operation
-        let result = resource.writer.write_record(data);
-
-        // Return the resource to the queue (this automatically updates active tracking)
-        if let Err(e) = self.resource_queue.return_resource(resource) {
-            return Err(e);
-        }
-
-        result
+        // Process a resource by writing the record to it
+        self.resource_queue.process_resource(|resource| {
+            resource.writer.write_record(data)
+        })
     }
 
-    /// Process a single write task
+    /// Process a single task
     ///
-    /// This method processes a given write task by writing the data and
-    /// fulfilling the associated promise with the result.
+    /// This method processes a given task (write, flush, or close)
+    /// and fulfills the associated promise with the result.
     ///
     /// # Arguments
-    /// * `task` - The WriteTask to process
+    /// * `task` - The Task to process
     ///
     /// # Returns
     /// A Result indicating success or failure of the task processing
@@ -316,7 +324,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
             }
             Task::Flush { completion } => {
                 // Process the flush task
-                let result = self.perform_flush();
+                let result = self.flush();
 
                 // Complete the promise with the result
                 if let Err(e) = completion.fulfill(result) {
@@ -325,7 +333,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
             }
             Task::Close { completion } => {
                 // Process the close task
-                let result = self.perform_close();
+                let result = self.close();
 
                 // Complete the promise with the result
                 if let Err(e) = completion.fulfill(result) {
@@ -337,45 +345,6 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         Ok(())
     }
 
-    /// Internal method to perform a flush operation
-    fn perform_flush(&self) -> Result<()> {
-        // Pause and wait for all active resources to return
-        self.resource_queue.pause_and_wait_for_all()?;
-
-        // Process all resources to flush them
-        let flush_result = self
-            .resource_queue
-            .process_all_resources(|resource| resource.writer.flush());
-
-        // Resume normal operation
-        self.resource_queue.resume()?;
-
-        // Return any error from the processing
-        flush_result
-    }
-
-    /// Internal method to perform a close operation
-    fn perform_close(&self) -> Result<()> {
-        // First flush all resources
-        self.perform_flush()?;
-
-        // Now pause the queue again for closing
-        self.resource_queue.pause_and_wait_for_all()?;
-
-        // Process all resources to close them
-        let close_result = self
-            .resource_queue
-            .process_all_resources(|resource| resource.writer.close());
-
-        // Set the resource queue to closed state
-        self.resource_queue.close()?;
-        
-        // Close the task queue to signal worker threads to stop
-        self.task_queue.close()?;
-
-        // Return any error from the processing
-        close_result
-    }
 
     /// Process the next available task
     ///
@@ -485,14 +454,14 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         Ok(())
     }
 
-    /// Flush all writers in the resource queue
+    /// Flush all writers in the resource queue asynchronously
     ///
-    /// This will flush all writers to ensure data is written to disk.
-    /// Flushing is important to ensure that data is actually persisted
-    /// to the underlying storage.
+    /// This will queue a flush task and return a Promise that will be fulfilled
+    /// when the flush is complete. The task must be processed by calling
+    /// `process_next_task` or `process_all_tasks`.
     ///
     /// # Returns
-    /// A Result indicating success or failure
+    /// A Promise that will be fulfilled when the flush is complete
     ///
     /// # Example
     /// ```rust,no_run
@@ -508,16 +477,21 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # let parallel_writer = ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
     /// # parallel_writer.write_record(b"some data").unwrap();
     ///
-    /// // Flush all writers
-    /// parallel_writer.flush().unwrap();
+    /// // Queue a flush operation
+    /// let promise = parallel_writer.flush_async().unwrap();
+    /// 
+    /// // Process the flush task
+    /// parallel_writer.process_all_tasks().unwrap();
+    /// 
+    /// // Wait for the flush to complete
+    /// promise.wait().unwrap().unwrap();
     /// ```
-    pub fn flush(&self) -> Result<Promise<Result<()>>> {
-        let completion = Promise::new();
-        let completion_clone = completion.clone();
+    pub fn flush_async(&self) -> Result<Arc<Promise<Result<()>>>> {
+        let completion = Arc::new(Promise::new());
 
         // Create a flush task
         let task = Task::Flush {
-            completion: completion_clone,
+            completion: Arc::clone(&completion),
         };
 
         // Queue the task
@@ -528,21 +502,51 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
 
     /// Synchronously flush all writers
     ///
-    /// This is a convenience method that queues a flush task and waits for it to complete.
-    pub fn flush_sync(&self) -> Result<()> {
-        let promise = self.flush()?;
-        promise.wait()??;
-        Ok(())
+    /// This method directly flushes all writers without using the task queue.
+    /// It's safe to use in a single thread without causing deadlocks because
+    /// it uses the pause mechanism to ensure no resources are being processed.
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
+    /// # use disky::writer::RecordWriter;
+    /// # use std::io::Cursor;
+    /// # let mut writers = Vec::new();
+    /// # for _ in 0..3 {
+    /// #     let cursor = Cursor::new(Vec::new());
+    /// #     let writer = RecordWriter::new(cursor).unwrap();
+    /// #     writers.push(Box::new(writer));
+    /// # }
+    /// # let parallel_writer = ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+    /// # parallel_writer.write_record(b"some data").unwrap();
+    ///
+    /// // Flush all writers synchronously
+    /// parallel_writer.flush().unwrap();
+    /// ```
+    pub fn flush(&self) -> Result<()> {
+        // Pause and wait for all active resources to return
+        self.resource_queue.pause_and_wait_for_all()?;
+
+        // Process all resources to flush them
+        let flush_result = self
+            .resource_queue
+            .process_all_resources(|resource| resource.writer.flush());
+
+        // Resume normal operation
+        self.resource_queue.resume()?;
+
+        // Return any error from the processing
+        flush_result
     }
 
-    /// Close all writers to finalize the file format
+    /// Close all writers asynchronously
     ///
-    /// This will close all writers to ensure valid files for reading.
-    /// Closing is essential for writing the final file format elements
-    /// that make the file valid and readable.
+    /// This will queue a close task and return an Arc<Promise> that will be fulfilled
+    /// when the close is complete. The task must be processed by calling
+    /// `process_next_task` or `process_all_tasks`.
     ///
     /// # Returns
-    /// A Result indicating success or failure
+    /// An Arc<Promise> that will be fulfilled when the close is complete
     ///
     /// # Example
     /// ```rust,no_run
@@ -559,16 +563,21 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # parallel_writer.write_record(b"some data").unwrap();
     /// # parallel_writer.flush().unwrap();
     ///
-    /// // Close all writers
-    /// parallel_writer.close().unwrap();
+    /// // Queue a close operation
+    /// let promise = parallel_writer.close_async().unwrap();
+    /// 
+    /// // Process the close task
+    /// parallel_writer.process_all_tasks().unwrap();
+    /// 
+    /// // Wait for the close to complete
+    /// promise.wait().unwrap().unwrap();
     /// ```
-    pub fn close(&self) -> Result<Promise<Result<()>>> {
-        let completion = Promise::new();
-        let completion_clone = completion.clone();
+    pub fn close_async(&self) -> Result<Arc<Promise<Result<()>>>> {
+        let completion = Arc::new(Promise::new());
 
         // Create a close task
         let task = Task::Close {
-            completion: completion_clone,
+            completion: Arc::clone(&completion),
         };
 
         // Queue the task
@@ -579,11 +588,65 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
 
     /// Synchronously close all writers
     ///
-    /// This is a convenience method that queues a close task and waits for it to complete.
-    pub fn close_sync(&self) -> Result<()> {
-        let promise = self.close()?;
-        promise.wait()??;
-        Ok(())
+    /// This method directly closes all writers without using the task queue.
+    /// It's safe to use in a single thread without causing deadlocks because
+    /// it uses the pause mechanism to ensure no resources are being processed.
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
+    /// # use disky::writer::RecordWriter;
+    /// # use std::io::Cursor;
+    /// # let mut writers = Vec::new();
+    /// # for _ in 0..3 {
+    /// #     let cursor = Cursor::new(Vec::new());
+    /// #     let writer = RecordWriter::new(cursor).unwrap();
+    /// #     writers.push(Box::new(writer));
+    /// # }
+    /// # let parallel_writer = ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+    /// # parallel_writer.write_record(b"some data").unwrap();
+    /// # parallel_writer.flush().unwrap();
+    ///
+    /// // Close all writers synchronously
+    /// parallel_writer.close().unwrap();
+    /// ```
+    pub fn close(&self) -> Result<()> {
+        // Pause and wait for all active resources to return
+        let pause_result = self.resource_queue.pause_and_wait_for_all();
+        
+        // Store any errors to return later
+        let mut first_error = pause_result.err();
+        
+        // Process all resources to close them (writers will handle flushing internally)
+        // Only attempt to process resources if we successfully paused
+        let close_result = if first_error.is_none() {
+            self.resource_queue.process_all_resources(|resource| resource.writer.close())
+        } else {
+            Ok(()) // Skip processing if pause failed
+        };
+        
+        // If this is the first error, store it
+        if first_error.is_none() && close_result.is_err() {
+            first_error = close_result.err();
+        }
+        
+        // Try to close the resource queue regardless of previous errors
+        let resource_close_result = self.resource_queue.close();
+        if first_error.is_none() && resource_close_result.is_err() {
+            first_error = resource_close_result.err();
+        }
+        
+        // Try to close the task queue regardless of previous errors
+        let task_close_result = self.task_queue.close();
+        if first_error.is_none() && task_close_result.is_err() {
+            first_error = task_close_result.err();
+        }
+        
+        // Return the first error encountered, or Ok if all succeeded
+        match first_error {
+            Some(err) => Err(err),
+            None => Ok(())
+        }
     }
 
     /// Check if there are any pending tasks
@@ -681,11 +744,9 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reader::{DiskyPiece, RecordReader};
-    use std::collections::HashSet;
     use std::io::Cursor;
+    use std::sync::mpsc;
     use std::thread;
-    use std::time::Duration;
 
     #[test]
     fn test_parallel_writer_basic() {
@@ -710,13 +771,22 @@ mod tests {
         let promise2 = parallel_writer.write_record_async(data2.clone()).unwrap();
         let promise3 = parallel_writer.write_record_async(data3.clone()).unwrap();
 
+        // Channel to signal when tasks are ready to be processed
+        let (ready_tx, ready_rx) = mpsc::channel();
+        
         // Process tasks in a separate thread
         let writer_clone = parallel_writer.clone();
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(10));
+            // Signal that we're ready to process tasks
+            ready_tx.send(()).unwrap();
+            
+            // Process all tasks
             writer_clone.process_all_tasks().unwrap()
         });
 
+        // Wait until the worker thread is ready
+        ready_rx.recv().unwrap();
+        
         // Wait for promises to be fulfilled
         let result1 = promise1.wait().unwrap();
         let result2 = promise2.wait().unwrap();
@@ -730,5 +800,78 @@ mod tests {
         // Wait for processing thread to finish
         handle.join().unwrap();
     }
+    
+    #[test]
+    fn test_sync_and_async_writes() {
+        // Create a few in-memory writers
+        let mut writers = Vec::new();
+        for _ in 0..3 {
+            let cursor = Cursor::new(Vec::new());
+            let writer = RecordWriter::with_config(cursor, RecordWriterConfig::default()).unwrap();
+            writers.push(Box::new(writer));
+        }
 
+        // Create parallel writer
+        let parallel_writer = 
+            Arc::new(ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap());
+            
+        // Perform some synchronous writes
+        parallel_writer.write_record(b"sync record 1").unwrap();
+        parallel_writer.write_record(b"sync record 2").unwrap();
+        
+        // Queue some async writes
+        let data1 = Bytes::from(b"async record 1".to_vec());
+        let data2 = Bytes::from(b"async record 2".to_vec());
+        
+        let promise1 = parallel_writer.write_record_async(data1).unwrap();
+        let promise2 = parallel_writer.write_record_async(data2).unwrap();
+        
+        // Process all pending writes first
+        parallel_writer.process_all_tasks().unwrap();
+        
+        // Check promises
+        assert!(promise1.wait().unwrap().is_ok(), "First async write should succeed");
+        assert!(promise2.wait().unwrap().is_ok(), "Second async write should succeed");
+        
+        // Test async flush operation
+        let flush_promise = parallel_writer.flush_async().unwrap();
+        parallel_writer.process_all_tasks().unwrap();
+        assert!(flush_promise.wait().unwrap().is_ok(), "Async flush should succeed");
+        
+        // Test synchronous flush - should work without requiring process_all_tasks
+        parallel_writer.flush().unwrap();
+        
+        // Test async close operation
+        let close_promise = parallel_writer.close_async().unwrap();
+        parallel_writer.process_all_tasks().unwrap();
+        assert!(close_promise.wait().unwrap().is_ok(), "Async close should succeed");
+    }
+    
+    #[test]
+    fn test_sync_operations() {
+        // Create a few in-memory writers
+        let mut writers = Vec::new();
+        for _ in 0..3 {
+            let cursor = Cursor::new(Vec::new());
+            let writer = RecordWriter::with_config(cursor, RecordWriterConfig::default()).unwrap();
+            writers.push(Box::new(writer));
+        }
+
+        // Create parallel writer
+        let parallel_writer = ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+            
+        // Perform synchronous writes
+        parallel_writer.write_record(b"record 1").unwrap();
+        parallel_writer.write_record(b"record 2").unwrap();
+        parallel_writer.write_record(b"record 3").unwrap();
+        
+        // Perform synchronous flush directly - this should work without deadlock
+        parallel_writer.flush().unwrap();
+        
+        // Perform synchronous close directly - this should work without deadlock
+        parallel_writer.close().unwrap();
+        
+        // The queue should now be closed
+        assert!(parallel_writer.write_record(b"should fail").is_err());
+    }
 }

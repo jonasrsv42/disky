@@ -309,13 +309,14 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # use std::io::Cursor;
     /// # use bytes::Bytes;
     /// # use std::thread;
+    /// # use std::sync::Arc;
     /// # let mut writers = Vec::new();
     /// # for _ in 0..3 {
     /// #     let cursor = Cursor::new(Vec::new());
     /// #     let writer = RecordWriter::new(cursor).unwrap();
     /// #     writers.push(Box::new(writer));
     /// # }
-    /// # let parallel_writer = ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+    /// # let parallel_writer = Arc::new(ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap());
     /// # let data = Bytes::from(b"async record".to_vec());
     /// # parallel_writer.write_record_async(data).unwrap();
     ///
@@ -347,6 +348,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # use disky::writer::RecordWriter;
     /// # use std::io::Cursor;
     /// # use bytes::Bytes;
+    /// # use std::sync::Arc;
     /// # use std::thread;
     /// # let mut writers = Vec::new();
     /// # for _ in 0..3 {
@@ -354,7 +356,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// #     let writer = RecordWriter::new(cursor).unwrap();
     /// #     writers.push(Box::new(writer));
     /// # }
-    /// # let parallel_writer = ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+    /// # let parallel_writer = Arc::new(ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap());
     /// # for i in 0..5 {
     /// #     let data = Bytes::from(format!("record {}", i).into_bytes());
     /// #     parallel_writer.write_record_async(data).unwrap();
@@ -556,16 +558,6 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     }
 }
 
-// Make the Clone implementation for ParallelWriter
-impl<W: Write + Seek + Send + 'static> Clone for ParallelWriter<W> {
-    fn clone(&self) -> Self {
-        Self {
-            task_queue: Arc::clone(&self.task_queue),
-            resource_queue: Arc::clone(&self.resource_queue),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -587,7 +579,7 @@ mod tests {
 
         // Create parallel writer
         let parallel_writer =
-            ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap();
+            Arc::new(ParallelWriter::new(writers, ParallelWriterConfig::default()).unwrap());
 
         // Queue up some writes
         let data1 = Bytes::from(b"hello world".to_vec());
@@ -937,4 +929,3 @@ mod tests {
         }
     }
 }
-

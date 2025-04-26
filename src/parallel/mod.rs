@@ -11,10 +11,9 @@
 //! disky = { version = "0.1.0", features = ["parallel"] }
 //! ```
 
+pub mod promise;
 pub mod reader;
 pub mod writer;
-pub mod promise;
 
-pub(crate) mod task_queue;
 pub mod resource_pool;
-
+pub(crate) mod task_queue;

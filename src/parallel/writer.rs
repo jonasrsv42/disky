@@ -68,7 +68,7 @@ use std::sync::Arc;
 
 use crate::error::Result;
 use crate::parallel::promise::Promise;
-use crate::parallel::resource_pool::ResourceQueue;
+use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::task_queue::TaskQueue;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 use bytes::Bytes;
@@ -168,7 +168,7 @@ pub struct ParallelWriter<Sink: Write + Seek + Send + 'static> {
     task_queue: Arc<TaskQueue<Task>>,
 
     /// Queue of writer resources with active tracking
-    resource_queue: Arc<ResourceQueue<WriterResource<Sink>>>,
+    resource_queue: Arc<ResourcePool<WriterResource<Sink>>>,
 }
 
 impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
@@ -206,7 +206,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         _config: ParallelWriterConfig,
     ) -> Result<Self> {
         let task_queue = Arc::new(TaskQueue::new());
-        let resource_queue = Arc::new(ResourceQueue::new());
+        let resource_queue = Arc::new(ResourcePool::new());
 
         // Initialize the resource queue with the provided writers
         for (id, writer) in writers.into_iter().enumerate() {

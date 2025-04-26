@@ -6,7 +6,7 @@
 //!
 //! # Visitor Pattern
 //!
-//! The `ResourceQueue` uses the visitor pattern via its `process_resource` method
+//! The `ResourcePool` uses the visitor pattern via its `process_resource` method
 //! to ensure proper resource management. This approach has several advantages:
 //!
 //! - **Resource Safety**: Resources are automatically returned to the queue after
@@ -27,7 +27,7 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 
 /// Represents the operational state of the resource queue
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ResourceQueueState {
+pub enum ResourcePoolState {
     /// Normal operation - resources can be checked out and returned
     Normal,
     /// Queue is paused - resources can be returned but not checked out
@@ -44,10 +44,10 @@ pub enum ResourceQueueState {
 /// handles the complete resource lifecycle:
 ///
 /// ```rust,no_run
-/// # use disky::parallel::resource_pool::ResourceQueue;
+/// # use disky::parallel::resource_pool::ResourcePool;
 /// # use disky::error::Result;
 /// #
-/// let queue = ResourceQueue::new();
+/// let queue = ResourcePool::new();
 /// queue.add_resource("resource1".to_string()).unwrap();
 ///
 /// // Process a resource using the visitor pattern
@@ -78,32 +78,32 @@ pub enum ResourceQueueState {
 /// - Pause/resume operations with clean state transitions
 /// - Support for different operational states (Normal, Paused, Closed)
 #[derive(Debug)]
-pub struct ResourceQueue<T> {
+pub struct ResourcePool<T> {
     /// Internal state protected by mutex
-    inner: Mutex<ResourceQueueInner<T>>,
+    inner: Mutex<ResourcePoolInner<T>>,
     /// Condition variable for signaling state changes
     signal: Condvar,
 }
 
 /// Inner state of the resource queue, protected by a mutex
 #[derive(Debug)]
-struct ResourceQueueInner<T> {
+struct ResourcePoolInner<T> {
     /// Queue of available resources
     queue: VecDeque<T>,
     /// Count of resources that have been checked out
     active_count: usize,
     /// Operational state of the queue
-    state: ResourceQueueState,
+    state: ResourcePoolState,
 }
 
-impl<T> ResourceQueue<T> {
+impl<T> ResourcePool<T> {
     /// Create a new empty resource queue
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(ResourceQueueInner {
+            inner: Mutex::new(ResourcePoolInner {
                 queue: VecDeque::new(),
                 active_count: 0,
-                state: ResourceQueueState::Normal,
+                state: ResourcePoolState::Normal,
             }),
             signal: Condvar::new(),
         }
@@ -121,16 +121,16 @@ impl<T> ResourceQueue<T> {
 
         // Handle different queue states
         match inner.state {
-            ResourceQueueState::Normal => {
+            ResourcePoolState::Normal => {
                 // Add the resource to the queue
                 inner.queue.push_back(resource);
                 self.signal.notify_one();
                 Ok(())
             }
-            ResourceQueueState::Closed => Err(DiskyError::QueueClosed(
+            ResourcePoolState::Closed => Err(DiskyError::QueueClosed(
                 "Cannot add resources to a closed queue".to_string(),
             )),
-            ResourceQueueState::Paused => Err(DiskyError::Other(
+            ResourcePoolState::Paused => Err(DiskyError::Other(
                 "Cannot add resources while queue is paused".to_string(),
             )),
         }
@@ -138,7 +138,7 @@ impl<T> ResourceQueue<T> {
 
     /// Process a single resource from the queue using the visitor pattern
     ///
-    /// This is the core method of the `ResourceQueue` implementing the visitor pattern.
+    /// This is the core method of the `ResourcePool` implementing the visitor pattern.
     /// Rather than exposing separate checkout/return methods, this single method handles
     /// the complete resource lifecycle:
     ///
@@ -170,10 +170,10 @@ impl<T> ResourceQueue<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use disky::parallel::resource_pool::ResourceQueue;
+    /// # use disky::parallel::resource_pool::ResourcePool;
     /// # use disky::error::Result;
     /// #
-    /// let queue = ResourceQueue::new();
+    /// let queue = ResourcePool::new();
     /// queue.add_resource(1).unwrap();
     ///
     /// // Process a resource and get a transformed result
@@ -198,12 +198,12 @@ impl<T> ResourceQueue<T> {
             loop {
                 // Check queue state first
                 match inner.state {
-                    ResourceQueueState::Closed => {
+                    ResourcePoolState::Closed => {
                         return Err(DiskyError::QueueClosed(
                             "Resource queue is closed".to_string(),
                         ));
                     }
-                    ResourceQueueState::Paused => {
+                    ResourcePoolState::Paused => {
                         // Wait for state change
                         inner = self
                             .signal
@@ -211,7 +211,7 @@ impl<T> ResourceQueue<T> {
                             .map_err(|e| DiskyError::Other(e.to_string()))?;
                         continue;
                     }
-                    ResourceQueueState::Normal => {
+                    ResourcePoolState::Normal => {
                         // Check if resources are available
                         if !inner.queue.is_empty() {
                             break;
@@ -248,7 +248,7 @@ impl<T> ResourceQueue<T> {
                 .map_err(|e| DiskyError::Other(e.to_string()))?;
 
             // Return resource to queue if not closed
-            if inner.state != ResourceQueueState::Closed {
+            if inner.state != ResourcePoolState::Closed {
                 inner.queue.push_back(resource);
             }
 
@@ -256,7 +256,7 @@ impl<T> ResourceQueue<T> {
             inner.active_count = inner.active_count.saturating_sub(1);
 
             // Notify waiters if needed
-            if inner.state == ResourceQueueState::Paused && inner.active_count == 0 {
+            if inner.state == ResourcePoolState::Paused && inner.active_count == 0 {
                 // All resources returned during Paused state - notify waiters
                 self.signal.notify_all();
             } else {
@@ -271,16 +271,16 @@ impl<T> ResourceQueue<T> {
 
     fn wait_for_all<'a>(
         &'a self,
-        mut inner: MutexGuard<'a, ResourceQueueInner<T>>,
-    ) -> Result<MutexGuard<'a, ResourceQueueInner<T>>> {
+        mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
+    ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
         // Handle different initial states
         match inner.state {
-            ResourceQueueState::Closed => {
+            ResourcePoolState::Closed => {
                 return Err(DiskyError::QueueClosed(
                     "Cannot pause a closed queue".to_string(),
                 ));
             }
-            ResourceQueueState::Paused => {
+            ResourcePoolState::Paused => {
                 // Already paused, wait until state changes to Normal or Closed
                 loop {
                     inner = self
@@ -289,26 +289,26 @@ impl<T> ResourceQueue<T> {
                         .map_err(|e| DiskyError::Other(e.to_string()))?;
 
                     match inner.state {
-                        ResourceQueueState::Normal => {
+                        ResourcePoolState::Normal => {
                             // State changed to Normal, now we can set it to Paused
-                            inner.state = ResourceQueueState::Paused;
+                            inner.state = ResourcePoolState::Paused;
                             break;
                         }
-                        ResourceQueueState::Closed => {
+                        ResourcePoolState::Closed => {
                             return Err(DiskyError::QueueClosed(
                                 "Cannot pause a closed queue".to_string(),
                             ));
                         }
-                        ResourceQueueState::Paused => {
+                        ResourcePoolState::Paused => {
                             // Still paused, continue waiting
                             continue;
                         }
                     }
                 }
             }
-            ResourceQueueState::Normal => {
+            ResourcePoolState::Normal => {
                 // Set state to Paused
-                inner.state = ResourceQueueState::Paused;
+                inner.state = ResourcePoolState::Paused;
             }
         }
 
@@ -334,12 +334,12 @@ impl<T> ResourceQueue<T> {
             .map_err(|e| DiskyError::Other(e.to_string()))?;
 
         match inner.state {
-            ResourceQueueState::Closed => Err(DiskyError::QueueClosed(
+            ResourcePoolState::Closed => Err(DiskyError::QueueClosed(
                 "Queue is already closed".to_string(),
             )),
             _ => {
                 // Both Normal and Paused states can transition to Closed
-                inner.state = ResourceQueueState::Closed;
+                inner.state = ResourcePoolState::Closed;
                 self.signal.notify_all();
                 Ok(())
             }
@@ -358,12 +358,12 @@ impl<T> ResourceQueue<T> {
                 .map_err(|e| DiskyError::Other(e.to_string()))?;
 
             match inner.state {
-                ResourceQueueState::Closed => {
+                ResourcePoolState::Closed => {
                     return Err(DiskyError::QueueClosed(
                         "Cannot process resources; queue is already closed".to_string(),
                     ));
                 }
-                ResourceQueueState::Normal | ResourceQueueState::Paused => {
+                ResourcePoolState::Normal | ResourcePoolState::Paused => {
                     // These states are allowed to proceed
                     // We drop the lock here and call with_pause_process_resources below
                 }
@@ -371,13 +371,13 @@ impl<T> ResourceQueue<T> {
         }
 
         // If not closed, proceed with the process-then-close operation
-        self.internal_process_all_resources(f, ResourceQueueState::Closed)
+        self.internal_process_all_resources(f, ResourcePoolState::Closed)
     }
 
     fn internal_process_all_resources<F>(
         &self,
         mut f: F,
-        final_state: ResourceQueueState,
+        final_state: ResourcePoolState,
     ) -> Result<()>
     where
         F: FnMut(&mut T) -> Result<()>,
@@ -394,7 +394,7 @@ impl<T> ResourceQueue<T> {
         // Step 2: Process each resource in the queue
         let mut process_result = Ok(());
 
-        if inner.state != ResourceQueueState::Closed {
+        if inner.state != ResourcePoolState::Closed {
             let mut last_error = None;
 
             // Process each resource in the queue
@@ -415,7 +415,7 @@ impl<T> ResourceQueue<T> {
         }
 
         // Step 3: Set final state (unless there was an error and we're trying to close)
-        if process_result.is_ok() || final_state != ResourceQueueState::Closed {
+        if process_result.is_ok() || final_state != ResourcePoolState::Closed {
             inner.state = final_state;
 
             // Notify waiters about the state change
@@ -430,7 +430,7 @@ impl<T> ResourceQueue<T> {
     where
         F: FnMut(&mut T) -> Result<()>,
     {
-        self.internal_process_all_resources(f, ResourceQueueState::Normal)
+        self.internal_process_all_resources(f, ResourcePoolState::Normal)
     }
 
     /// Get the current number of resources in the queue
@@ -456,7 +456,7 @@ impl<T> ResourceQueue<T> {
 
     /// Get the current state of the queue
     #[cfg(test)]
-    pub(crate) fn get_state(&self) -> Result<ResourceQueueState> {
+    pub(crate) fn get_state(&self) -> Result<ResourcePoolState> {
         let inner = self
             .inner
             .lock()
@@ -488,7 +488,7 @@ impl<T> ResourceQueue<T> {
             .map_err(|e| DiskyError::Other(e.to_string()))?;
 
         // Only allow draining in Normal state
-        if inner.state != ResourceQueueState::Normal {
+        if inner.state != ResourcePoolState::Normal {
             return Err(DiskyError::Other(format!(
                 "Cannot drain resources when queue is in {:?} state",
                 inner.state
@@ -524,10 +524,10 @@ mod tests {
 
     #[test]
     fn test_basic_resource_pool_operations() {
-        let queue = ResourceQueue::new();
+        let queue = ResourcePool::new();
 
         // Test initial state
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Normal);
+        assert_eq!(queue.get_state().unwrap(), ResourcePoolState::Normal);
         assert_eq!(queue.available_count().unwrap(), 0);
         assert_eq!(queue.active_count().unwrap(), 0);
         assert!(queue.is_empty().unwrap());
@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn test_process_all_resources() {
-        let queue = ResourceQueue::new();
+        let queue = ResourcePool::new();
 
         // Add resources
         queue.add_resource(1).unwrap();
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_with_pause_process_all_resources() {
-        let queue = Arc::new(ResourceQueue::new());
+        let queue = Arc::new(ResourcePool::new());
 
         // Add resources
         queue.add_resource(1).unwrap();
@@ -625,7 +625,7 @@ mod tests {
         handle.join().unwrap();
 
         // Verify the state is Normal after processing
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Normal);
+        assert_eq!(queue.get_state().unwrap(), ResourcePoolState::Normal);
 
         // Verify resources - some might be multiplied by 2, some by 10 (if processed after)
         let resources = queue.drain_all_resources().unwrap();
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_with_pause_process_all_resources_error_handling() {
-        let queue = ResourceQueue::new();
+        let queue = ResourcePool::new();
 
         // Add resources
         queue.add_resource(1).unwrap();
@@ -659,7 +659,7 @@ mod tests {
         assert!(result.is_err());
 
         // Verify state is back to Normal even after error
-        assert_eq!(queue.get_state().unwrap(), ResourceQueueState::Normal);
+        assert_eq!(queue.get_state().unwrap(), ResourcePoolState::Normal);
 
         // Some resources should still be processed
         let resources = queue.drain_all_resources().unwrap();
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_multi_threaded_processing() {
-        let queue = Arc::new(ResourceQueue::new());
+        let queue = Arc::new(ResourcePool::new());
         let worker_count = 3;
         let tasks_per_worker = 3;
 

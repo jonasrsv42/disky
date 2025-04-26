@@ -23,7 +23,9 @@
 
 use crate::error::{DiskyError, Result};
 use std::collections::VecDeque;
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::mem::ManuallyDrop;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// Represents the operational state of the resource queue
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,53 +38,12 @@ pub enum ResourcePoolState {
     Closed,
 }
 
-/// A queue of resources with tracking for resources that are currently in use
-///
-/// This specialized queue is designed for managing a pool of resources in a thread-safe
-/// manner using the visitor pattern. Instead of exposing direct checkout/return methods
-/// that could lead to resource leaks, it provides a `process_resource` method that
-/// handles the complete resource lifecycle:
-///
-/// ```rust,no_run
-/// # use disky::parallel::resource_pool::ResourcePool;
-/// # use disky::error::Result;
-/// #
-/// let queue = ResourcePool::new();
-/// queue.add_resource("resource1".to_string()).unwrap();
-///
-/// // Process a resource using the visitor pattern
-/// let result = queue.process_resource(|resource| {
-///     // Work with the resource here
-///     println!("Processing {}", resource);
-///     // The resource is automatically returned to the queue when this closure completes
-///     Ok(42) // Return any type you want
-/// }).unwrap();
-/// ```
-///
-/// # Benefits of the Visitor Pattern
-///
-/// - **Automatic Resource Management**: Resources are automatically returned to the queue
-///   after processing, even if errors occur during processing
-///
-/// - **Deadlock Avoidance**: Resources cannot be "forgotten" outside the queue, which
-///   reduces the risk of deadlocks in concurrent code
-///
-/// - **State Safety**: State transitions (Normal → Paused → Closed) are properly coordinated
-///   with active resource tracking
-///
-/// - **Concurrency Support**: Multiple threads can safely process resources from the same queue
-///
-/// Key features:
-/// - Thread-safe processing of resources using the visitor pattern
-/// - Atomic tracking of active resources
-/// - Pause/resume operations with clean state transitions
-/// - Support for different operational states (Normal, Paused, Closed)
 #[derive(Debug)]
 pub struct ResourcePool<T> {
     /// Internal state protected by mutex
-    inner: Mutex<ResourcePoolInner<T>>,
+    inner: Arc<Mutex<ResourcePoolInner<T>>>,
     /// Condition variable for signaling state changes
-    signal: Condvar,
+    signal: Arc<Condvar>,
 }
 
 /// Inner state of the resource queue, protected by a mutex
@@ -96,16 +57,85 @@ struct ResourcePoolInner<T> {
     state: ResourcePoolState,
 }
 
+pub struct Resource<T> {
+    resource: ManuallyDrop<T>,
+
+    forget: bool,
+
+    inner: Arc<Mutex<ResourcePoolInner<T>>>,
+    signal: Arc<Condvar>,
+}
+
+impl<T> Resource<T> {
+    fn new(resource: T, inner: Arc<Mutex<ResourcePoolInner<T>>>, signal: Arc<Condvar>) -> Self {
+        Self {
+            resource: ManuallyDrop::new(resource),
+            forget: false,
+            inner,
+            signal,
+        }
+    }
+
+    pub fn forget(&mut self) {
+        self.forget = true;
+    }
+}
+
+impl<T> Deref for Resource<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resource
+    }
+}
+
+impl<T> DerefMut for Resource<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.resource
+    }
+}
+
+impl<T> Drop for Resource<T> {
+    fn drop(&mut self) {
+        // Second scope: return the resource and update state
+        {
+            let mut inner = self
+                .inner
+                .lock()
+                .expect("Unable to drop `Resource` due to MutexError");
+
+            // Decrement active count
+            inner.active_count = inner.active_count.saturating_sub(1);
+
+            // SAFETY: this is safe because we do not access `self.member` any more
+            let resource = unsafe { ManuallyDrop::take(&mut self.resource) };
+
+            if !self.forget {
+                inner.queue.push_back(resource)
+            }
+
+            // Notify waiters if needed
+            if inner.state == ResourcePoolState::Paused && inner.active_count == 0 {
+                // All resources returned during Paused state - notify waiters
+                self.signal.notify_all();
+            } else {
+                // Normal notification for new resource availability
+                self.signal.notify_one();
+            }
+        }
+    }
+}
+
 impl<T> ResourcePool<T> {
     /// Create a new empty resource queue
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(ResourcePoolInner {
+            inner: Arc::new(Mutex::new(ResourcePoolInner {
                 queue: VecDeque::new(),
                 active_count: 0,
                 state: ResourcePoolState::Normal,
-            }),
-            signal: Condvar::new(),
+            })),
+            signal: Arc::new(Condvar::new()),
         }
     }
 
@@ -136,140 +166,60 @@ impl<T> ResourcePool<T> {
         }
     }
 
-    /// Process a single resource from the queue using the visitor pattern
-    ///
-    /// This is the core method of the `ResourcePool` implementing the visitor pattern.
-    /// Rather than exposing separate checkout/return methods, this single method handles
-    /// the complete resource lifecycle:
-    ///
-    /// 1. Waits for an available resource in Normal state
-    /// 2. Marks the resource as active
-    /// 3. Calls the provided function with the resource
-    /// 4. Ensures the resource is returned to the queue, even if processing fails
-    /// 5. Returns the result of the processing function
-    ///
-    /// # How the Visitor Pattern Prevents Deadlocks
-    ///
-    /// The visitor pattern is especially valuable when implementing functionality like the
-    /// `pause_and_wait_for_all` method. Without the visitor pattern, clients could forget
-    /// to return resources to the queue, leading to:
-    ///
-    /// - Resource leaks (resources never returned to the queue)
-    /// - Deadlocks (when `pause_and_wait_for_all` waits indefinitely for resources)
-    /// - Incorrect resource counts (when tracking active resources)
-    ///
-    /// By encapsulating the entire checkout/process/return cycle in a single method call,
-    /// the visitor pattern eliminates these risks.
-    ///
-    /// # Arguments
-    /// * `f` - Function to apply to the resource; receives a mutable reference
-    ///
-    /// # Returns
-    /// * The result of applying the function to the resource
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # use disky::parallel::resource_pool::ResourcePool;
-    /// # use disky::error::Result;
-    /// #
-    /// let queue = ResourcePool::new();
-    /// queue.add_resource(1).unwrap();
-    ///
-    /// // Process a resource and get a transformed result
-    /// let doubled = queue.process_resource(|num| {
-    ///     Ok(*num * 2)
-    /// }).unwrap();
-    ///
-    /// assert_eq!(doubled, 2);
-    /// ```
-    pub fn process_resource<F, R>(&self, f: F) -> Result<R>
-    where
-        F: FnOnce(&mut T) -> Result<R>,
-    {
+    pub fn get_resource(&self) -> Result<Resource<T>> {
         // First scope: get a resource and mark it as active
-        let mut resource = {
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|e| DiskyError::Other(e.to_string()))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| DiskyError::Other(e.to_string()))?;
 
-            // Wait until we have a resource and are in Normal state
-            loop {
-                // Check queue state first
-                match inner.state {
-                    ResourcePoolState::Closed => {
-                        return Err(DiskyError::QueueClosed(
-                            "Resource queue is closed".to_string(),
-                        ));
-                    }
-                    ResourcePoolState::Paused => {
-                        // Wait for state change
-                        inner = self
-                            .signal
-                            .wait(inner)
-                            .map_err(|e| DiskyError::Other(e.to_string()))?;
-                        continue;
-                    }
-                    ResourcePoolState::Normal => {
-                        // Check if resources are available
-                        if !inner.queue.is_empty() {
-                            break;
-                        }
-                        // Wait for resources
-                        inner = self
-                            .signal
-                            .wait(inner)
-                            .map_err(|e| DiskyError::Other(e.to_string()))?;
-                    }
+        // Wait until we have a resource and are in Normal state
+        loop {
+            // Check queue state first
+            match inner.state {
+                ResourcePoolState::Closed => {
+                    return Err(DiskyError::QueueClosed(
+                        "Resource queue is closed".to_string(),
+                    ));
                 }
-            }
-
-            // Get a resource from the queue (we should have one now)
-            let resource = inner.queue.pop_front().ok_or_else(|| {
-                DiskyError::Other("Empty queue after checking. Race condition?".to_string())
-            })?;
-
-            // Increment active count
-            inner.active_count += 1;
-
-            // Return the resource outside the lock scope
-            resource
-        };
-
-        // Process the resource outside the lock to avoid deadlocks
-        let processing_result = f(&mut resource);
-
-        // Second scope: return the resource and update state
-        {
-            let mut inner = self
-                .inner
-                .lock()
-                .map_err(|e| DiskyError::Other(e.to_string()))?;
-
-            // Return resource to queue if not closed
-            if inner.state != ResourcePoolState::Closed {
-                inner.queue.push_back(resource);
-            }
-
-            // Decrement active count
-            inner.active_count = inner.active_count.saturating_sub(1);
-
-            // Notify waiters if needed
-            if inner.state == ResourcePoolState::Paused && inner.active_count == 0 {
-                // All resources returned during Paused state - notify waiters
-                self.signal.notify_all();
-            } else {
-                // Normal notification for new resource availability
-                self.signal.notify_one();
+                ResourcePoolState::Paused => {
+                    // Wait for state change
+                    inner = self
+                        .signal
+                        .wait(inner)
+                        .map_err(|e| DiskyError::Other(e.to_string()))?;
+                    continue;
+                }
+                ResourcePoolState::Normal => {
+                    // Check if resources are available
+                    if !inner.queue.is_empty() {
+                        break;
+                    }
+                    // Wait for resources
+                    inner = self
+                        .signal
+                        .wait(inner)
+                        .map_err(|e| DiskyError::Other(e.to_string()))?;
+                }
             }
         }
 
-        // Return the result of processing
-        processing_result
+        // Get a resource from the queue (we should have one now)
+        let resource = inner.queue.pop_front().ok_or_else(|| {
+            DiskyError::Other("Empty queue after checking. Race condition?".to_string())
+        })?;
+
+        // Increment active count
+        inner.active_count += 1;
+
+        Ok(Resource::new(
+            resource,
+            self.inner.clone(),
+            self.signal.clone(),
+        ))
     }
 
-    fn wait_for_all<'a>(
+    fn wait_for_all_resources<'a>(
         &'a self,
         mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
     ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
@@ -389,7 +339,7 @@ impl<T> ResourcePool<T> {
             .map_err(|e| DiskyError::Other(e.to_string()))?;
 
         // Step 1: Wait for all active resources to return
-        inner = self.wait_for_all(inner)?;
+        inner = self.wait_for_all_resources(inner)?;
 
         // Step 2: Process each resource in the queue
         let mut process_result = Ok(());
@@ -541,17 +491,11 @@ mod tests {
         assert_eq!(queue.total_count().unwrap(), 3);
         assert!(!queue.is_empty().unwrap());
 
-        // Process a resource
-        let result = queue
-            .process_resource(|n| {
-                assert!(*n >= 1 && *n <= 3);
-                Ok(*n * 2)
-            })
-            .unwrap();
-
-        assert!(result >= 2 && result <= 6);
+        assert_eq!(*queue.get_resource().unwrap(), 1);
         assert_eq!(queue.available_count().unwrap(), 3); // Resource returned to queue
         assert_eq!(queue.active_count().unwrap(), 0);
+        assert_eq!(*queue.get_resource().unwrap(), 2);
+        assert_eq!(*queue.get_resource().unwrap(), 3);
 
         // Drain all resources
         let resources = queue.drain_all_resources().unwrap();
@@ -599,10 +543,7 @@ mod tests {
             resource_attempt_tx.send(()).unwrap();
 
             // This should block until the with_pause_process_all_resources completes
-            let result = queue_clone.process_resource(|n| {
-                *n *= 10; // Different multiplier to verify which processing happened
-                Ok(())
-            });
+            let result = queue_clone.get_resource();
 
             assert!(result.is_ok(), "Process after pause/resume should succeed");
         });
@@ -688,10 +629,7 @@ mod tests {
 
             let handle = thread::spawn(move || {
                 for _ in 0..tasks_per_worker {
-                    let result = queue_clone.process_resource(|n| {
-                        // Process the resource
-                        Ok(*n)
-                    });
+                    let result = queue_clone.get_resource();
                     assert!(result.is_ok());
 
                     // Signal task completion

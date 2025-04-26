@@ -295,8 +295,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// ```
     pub fn write_record(&self, data: &[u8]) -> Result<()> {
         // Process a resource by writing the record to it
-        self.resource_queue
-            .process_resource(|resource| resource.writer.write_record(data))
+        let mut resource = self.resource_queue.get_resource()?;
+        resource.writer.write_record(data)
     }
 
     /// Process a single task

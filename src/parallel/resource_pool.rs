@@ -1,4 +1,3 @@
-
 use crate::error::{DiskyError, Result};
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
@@ -45,8 +44,8 @@ pub struct ResourcePool<T> {
 struct ResourcePoolInner<T> {
     /// Queue of available resources
     queue: VecDeque<T>,
-    /// Count of resources that have been checked out
-    active_count: usize,
+    /// Count of resources that have been borrowed at this moment in time.
+    borrows: usize,
     /// Operational state of the pool
     state: ResourcePoolState,
 }
@@ -64,7 +63,7 @@ pub struct Resource<T> {
 
     /// Reference to the resource pool's inner state
     inner: Arc<Mutex<ResourcePoolInner<T>>>,
-    
+
     /// Reference to the condition variable for signaling resource availability
     signal: Arc<Condvar>,
 }
@@ -115,7 +114,7 @@ impl<T> Drop for Resource<T> {
                 .expect("Unable to drop `Resource` due to MutexError");
 
             // Decrement active count
-            inner.active_count = inner.active_count.saturating_sub(1);
+            inner.borrows = inner.borrows.saturating_sub(1);
 
             // SAFETY: this is safe because we do not access `self.member` any more
             let resource = unsafe { ManuallyDrop::take(&mut self.resource) };
@@ -125,7 +124,7 @@ impl<T> Drop for Resource<T> {
             }
 
             // Notify waiters if needed
-            if inner.state == ResourcePoolState::Suspended && inner.active_count == 0 {
+            if inner.state == ResourcePoolState::Suspended && inner.borrows == 0 {
                 // All resources returned during Suspended state - notify waiters
                 self.signal.notify_all();
             } else {
@@ -136,16 +135,32 @@ impl<T> Drop for Resource<T> {
     }
 }
 
+#[inline]
+fn shutdown_err(err: &str) -> DiskyError {
+    DiskyError::QueueClosed(err.to_string())
+}
+
 impl<T> ResourcePool<T> {
     /// Acquires the inner lock and maps mutex errors to DiskyError
     ///
     /// This is a helper function to reduce code duplication for lock acquisition.
+    #[inline]
     fn acquire_lock(&self) -> Result<MutexGuard<ResourcePoolInner<T>>> {
         self.inner
             .lock()
             .map_err(|e| DiskyError::Other(e.to_string()))
     }
-    
+
+    #[inline]
+    fn await_signal<'a>(
+        &'a self,
+        inner: MutexGuard<'a, ResourcePoolInner<T>>,
+    ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
+        self.signal
+            .wait(inner)
+            .map_err(|e| DiskyError::Other(e.to_string()))
+    }
+
     /// Create a new empty resource pool
     ///
     /// Initializes a new ResourcePool in the Active state with no resources.
@@ -167,7 +182,7 @@ impl<T> ResourcePool<T> {
         Self {
             inner: Arc::new(Mutex::new(ResourcePoolInner {
                 queue: VecDeque::new(),
-                active_count: 0,
+                borrows: 0,
                 state: ResourcePoolState::Active,
             })),
             signal: Arc::new(Condvar::new()),
@@ -196,11 +211,11 @@ impl<T> ResourcePool<T> {
                 self.signal.notify_one();
                 Ok(())
             }
-            ResourcePoolState::Shutdown => Err(DiskyError::QueueClosed(
-                "Cannot add resources to a shutdown queue".to_string(),
-            )),
+            ResourcePoolState::Shutdown => {
+                Err(shutdown_err("Cannot add resources to a shutdown pool"))
+            }
             ResourcePoolState::Suspended => Err(DiskyError::Other(
-                "Cannot add resources while queue is suspended".to_string(),
+                "Cannot add resources while pool is suspended".to_string(),
             )),
         }
     }
@@ -208,7 +223,7 @@ impl<T> ResourcePool<T> {
     /// Get a resource from the pool
     ///
     /// This method will attempt to get a resource from the pool. If the pool
-    /// is empty, it will block until a resource becomes available. If the pool 
+    /// is empty, it will block until a resource becomes available. If the pool
     /// is suspended, it will block until the pool returns to Active state. If the
     /// pool is shutdown, it will return an error immediately.
     ///
@@ -221,53 +236,32 @@ impl<T> ResourcePool<T> {
     /// * The pool is empty (until a resource is returned)
     /// * The pool is suspended (until it returns to Active state)
     pub fn get_resource(&self) -> Result<Resource<T>> {
-        // First scope: get a resource and mark it as active
         let mut inner = self.acquire_lock()?;
 
-        // Wait until we have a resource and are in Active state
         loop {
-            // Check queue state first
             match inner.state {
                 ResourcePoolState::Shutdown => {
-                    return Err(DiskyError::QueueClosed(
-                        "Resource queue is shutdown".to_string(),
-                    ));
-                }
-                ResourcePoolState::Suspended => {
-                    // Wait for state change
-                    inner = self
-                        .signal
-                        .wait(inner)
-                        .map_err(|e| DiskyError::Other(e.to_string()))?;
-                    continue;
+                    return Err(shutdown_err("Resource queue is shutdown"));
                 }
                 ResourcePoolState::Active => {
-                    // Check if resources are available
-                    if !inner.queue.is_empty() {
-                        break;
+                    if let Some(resource) = inner.queue.pop_front() {
+                        // Got a resource, increment borrows and return
+                        inner.borrows += 1;
+                        return Ok(Resource::new(
+                            resource,
+                            self.inner.clone(),
+                            self.signal.clone(),
+                        ));
                     }
-                    // Wait for resources
-                    inner = self
-                        .signal
-                        .wait(inner)
-                        .map_err(|e| DiskyError::Other(e.to_string()))?;
+                    // No resources available, need to wait
+                    inner = self.await_signal(inner)?;
+                }
+                ResourcePoolState::Suspended => {
+                    // Wait for state to change
+                    inner = self.await_signal(inner)?;
                 }
             }
         }
-
-        // Get a resource from the queue (we should have one now)
-        let resource = inner.queue.pop_front().ok_or_else(|| {
-            DiskyError::Other("Empty queue after checking. Race condition?".to_string())
-        })?;
-
-        // Increment active count
-        inner.active_count += 1;
-
-        Ok(Resource::new(
-            resource,
-            self.inner.clone(),
-            self.signal.clone(),
-        ))
     }
 
     /// Wait for all resources to be returned to the pool and set state to Suspended
@@ -293,17 +287,12 @@ impl<T> ResourcePool<T> {
         // Handle different initial states
         match inner.state {
             ResourcePoolState::Shutdown => {
-                return Err(DiskyError::QueueClosed(
-                    "Cannot suspend a shutdown queue".to_string(),
-                ));
+                return Err(shutdown_err("Cannot suspend a shutdown queue"));
             }
             ResourcePoolState::Suspended => {
                 // Already suspended, wait until state changes to Active or Shutdown
                 loop {
-                    inner = self
-                        .signal
-                        .wait(inner)
-                        .map_err(|e| DiskyError::Other(e.to_string()))?;
+                    inner = self.await_signal(inner)?;
 
                     match inner.state {
                         ResourcePoolState::Active => {
@@ -312,9 +301,7 @@ impl<T> ResourcePool<T> {
                             break;
                         }
                         ResourcePoolState::Shutdown => {
-                            return Err(DiskyError::QueueClosed(
-                                "Cannot suspend a shutdown queue".to_string(),
-                            ));
+                            return Err(shutdown_err("Cannot suspend a shutdown queue"));
                         }
                         ResourcePoolState::Suspended => {
                             // Still suspended, continue waiting
@@ -330,11 +317,8 @@ impl<T> ResourcePool<T> {
         }
 
         // Wait until all active resources have been returned
-        while inner.active_count > 0 {
-            inner = self
-                .signal
-                .wait(inner)
-                .map_err(|e| DiskyError::Other(e.to_string()))?;
+        while inner.borrows > 0 {
+            inner = self.await_signal(inner)?;
         }
 
         Ok(inner)
@@ -348,9 +332,7 @@ impl<T> ResourcePool<T> {
         let mut inner = self.acquire_lock()?;
 
         match inner.state {
-            ResourcePoolState::Shutdown => Err(DiskyError::QueueClosed(
-                "Pool is already shutdown".to_string(),
-            )),
+            ResourcePoolState::Shutdown => Err(shutdown_err("Pool is already shutdown")),
             _ => {
                 // Both Active and Suspended states can transition to Shutdown
                 inner.state = ResourcePoolState::Shutdown;
@@ -385,8 +367,8 @@ impl<T> ResourcePool<T> {
         // Check if the queue is already shutdown
         match inner.state {
             ResourcePoolState::Shutdown => {
-                return Err(DiskyError::QueueClosed(
-                    "Cannot process resources; pool is already shutdown".to_string(),
+                return Err(shutdown_err(
+                    "Cannot process resources; pool is already shutdown",
                 ));
             }
             ResourcePoolState::Active | ResourcePoolState::Suspended => {
@@ -445,8 +427,8 @@ impl<T> ResourcePool<T> {
                 process_result = Err(e);
             }
         } else {
-            process_result = Err(DiskyError::QueueClosed(
-                "Resource pool is shutdown".to_string(),
+            process_result = Err(shutdown_err(
+                "Resource pool is shutdown"
             ));
         }
 
@@ -482,7 +464,7 @@ impl<T> ResourcePool<T> {
     {
         // Acquire lock for the entire operation
         let inner = self.acquire_lock()?;
-            
+
         self.internal_process_all_resources(f, ResourcePoolState::Active, inner)
     }
 
@@ -527,10 +509,10 @@ impl<T> ResourcePool<T> {
     /// * `Ok(usize)` - The number of currently checked out resources
     /// * `Err` - If an error occurred while accessing the pool
     #[cfg(test)]
-    pub(crate) fn active_count(&self) -> Result<usize> {
+    pub(crate) fn borrows(&self) -> Result<usize> {
         let inner = self.acquire_lock()?;
 
-        Ok(inner.active_count)
+        Ok(inner.borrows)
     }
 
     /// Get all resources from the pool, emptying it in the process
@@ -571,14 +553,14 @@ impl<T> ResourcePool<T> {
     pub fn total_count(&self) -> Result<usize> {
         let inner = self.acquire_lock()?;
 
-        Ok(inner.queue.len() + inner.active_count)
+        Ok(inner.queue.len() + inner.borrows)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, mpsc};
+    use std::sync::{mpsc, Arc};
     use std::thread;
 
     #[test]
@@ -588,7 +570,7 @@ mod tests {
         // Test initial state
         assert_eq!(queue.get_state().unwrap(), ResourcePoolState::Active);
         assert_eq!(queue.available_count().unwrap(), 0);
-        assert_eq!(queue.active_count().unwrap(), 0);
+        assert_eq!(queue.borrows().unwrap(), 0);
         assert!(queue.is_empty().unwrap());
 
         // Add resources
@@ -602,7 +584,7 @@ mod tests {
 
         assert_eq!(*queue.get_resource().unwrap(), 1);
         assert_eq!(queue.available_count().unwrap(), 3); // Resource returned to queue
-        assert_eq!(queue.active_count().unwrap(), 0);
+        assert_eq!(queue.borrows().unwrap(), 0);
         assert_eq!(*queue.get_resource().unwrap(), 2);
         assert_eq!(*queue.get_resource().unwrap(), 3);
 
@@ -719,75 +701,77 @@ mod tests {
     #[test]
     fn test_state_transitions() {
         let pool = ResourcePool::<i32>::new();
-        
+
         // Add some resources
         pool.add_resource(1).unwrap();
         pool.add_resource(2).unwrap();
-        
+
         // Test transition to Suspended
         let (tx1, rx1) = mpsc::channel();
         let (tx2, rx2) = mpsc::channel();
-        
+
         let pool_clone = Arc::new(pool);
         let thread_pool = Arc::clone(&pool_clone);
-        
+
         // Thread that will attempt to get a resource while we're in Suspended state
         let handle = thread::spawn(move || {
             // Signal that we're ready to try to get a resource
             tx1.send(()).unwrap();
-            
+
             // Wait for main thread to signal it's moved to Suspended state
             rx2.recv().unwrap();
-            
+
             // This will block until the pool returns to Active state
             let result = thread_pool.get_resource();
-            
+
             // Return whether we got a resource successfully
             result.is_ok()
         });
-        
+
         // Wait for the thread to be ready
         rx1.recv().unwrap();
-        
+
         // Process resources, which will move to Suspended temporarily
-        pool_clone.process_all_resources(|n| {
-            *n *= 10;
-            Ok(())
-        }).unwrap();
-        
+        pool_clone
+            .process_all_resources(|n| {
+                *n *= 10;
+                Ok(())
+            })
+            .unwrap();
+
         // Signal the thread to continue
         tx2.send(()).unwrap();
-        
+
         // Thread should succeed in getting a resource
         assert!(handle.join().unwrap());
-        
+
         // Check resources were processed
         let resources = pool_clone.drain_all_resources().unwrap();
         for r in &resources {
             assert!(*r == 10 || *r == 20);
         }
-        
+
         // Test transition to Shutdown
         pool_clone.close().unwrap();
         assert_eq!(pool_clone.get_state().unwrap(), ResourcePoolState::Shutdown);
-        
+
         // Operations should fail when shutdown
         assert!(pool_clone.add_resource(3).is_err());
         assert!(pool_clone.get_resource().is_err());
         assert!(pool_clone.process_all_resources(|_| Ok(())).is_err());
     }
-    
+
     #[test]
     fn test_resource_forget() {
         let pool = ResourcePool::new();
-        
+
         // Add resources
         pool.add_resource(1).unwrap();
         pool.add_resource(2).unwrap();
         pool.add_resource(3).unwrap();
-        
+
         assert_eq!(pool.available_count().unwrap(), 3);
-        
+
         // Get a resource and forget it
         {
             let mut resource = pool.get_resource().unwrap();
@@ -795,18 +779,18 @@ mod tests {
             resource.forget();
             // Resource will be dropped here but not returned to pool
         }
-        
+
         // Get another resource and let it auto-return
         {
             let resource = pool.get_resource().unwrap();
             assert_eq!(*resource, 2);
             // Resource will be dropped here and returned to pool
         }
-        
+
         // Check counts
         assert_eq!(pool.available_count().unwrap(), 2);
         assert_eq!(pool.total_count().unwrap(), 2);
-        
+
         // The forgotten resource should be gone, and the remaining ones should be 2 and 3
         let resources = pool.drain_all_resources().unwrap();
         assert_eq!(resources.len(), 2);
@@ -862,6 +846,6 @@ mod tests {
 
         // Resources should all be back in the queue
         assert_eq!(queue.available_count().unwrap(), 10);
-        assert_eq!(queue.active_count().unwrap(), 0);
+        assert_eq!(queue.borrows().unwrap(), 0);
     }
 }

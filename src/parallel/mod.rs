@@ -13,6 +13,7 @@
 
 pub mod promise;
 pub mod reader;
+pub mod sharding;
 pub mod writer;
 
 pub mod resource_pool;

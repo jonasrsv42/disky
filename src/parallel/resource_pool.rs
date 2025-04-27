@@ -157,6 +157,11 @@ fn shutdown_err(err: &str) -> DiskyError {
     DiskyError::QueueClosed(err.to_string())
 }
 
+#[inline]
+fn is_destitute_pool<T>(inner: &MutexGuard<ResourcePoolInner<T>>) -> bool {
+    return (inner.borrows + inner.queue.len()) == 0;
+}
+
 impl<T> ResourcePool<T> {
     /// Acquires the inner lock and maps mutex errors to DiskyError
     ///
@@ -255,6 +260,13 @@ impl<T> ResourcePool<T> {
     pub fn get_resource(&self) -> Result<Resource<T>> {
         let mut inner = self.acquire_lock()?;
 
+        if is_destitute_pool(&inner) {
+            // In theory  we could hope that resources become available at  some point. But there
+            // is no known use-case for this now and this is also a easily triggered deadlock so 
+            // we throw an error for now.
+            return Err(DiskyError::Other("Cannot request resource from destitute pool.".to_string()))
+        }
+
         loop {
             match inner.state {
                 ResourcePoolState::Shutdown => {
@@ -305,14 +317,14 @@ impl<T> ResourcePool<T> {
             if inner.state == ResourcePoolState::Shutdown {
                 return Err(shutdown_err("Cannot suspend a shutdown queue"));
             }
-            
+
             // Wait for state change
             inner = self.await_signal(inner)?;
         }
-        
+
         Ok(inner)
     }
-    
+
     /// Wait for all borrowed resources to be returned
     ///
     /// This helper function waits until all borrowed resources are returned to the pool.
@@ -333,13 +345,13 @@ impl<T> ResourcePool<T> {
         // Wait until all borrowed resources are returned
         while inner.borrows > 0 {
             inner = self.await_signal(inner)?;
-            
+
             // Check if pool was shutdown while waiting
             if inner.state == ResourcePoolState::Shutdown {
                 return Err(shutdown_err("Cannot suspend a shutdown queue"));
             }
         }
-        
+
         Ok(inner)
     }
 
@@ -365,20 +377,20 @@ impl<T> ResourcePool<T> {
             // Cannot transition from Shutdown
             ResourcePoolState::Shutdown => {
                 return Err(shutdown_err("Cannot suspend a shutdown queue"));
-            },
-            
+            }
+
             // From Active, directly set to Suspended
             ResourcePoolState::Active => {
                 inner.state = ResourcePoolState::Suspended;
-            },
-            
+            }
+
             // From Suspended, wait until Active then set to Suspended
             ResourcePoolState::Suspended => {
                 inner = self.await_active(inner)?;
                 inner.state = ResourcePoolState::Suspended;
             }
         }
-        
+
         Ok(inner)
     }
 
@@ -404,10 +416,10 @@ impl<T> ResourcePool<T> {
     ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
         // Step 1: Ensure pool is in Suspended state
         let inner = self.transition_to_suspended(inner)?;
-        
+
         // Step 2: Wait for all active resources to be returned
         let inner = self.await_all_resources_returned(inner)?;
-        
+
         Ok(inner)
     }
 
@@ -444,7 +456,7 @@ impl<T> ResourcePool<T> {
     ///
     /// # Blocking behavior
     /// This method blocks until all checked-out resources have been returned to the pool.
-    /// 
+    ///
     /// # Potential Deadlocks
     /// - **IMPORTANT**: Do not call this method from a thread that is already holding a resource from this pool.
     ///   Doing so will cause a deadlock because this method waits for all resources to be returned.
@@ -546,7 +558,7 @@ impl<T> ResourcePool<T> {
     ///
     /// # Blocking behavior
     /// This method blocks until all checked-out resources have been returned to the pool.
-    /// 
+    ///
     /// # Potential Deadlocks
     /// - **IMPORTANT**: Do not call this method from a thread that is already holding a resource from this pool.
     ///   Doing so will cause a deadlock because this method waits for all resources to be returned.
@@ -735,7 +747,6 @@ mod tests {
 
         // Wait for the thread to be ready to process
         resource_attempt_rx.recv().unwrap();
-
 
         // Process all resources with pause/resume handling
         queue
@@ -940,65 +951,66 @@ mod tests {
         assert_eq!(queue.available_count().unwrap(), 10);
         assert_eq!(queue.borrows().unwrap(), 0);
     }
-    
+
     #[test]
     fn test_proper_resource_release_with_process_all() {
         let pool = Arc::new(ResourcePool::new());
-        
+
         // Add some resources
         pool.add_resource(1).unwrap();
         pool.add_resource(2).unwrap();
         pool.add_resource(3).unwrap();
-        
+
         // Set up channels for thread synchronization
         let (start_tx, start_rx) = mpsc::channel();
         let (resource_acquired_tx, resource_acquired_rx) = mpsc::channel();
         let (process_ready_tx, process_ready_rx) = mpsc::channel();
         let (process_done_tx, process_done_rx) = mpsc::channel();
-        
+
         // Thread that will get a resource and hold it
         let pool_clone = Arc::clone(&pool);
         let handle = thread::spawn(move || {
             // Wait for signal to start
             start_rx.recv().unwrap();
-            
+
             // Get a resource
             let resource = pool_clone.get_resource().unwrap();
-            
+
             // Signal that we have a resource
             resource_acquired_tx.send(()).unwrap();
-            
+
             // Wait until the main thread is ready to process
             process_ready_rx.recv().unwrap();
-            
+
             // Drop the resource before processing starts
             drop(resource);
-            
+
             // Wait for processing to complete
             process_done_rx.recv().unwrap();
         });
-        
+
         // Start the thread
         start_tx.send(()).unwrap();
-        
+
         // Wait for the thread to acquire a resource
         resource_acquired_rx.recv().unwrap();
-        
+
         // Signal that we're ready to process
         process_ready_tx.send(()).unwrap();
-        
+
         // Now process all resources - this should work because the resource is released
         pool.process_all_resources(|n| {
             *n *= 2;
             Ok(())
-        }).unwrap();
-        
+        })
+        .unwrap();
+
         // Signal processing is done
         process_done_tx.send(()).unwrap();
-        
+
         // Wait for thread to complete
         handle.join().unwrap();
-        
+
         // Verify all resources were processed
         let resources = pool.drain_all_resources().unwrap();
         assert_eq!(resources.len(), 3);
@@ -1006,34 +1018,34 @@ mod tests {
             assert!(*r == 2 || *r == 4 || *r == 6);
         }
     }
-    
+
     #[test]
     #[ignore = "This test demonstrates a deadlock and should not be run in normal test suites"]
     fn test_deadlock_with_process_all() {
         let pool = Arc::new(ResourcePool::new());
-        
+
         // Add some resources
         pool.add_resource(1).unwrap();
         pool.add_resource(2).unwrap();
         pool.add_resource(3).unwrap();
-        
+
         // Set up channels for thread synchronization
         let (start_tx, start_rx) = mpsc::channel();
         let (resource_acquired_tx, resource_acquired_rx) = mpsc::channel();
         let (process_started_tx, process_started_rx) = mpsc::channel();
-        
+
         // Thread that will get a resource and hold it
         let pool_clone = Arc::clone(&pool);
         let handle = thread::spawn(move || {
             // Wait for signal to start
             start_rx.recv().unwrap();
-            
+
             // Get a resource and hold it
             let _resource = pool_clone.get_resource().unwrap();
-            
+
             // Signal that we have a resource
             resource_acquired_tx.send(()).unwrap();
-            
+
             // Wait until the processing starts (which will deadlock)
             match process_started_rx.recv_timeout(std::time::Duration::from_secs(1)) {
                 Ok(_) => {
@@ -1044,17 +1056,17 @@ mod tests {
                     // This is actually where we would end up in a real deadlock
                 }
             }
-            
+
             // Resource will be dropped here
         });
-        
+
         // Start the thread and wait for it to acquire a resource
         start_tx.send(()).unwrap();
         resource_acquired_rx.recv().unwrap();
-        
+
         // Signal that we're starting processing
         process_started_tx.send(()).unwrap();
-        
+
         // This would deadlock in a real scenario because the thread is holding a resource,
         // and process_all_resources waits for all resources to be returned.
         // For test purposes, we use a timeout to avoid an actual deadlock.
@@ -1069,7 +1081,7 @@ mod tests {
                 // Error occurred, possibly because we couldn't acquire lock or resources
             }
         }
-        
+
         // Wait for thread to complete
         handle.join().unwrap();
     }

@@ -736,8 +736,6 @@ mod tests {
         // Wait for the thread to be ready to process
         resource_attempt_rx.recv().unwrap();
 
-        // Small sleep to ensure the thread gets to the processing point
-        thread::sleep(std::time::Duration::from_millis(10));
 
         // Process all resources with pause/resume handling
         queue

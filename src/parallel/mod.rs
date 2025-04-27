@@ -17,3 +17,6 @@ pub mod writer;
 
 pub mod resource_pool;
 pub(crate) mod task_queue;
+
+#[cfg(test)]
+mod tests;

@@ -201,6 +201,12 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     ///     ParallelWriterConfig::default()
     /// ).unwrap();
     /// ```
+    
+    /// For testing purposes: Get access to the resource pool containing the writers
+    #[cfg(test)]
+    pub(crate) fn get_resource_pool(&self) -> &Arc<ResourcePool<WriterResource<Sink>>> {
+        &self.resource_queue
+    }
     pub fn new(
         writers: Vec<Box<RecordWriter<Sink>>>,
         _config: ParallelWriterConfig,

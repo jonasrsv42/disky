@@ -264,6 +264,107 @@ impl<T> ResourcePool<T> {
         }
     }
 
+    /// Wait until the pool is in Active state
+    ///
+    /// This helper function waits until the pool transitions from any state to Active.
+    /// It's used as part of suspending the pool when it's already in Suspended state.
+    ///
+    /// # Arguments
+    /// * `inner` - A MutexGuard holding the lock on the pool's inner state
+    ///
+    /// # Returns
+    /// * `Ok(MutexGuard)` - The MutexGuard with the inner state as Active
+    /// * `Err` - If the pool is shutdown or another error occurs
+    ///
+    /// # Blocking behavior
+    /// This method blocks until the pool transitions to Active state.
+    fn await_active<'a>(
+        &'a self,
+        mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
+    ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
+        // Wait until the pool is in Active state
+        while inner.state != ResourcePoolState::Active {
+            // If already in Shutdown, return error immediately
+            if inner.state == ResourcePoolState::Shutdown {
+                return Err(shutdown_err("Cannot suspend a shutdown queue"));
+            }
+            
+            // Wait for state change
+            inner = self.await_signal(inner)?;
+        }
+        
+        Ok(inner)
+    }
+    
+    /// Wait for all borrowed resources to be returned
+    ///
+    /// This helper function waits until all borrowed resources are returned to the pool.
+    ///
+    /// # Arguments
+    /// * `inner` - A MutexGuard holding the lock on the pool's inner state
+    ///
+    /// # Returns
+    /// * `Ok(MutexGuard)` - The MutexGuard with no borrowed resources
+    /// * `Err` - If the pool is shutdown or another error occurs
+    ///
+    /// # Blocking behavior
+    /// This method blocks until all resources are returned.
+    fn await_all_resources_returned<'a>(
+        &'a self,
+        mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
+    ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
+        // Wait until all borrowed resources are returned
+        while inner.borrows > 0 {
+            inner = self.await_signal(inner)?;
+            
+            // Check if pool was shutdown while waiting
+            if inner.state == ResourcePoolState::Shutdown {
+                return Err(shutdown_err("Cannot suspend a shutdown queue"));
+            }
+        }
+        
+        Ok(inner)
+    }
+
+    /// Transition the pool to Suspended state
+    ///
+    /// This helper function transitions the pool to Suspended state regardless of its current state.
+    /// If the pool is already in Suspended state, it waits until it becomes Active first.
+    ///
+    /// # Arguments
+    /// * `inner` - A MutexGuard holding the lock on the pool's inner state
+    ///
+    /// # Returns
+    /// * `Ok(MutexGuard)` - The MutexGuard with the inner state set to Suspended
+    /// * `Err` - If the pool is shutdown or another error occurs
+    ///
+    /// # Blocking behavior
+    /// This method may block if the pool is already in Suspended state.
+    fn transition_to_suspended<'a>(
+        &'a self,
+        mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
+    ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
+        match inner.state {
+            // Cannot transition from Shutdown
+            ResourcePoolState::Shutdown => {
+                return Err(shutdown_err("Cannot suspend a shutdown queue"));
+            },
+            
+            // From Active, directly set to Suspended
+            ResourcePoolState::Active => {
+                inner.state = ResourcePoolState::Suspended;
+            },
+            
+            // From Suspended, wait until Active then set to Suspended
+            ResourcePoolState::Suspended => {
+                inner = self.await_active(inner)?;
+                inner.state = ResourcePoolState::Suspended;
+            }
+        }
+        
+        Ok(inner)
+    }
+
     /// Wait for all resources to be returned to the pool and set state to Suspended
     ///
     /// This internal method is used to transition the pool to the Suspended state and
@@ -282,45 +383,14 @@ impl<T> ResourcePool<T> {
     /// This method blocks until all resources have been returned to the pool.
     fn wait_for_all_resources<'a>(
         &'a self,
-        mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
+        inner: MutexGuard<'a, ResourcePoolInner<T>>,
     ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
-        // Handle different initial states
-        match inner.state {
-            ResourcePoolState::Shutdown => {
-                return Err(shutdown_err("Cannot suspend a shutdown queue"));
-            }
-            ResourcePoolState::Suspended => {
-                // Already suspended, wait until state changes to Active or Shutdown
-                loop {
-                    inner = self.await_signal(inner)?;
-
-                    match inner.state {
-                        ResourcePoolState::Active => {
-                            // State changed to Active, now we can set it to Suspended
-                            inner.state = ResourcePoolState::Suspended;
-                            break;
-                        }
-                        ResourcePoolState::Shutdown => {
-                            return Err(shutdown_err("Cannot suspend a shutdown queue"));
-                        }
-                        ResourcePoolState::Suspended => {
-                            // Still suspended, continue waiting
-                            continue;
-                        }
-                    }
-                }
-            }
-            ResourcePoolState::Active => {
-                // Set state to Suspended
-                inner.state = ResourcePoolState::Suspended;
-            }
-        }
-
-        // Wait until all active resources have been returned
-        while inner.borrows > 0 {
-            inner = self.await_signal(inner)?;
-        }
-
+        // Step 1: Ensure pool is in Suspended state
+        let inner = self.transition_to_suspended(inner)?;
+        
+        // Step 2: Wait for all active resources to be returned
+        let inner = self.await_all_resources_returned(inner)?;
+        
         Ok(inner)
     }
 
@@ -357,6 +427,14 @@ impl<T> ResourcePool<T> {
     ///
     /// # Blocking behavior
     /// This method blocks until all checked-out resources have been returned to the pool.
+    /// 
+    /// # Potential Deadlocks
+    /// - **IMPORTANT**: Do not call this method from a thread that is already holding a resource from this pool.
+    ///   Doing so will cause a deadlock because this method waits for all resources to be returned.
+    /// - The processing function `f` should not attempt to get another resource from this pool,
+    ///   as this will also cause a deadlock.
+    /// - After this method completes successfully, the pool will be in Shutdown state and no
+    ///   further operations will be allowed.
     pub fn process_then_close<F>(&self, f: F) -> Result<()>
     where
         F: FnMut(&mut T) -> Result<()>,
@@ -400,47 +478,40 @@ impl<T> ResourcePool<T> {
     fn internal_process_all_resources<'a, F>(
         &'a self,
         mut f: F,
-        final_state: ResourcePoolState,
+        target_state: ResourcePoolState,
         mut inner: MutexGuard<'a, ResourcePoolInner<T>>,
     ) -> Result<()>
     where
         F: FnMut(&mut T) -> Result<()>,
     {
-        // Step 1: Wait for all active resources to return
+        // Step 1: Wait for all active resources to return and get into Suspended state
         inner = self.wait_for_all_resources(inner)?;
+
+        // At this point we know:
+        // - We're in Suspended state (set by wait_for_all_resources)
+        // - All resources are in the queue (borrows = 0)
+        // - We're not in Shutdown state (would have returned an error)
 
         // Step 2: Process each resource in the queue
         let mut process_result = Ok(());
 
-        if inner.state != ResourcePoolState::Shutdown {
-            let mut last_error = None;
-
-            // Process each resource in the queue
-            for resource in &mut inner.queue {
+        // Process all resources, capturing the first error but continuing to process
+        for resource in &mut inner.queue {
+            // Only record the first error encountered (if any)
+            if process_result.is_ok() {
                 if let Err(e) = f(resource) {
-                    last_error = Some(e);
+                    process_result = Err(e);
                 }
+            } else {
+                // Already encountered an error, but still process remaining resources
+                let _ = f(resource);
             }
-
-            // Store the processing result
-            if let Some(e) = last_error {
-                process_result = Err(e);
-            }
-        } else {
-            process_result = Err(shutdown_err(
-                "Resource pool is shutdown"
-            ));
         }
 
-        // Step 3: Set final state (unless there was an error and we're trying to shutdown)
-        if process_result.is_ok() || final_state != ResourcePoolState::Shutdown {
-            inner.state = final_state;
+        // Step 3: Set final state
+        inner.state = target_state;
+        self.signal.notify_all();
 
-            // Notify waiters about the state change
-            self.signal.notify_all();
-        }
-
-        // Return any error from processing
         process_result
     }
 
@@ -458,6 +529,12 @@ impl<T> ResourcePool<T> {
     ///
     /// # Blocking behavior
     /// This method blocks until all checked-out resources have been returned to the pool.
+    /// 
+    /// # Potential Deadlocks
+    /// - **IMPORTANT**: Do not call this method from a thread that is already holding a resource from this pool.
+    ///   Doing so will cause a deadlock because this method waits for all resources to be returned.
+    /// - The processing function `f` should not attempt to get another resource from this pool,
+    ///   as this will also cause a deadlock.
     pub fn process_all_resources<F>(&self, f: F) -> Result<()>
     where
         F: FnMut(&mut T) -> Result<()>,

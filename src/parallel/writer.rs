@@ -132,8 +132,6 @@ impl Clone for Task {
 pub struct WriterResource<Sink: Write + Seek + Send + 'static> {
     /// The actual record writer, boxed to signify exclusive ownership
     pub writer: Box<RecordWriter<Sink>>,
-    /// Identifier for the writer, useful for tracking which writer processed which record
-    pub id: usize,
     /// Total number of bytes written by this writer resource
     pub bytes_written: usize,
 }
@@ -146,7 +144,7 @@ pub struct WriterResource<Sink: Write + Seek + Send + 'static> {
 pub struct ParallelWriterConfig {
     /// Configuration for the underlying record writer instances
     pub writer_config: RecordWriterConfig,
-    
+
     /// Maximum number of bytes a writer can write before it's dropped from the pool
     /// Set to None to allow unlimited bytes per writer (default)
     pub max_bytes_per_writer: Option<usize>,
@@ -168,10 +166,10 @@ impl Default for ParallelWriterConfig {
 pub struct ShardingConfig<Sink: Write + Seek + Send + 'static> {
     /// The sharder implementation for creating new sinks
     pub sharder: Box<dyn Sharder<Sink> + Send + Sync>,
-    
+
     /// Number of shards to create and maintain
     pub shards: usize,
-    
+
     /// Whether to enable automatic shard creation and management
     pub enable_auto_sharding: bool,
 }
@@ -187,13 +185,10 @@ impl<Sink: Write + Seek + Send + 'static> ShardingConfig<Sink> {
     ///
     /// # Returns
     /// A new ShardingConfig instance
-    pub fn new(
-        sharder: Box<dyn Sharder<Sink> + Send + Sync>,
-        shards: usize,
-    ) -> Self {
+    pub fn new(sharder: Box<dyn Sharder<Sink> + Send + Sync>, shards: usize) -> Self {
         // Ensure shards is at least 1
         let shards = std::cmp::max(shards, 1);
-        
+
         Self {
             sharder,
             shards,
@@ -201,7 +196,7 @@ impl<Sink: Write + Seek + Send + 'static> ShardingConfig<Sink> {
             enable_auto_sharding: false,
         }
     }
-    
+
     /// Create a new ShardingConfig with auto-sharding enabled
     ///
     /// # Arguments
@@ -216,7 +211,7 @@ impl<Sink: Write + Seek + Send + 'static> ShardingConfig<Sink> {
     ) -> Self {
         // Ensure shards is at least 1
         let shards = std::cmp::max(shards, 1);
-        
+
         Self {
             sharder,
             shards,
@@ -248,10 +243,10 @@ pub struct ParallelWriter<Sink: Write + Seek + Send + 'static> {
 
     /// Queue of writer resources with active tracking
     resource_queue: Arc<ResourcePool<WriterResource<Sink>>>,
-    
+
     /// Configuration for the parallel writer
     config: ParallelWriterConfig,
-    
+
     /// Sharding configuration for creating new writers
     sharding_config: ShardingConfig<Sink>,
 }
@@ -262,7 +257,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     pub(crate) fn get_resource_pool(&self) -> &Arc<ResourcePool<WriterResource<Sink>>> {
         &self.resource_queue
     }
-    
+
     /// Create a new parallel writer with the given sharding configuration.
     ///
     /// This constructor initializes a parallel writer using a sharding configuration,
@@ -280,7 +275,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
     /// # use disky::parallel::sharding::Autosharder;
     /// # use std::io::Cursor;
-    /// 
+    ///
     /// // Create a simple in-memory sharder
     /// let sharder = Autosharder::new(|| {
     ///     Ok(Cursor::new(Vec::new()))
@@ -304,26 +299,20 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     ) -> Result<Self> {
         let task_queue = Arc::new(TaskQueue::new());
         let resource_queue = Arc::new(ResourcePool::new());
-        
-        // Initialize the resource queue with writers from the sharder
-        let mut id_counter = 0;
-        
+
         // Create the initial set of writers based on the shards configuration
         for _ in 0..sharding_config.shards {
             // Create a new sink using the sharder
             let sink = sharding_config.sharder.create_sink()?;
-            
+
             // Create a new RecordWriter with the sink and configuration
             let writer = RecordWriter::with_config(sink, config.writer_config.clone())?;
-            
+
             // Add the writer to the resource pool
             resource_queue.add_resource(WriterResource {
                 writer: Box::new(writer),
-                id: id_counter,
                 bytes_written: 0,
             })?;
-            
-            id_counter += 1;
         }
 
         Ok(Self {
@@ -400,30 +389,57 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// parallel_writer.write_record(b"synchronous record").unwrap();
     /// ```
+    /// Create a new shard and add it to the resource pool
+    ///
+    /// This method creates a new sink using the sharder, wraps it in a RecordWriter,
+    /// and adds it to the resource pool. It's used internally when a shard is dropped
+    /// due to exceeding byte limits and auto-sharding is enabled.
+    ///
+    /// # Returns
+    /// A Result indicating success or failure
+    fn create_new_shard(&self) -> Result<()> {
+        // Create a new sink using the sharder
+        let sink = self.sharding_config.sharder.create_sink()?;
+
+        // Create a new RecordWriter with the sink and configuration
+        let writer = RecordWriter::with_config(sink, self.config.writer_config.clone())?;
+
+        // Add the writer to the resource pool
+        self.resource_queue.add_resource(WriterResource {
+            writer: Box::new(writer),
+            bytes_written: 0,
+        })
+    }
+
     pub fn write_record(&self, data: &[u8]) -> Result<()> {
         // Process a resource by writing the record to it
         let mut resource = self.resource_queue.get_resource()?;
-        
+
         // Write the record using the underlying writer - return early if error
         resource.writer.write_record(data)?;
-        
+
         // Only increment bytes_written after successful write
         resource.bytes_written += data.len();
-        
+
         // Check if we need to forget this resource due to exceeding byte limit
         if let Some(max_bytes) = self.config.max_bytes_per_writer {
             if resource.bytes_written >= max_bytes {
                 // Try to close the writer
                 let close_result = resource.writer.close();
-                
+
                 // Always forget the resource regardless of close result
                 resource.forget();
-                
+
+                // If auto-sharding is enabled, create a new shard to replace the one we're forgetting
+                if self.sharding_config.enable_auto_sharding {
+                    self.create_new_shard()?;
+                }
+
                 // Now return close error if there was one
                 close_result?;
             }
         }
-        
+
         Ok(())
     }
 
@@ -722,15 +738,15 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         let resource_close_result = self
             .resource_queue
             .process_then_close(|resource| resource.writer.close());
-            
+
         // Then, try to close the task queue, regardless of whether the resource close succeeded
         let task_close_result = self.task_queue.close();
-        
+
         // Return the first error encountered, prioritizing resource errors over task queue errors
         match (resource_close_result, task_close_result) {
-            (Err(e), _) => Err(e),                    // Resource error takes precedence
-            (Ok(()), Err(e)) => Err(e),               // Task queue error if no resource error
-            (Ok(()), Ok(())) => Ok(())                // Success if both operations succeeded
+            (Err(e), _) => Err(e),      // Resource error takes precedence
+            (Ok(()), Err(e)) => Err(e), // Task queue error if no resource error
+            (Ok(()), Ok(())) => Ok(()), // Success if both operations succeeded
         }
     }
 
@@ -813,4 +829,3 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         self.resource_queue.available_count()
     }
 }
-

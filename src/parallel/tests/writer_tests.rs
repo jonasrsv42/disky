@@ -365,10 +365,7 @@ fn test_writer_rotation_on_byte_limit() {
         parallel_writer
             .get_resource_pool()
             .process_all_resources(|resource| {
-                println!(
-                    "Writer ID: {}, bytes written: {}",
-                    resource.id, resource.bytes_written
-                );
+                println!("bytes written: {}", resource.bytes_written);
                 Ok(())
             })
             .unwrap();
@@ -419,10 +416,7 @@ fn test_partial_writer_rotation_on_byte_limit() {
     parallel_writer
         .get_resource_pool()
         .process_all_resources(|resource| {
-            println!(
-                "Writer ID: {}, bytes written: {}",
-                resource.id, resource.bytes_written
-            );
+            println!("bytes written: {}", resource.bytes_written);
             Ok(())
         })
         .unwrap();
@@ -441,4 +435,3 @@ fn test_partial_writer_rotation_on_byte_limit() {
         "Should be able to write to the remaining writer"
     );
 }
-

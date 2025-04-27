@@ -300,27 +300,20 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         let task_queue = Arc::new(TaskQueue::new());
         let resource_queue = Arc::new(ResourcePool::new());
 
-        // Create the initial set of writers based on the shards configuration
-        for _ in 0..sharding_config.shards {
-            // Create a new sink using the sharder
-            let sink = sharding_config.sharder.create_sink()?;
+        let initial_shards = sharding_config.shards;
 
-            // Create a new RecordWriter with the sink and configuration
-            let writer = RecordWriter::with_config(sink, config.writer_config.clone())?;
-
-            // Add the writer to the resource pool
-            resource_queue.add_resource(WriterResource {
-                writer: Box::new(writer),
-                bytes_written: 0,
-            })?;
-        }
-
-        Ok(Self {
+        let writer = Self {
             task_queue,
             resource_queue,
             config,
             sharding_config,
-        })
+        };
+
+        for _ in 0..initial_shards {
+            writer.create_new_shard()?;
+        }
+
+        Ok(writer)
     }
 
     /// Write a record asynchronously

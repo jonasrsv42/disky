@@ -1,8 +1,11 @@
 use std::fs::File;
-use std::io::{Seek, Write};
+use std::io::{Read, Seek, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use glob::glob;
+use log::warn;
 
 use crate::error::{DiskyError, Result};
 
@@ -14,6 +17,44 @@ pub trait Sharder<Sink: Write + Seek + Send + 'static> {
     /// Create a new sink.
     /// This is called when a new shard is needed.
     fn create_sink(&self) -> Result<Sink>;
+}
+
+/// A trait for locating and opening existing shards for reading.
+///
+/// This trait provides methods to incrementally retrieve shards for reading.
+/// It can be used by parallel readers to locate and open shards created
+/// by compatible sharders.
+pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
+    /// Returns the next available shard source.
+    ///
+    /// This method is called repeatedly to get all available shards.
+    /// When no more shards are available, it returns Err(DiskyError::NoMoreShards).
+    ///
+    /// # Returns
+    /// - Ok(source) if a shard was successfully located and opened
+    /// - Err(DiskyError::NoMoreShards) if no more shards are available
+    /// - Err(...) if some other error occurred while trying to locate or open a shard
+    fn next_shard(&mut self) -> Result<Source>;
+    
+    /// Returns the estimated total number of shards, if known.
+    ///
+    /// This is an optional method that can provide a hint about the total
+    /// number of shards that might be available. The actual number might
+    /// differ if shards are added or removed during reading.
+    ///
+    /// # Returns
+    /// Some(count) if the count is known, None otherwise.
+    fn estimated_shard_count(&self) -> Option<usize> {
+        None
+    }
+    
+    /// Resets the locator to start reading shards from the beginning.
+    ///
+    /// This allows the locator to be reused to read the same shards again.
+    ///
+    /// # Returns
+    /// Ok(()) if the reset was successful, Err(...) otherwise.
+    fn reset(&mut self) -> Result<()>;
 }
 
 /// A general-purpose auto sharder that can create new sink instances on demand.
@@ -89,7 +130,7 @@ where
 
 /// A file-based implementation of the Sharder that creates sequentially numbered files.
 ///
-/// This implementation creates files with names like "prefix_0.bin", "prefix_1.bin", etc.
+/// This implementation creates files with names like "prefix_0", "prefix_1", etc.
 ///
 /// # Example
 /// ```no_run
@@ -99,8 +140,7 @@ where
 /// let output_dir = PathBuf::from("/tmp/records");
 /// let file_sharder = FileSharder::new(
 ///     output_dir,
-///     "shard",
-///     ".bin"
+///     "shard"
 /// );
 ///
 /// // Create a new file sink
@@ -113,42 +153,35 @@ pub struct FileSharder {
     /// Prefix for file names
     file_prefix: String,
 
-    /// Suffix for file names (file extension)
-    file_suffix: String,
-
     /// Counter for generating sequential file names
     counter: AtomicUsize,
 }
 
 impl FileSharder {
-    /// Create a new FileSharder with the given directory, prefix, and suffix.
+    /// Create a new FileSharder with the given directory and prefix.
     ///
     /// # Arguments
     /// * `output_dir` - Directory where shard files will be created
     /// * `file_prefix` - Prefix for shard file names
-    /// * `file_suffix` - Suffix for shard file names (typically a file extension)
     ///
     /// # Returns
     /// A new FileSharder instance
     pub fn new(
         output_dir: PathBuf,
         file_prefix: impl Into<String>,
-        file_suffix: impl Into<String>,
     ) -> Self {
         Self {
             output_dir,
             file_prefix: file_prefix.into(),
-            file_suffix: file_suffix.into(),
             counter: AtomicUsize::new(0),
         }
     }
 
-    /// Create a new FileSharder with the given directory, prefix, suffix, and starting index.
+    /// Create a new FileSharder with the given directory, prefix, and starting index.
     ///
     /// # Arguments
     /// * `output_dir` - Directory where shard files will be created
     /// * `file_prefix` - Prefix for shard file names
-    /// * `file_suffix` - Suffix for shard file names (typically a file extension)
     /// * `start_index` - The starting index for file numbering
     ///
     /// # Returns
@@ -156,13 +189,11 @@ impl FileSharder {
     pub fn with_start_index(
         output_dir: PathBuf,
         file_prefix: impl Into<String>,
-        file_suffix: impl Into<String>,
         start_index: usize,
     ) -> Self {
         Self {
             output_dir,
             file_prefix: file_prefix.into(),
-            file_suffix: file_suffix.into(),
             counter: AtomicUsize::new(start_index),
         }
     }
@@ -171,8 +202,8 @@ impl FileSharder {
     fn next_file_path(&self) -> PathBuf {
         let file_num = self.counter.fetch_add(1, Ordering::SeqCst);
         self.output_dir.join(format!(
-            "{}_{}{}",
-            self.file_prefix, file_num, self.file_suffix
+            "{}_{}",
+            self.file_prefix, file_num
         ))
     }
 }
@@ -188,6 +219,145 @@ impl Sharder<File> for FileSharder {
 
         // Create the file
         File::create(&file_path).map_err(|e| DiskyError::Io(e))
+    }
+}
+
+/// A locator for finding and opening sharded files created by a FileSharder.
+pub struct FileShardLocator {
+    /// List of shard file paths
+    shard_paths: Vec<PathBuf>,
+    
+    /// Index of the next shard to return
+    next_index: usize,
+}
+
+impl FileShardLocator {
+    /// Create a new FileShardLocator to read shards with the given prefix.
+    ///
+    /// # Arguments
+    /// * `output_dir` - Directory containing the shard files
+    /// * `file_prefix` - Prefix for shard file names
+    ///
+    /// # Returns
+    /// A new FileShardLocator instance
+    pub fn new(output_dir: PathBuf, file_prefix: impl Into<String>) -> Result<Self> {
+        let file_prefix = file_prefix.into();
+        let glob_pattern = format!("{}_*", file_prefix);
+        let pattern = output_dir.join(glob_pattern);
+        let pattern_str = pattern.to_string_lossy();
+        
+        // Get a list of all matching files
+        let mut shard_paths: Vec<PathBuf> = Vec::new();
+        
+        for entry in glob(&pattern_str).map_err(|e| DiskyError::Other(format!("Invalid glob pattern: {}", e)))? {
+            match entry {
+                Ok(path) => shard_paths.push(path),
+                Err(e) => warn!("Error with glob entry: {}", e),
+            }
+        }
+        
+        // Sort the paths to ensure consistent order
+        shard_paths.sort();
+        
+        Ok(Self {
+            shard_paths,
+            next_index: 0,
+        })
+    }
+}
+
+impl ShardLocator<File> for FileShardLocator {
+    fn next_shard(&mut self) -> Result<File> {
+        // Check if we have any more shards
+        if self.next_index >= self.shard_paths.len() {
+            return Err(DiskyError::NoMoreShards);
+        }
+        
+        // Get the next shard path
+        let file_path = &self.shard_paths[self.next_index];
+        self.next_index += 1;
+        
+        // Open the file for reading
+        File::open(file_path).map_err(|e| DiskyError::Io(e))
+    }
+    
+    fn reset(&mut self) -> Result<()> {
+        // Reset the index to start reading from the beginning
+        self.next_index = 0;
+        Ok(())
+    }
+    
+    fn estimated_shard_count(&self) -> Option<usize> {
+        // Return the actual count of shards we found
+        Some(self.shard_paths.len())
+    }
+}
+
+/// A memory-based shard locator that can be used for testing.
+///
+/// This locator provides in-memory Cursors as shards, which is useful for 
+/// tests or when data is already in memory.
+pub struct MemoryShardLocator<F>
+where
+    F: Fn() -> Result<std::io::Cursor<Vec<u8>>> + Send + Sync + 'static,
+{
+    /// Function that creates shard sources
+    source_factory: F,
+    
+    /// Number of shards to create
+    shard_count: usize,
+    
+    /// Index of the next shard to return
+    next_index: usize,
+}
+
+impl<F> MemoryShardLocator<F>
+where
+    F: Fn() -> Result<std::io::Cursor<Vec<u8>>> + Send + Sync + 'static,
+{
+    /// Create a new MemoryShardLocator with the given factory function.
+    ///
+    /// # Arguments
+    /// * `source_factory` - Function that creates cursor sources
+    /// * `shard_count` - Number of shards to create
+    ///
+    /// # Returns
+    /// A new MemoryShardLocator instance
+    pub fn new(source_factory: F, shard_count: usize) -> Self {
+        Self {
+            source_factory,
+            shard_count,
+            next_index: 0,
+        }
+    }
+}
+
+impl<F> ShardLocator<std::io::Cursor<Vec<u8>>> for MemoryShardLocator<F>
+where
+    F: Fn() -> Result<std::io::Cursor<Vec<u8>>> + Send + Sync + 'static,
+{
+    fn next_shard(&mut self) -> Result<std::io::Cursor<Vec<u8>>> {
+        // Check if we have any more shards
+        if self.next_index >= self.shard_count {
+            return Err(DiskyError::NoMoreShards);
+        }
+        
+        // Increment index
+        self.next_index += 1;
+        
+        // Create a new cursor
+        (self.source_factory)()
+    }
+    
+    fn reset(&mut self) -> Result<()> {
+        // Reset the index to start from the beginning
+        self.next_index = 0;
+        Ok(())
+    }
+    
+    fn estimated_shard_count(&self) -> Option<usize> {
+        // Return the total count of shards
+        Some(self.shard_count)
     }
 }
 

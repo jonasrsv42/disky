@@ -33,8 +33,7 @@
 //! // Create a file sharder that creates sequentially numbered files
 //! let file_sharder = FileSharder::new(
 //!     PathBuf::from("/tmp/output"),
-//!     "shard",
-//!     ".bin"
+//!     "shard"
 //! );
 //!
 //! // Configure with 4 shards

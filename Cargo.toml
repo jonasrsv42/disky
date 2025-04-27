@@ -8,7 +8,7 @@ license = "Apache-2.0"
 
 [features]
 # Parallel implementation using multiple threads for improved performance
-parallel = []
+parallel = ["dep:glob"]
 
 [dependencies]
 thiserror = "1.0.60"
@@ -16,6 +16,7 @@ bytes = "1.6.0"
 highway = "1.1.0"
 log = "0.4.20"
 env_logger = "0.10.1"
+glob = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10.1"

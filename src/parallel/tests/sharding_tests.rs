@@ -65,8 +65,7 @@ fn test_file_sharder_basic() {
     // Create a file sharder
     let sharder = FileSharder::new(
         dir_path.clone(),
-        "test",
-        ".bin"
+        "test"
     );
     
     // Create a sink
@@ -77,7 +76,7 @@ fn test_file_sharder_basic() {
     sink.flush().unwrap();
     
     // Verify the file exists
-    let file_path = dir_path.join("test_0.bin");
+    let file_path = dir_path.join("test_0");
     assert!(file_path.exists());
     
     // Verify the data by reading the file again from disk
@@ -99,8 +98,7 @@ fn test_file_sharder_sequential_numbering() {
     // Create a file sharder
     let sharder = FileSharder::new(
         dir_path.clone(),
-        "seq",
-        ".txt"
+        "seq"
     );
     
     // Create multiple sinks
@@ -110,7 +108,7 @@ fn test_file_sharder_sequential_numbering() {
         sinks.push(sink);
         
         // Verify the file exists with the correct sequential number
-        let file_path = dir_path.join(format!("seq_{}.txt", i));
+        let file_path = dir_path.join(format!("seq_{}", i));
         assert!(file_path.exists());
     }
     
@@ -127,8 +125,7 @@ fn test_file_sharder_with_nested_directory() {
     // Create a file sharder with a nested directory path
     let sharder = FileSharder::new(
         dir_path.clone(),
-        "file",
-        ".dat"
+        "file"
     );
     
     // Create a sink
@@ -136,7 +133,7 @@ fn test_file_sharder_with_nested_directory() {
     
     // Verify the directory and file were created
     assert!(dir_path.exists());
-    assert!(dir_path.join("file_0.dat").exists());
+    assert!(dir_path.join("file_0").exists());
     
     // Explicitly drop the file handle before tempdir cleanup
     drop(sink);
@@ -219,7 +216,6 @@ fn test_file_sharder_with_custom_starting_index() {
     let sharder = FileSharder::with_start_index(
         dir_path.clone(),
         "custom",
-        ".dat",
         100
     );
     
@@ -228,7 +224,7 @@ fn test_file_sharder_with_custom_starting_index() {
         let _sink = sharder.create_sink().unwrap();
         
         // Verify the files have the expected naming pattern
-        let file_path = dir_path.join(format!("custom_{}.dat", 100 + i));
+        let file_path = dir_path.join(format!("custom_{}", 100 + i));
         assert!(file_path.exists());
     }
 }

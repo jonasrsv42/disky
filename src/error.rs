@@ -121,6 +121,10 @@ pub enum DiskyError {
     #[error("No more shards available")]
     NoMoreShards,
     
+    /// Indicates that a resource pool is completely exhausted with no resources.
+    #[error("Resource pool is exhausted")]
+    PoolExhausted,
+    
     /// A general error occurred.
     #[error("{0}")]
     Other(String),

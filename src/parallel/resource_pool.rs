@@ -261,10 +261,9 @@ impl<T> ResourcePool<T> {
         let mut inner = self.acquire_lock()?;
 
         if is_destitute_pool(&inner) {
-            // In theory  we could hope that resources become available at  some point. But there
-            // is no known use-case for this now and this is also a easily triggered deadlock so 
-            // we throw an error for now.
-            return Err(DiskyError::Other("Cannot request resource from destitute pool.".to_string()))
+            // The pool has no resources and no resources are currently borrowed,
+            // so there's no hope of getting a resource
+            return Err(DiskyError::PoolExhausted);
         }
 
         loop {

@@ -241,7 +241,7 @@ pub struct ParallelWriter<Sink: Write + Seek + Send + 'static> {
     task_queue: Arc<TaskQueue<Task>>,
 
     /// Queue of writer resources with active tracking
-    resource_queue: Arc<ResourcePool<WriterResource<Sink>>>,
+    resource_pool: Arc<ResourcePool<WriterResource<Sink>>>,
 
     /// Configuration for the parallel writer
     config: ParallelWriterConfig,
@@ -254,7 +254,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// For testing purposes: Get access to the resource pool containing the writers
     #[cfg(test)]
     pub(crate) fn get_resource_pool(&self) -> &Arc<ResourcePool<WriterResource<Sink>>> {
-        &self.resource_queue
+        &self.resource_pool
     }
 
     /// Create a new parallel writer with the given sharding configuration.
@@ -297,13 +297,13 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         config: ParallelWriterConfig,
     ) -> Result<Self> {
         let task_queue = Arc::new(TaskQueue::new());
-        let resource_queue = Arc::new(ResourcePool::new());
+        let resource_pool = Arc::new(ResourcePool::new());
 
         let initial_shards = sharding_config.shards;
 
         let writer = Self {
             task_queue,
-            resource_queue,
+            resource_pool,
             config,
             sharding_config,
         };
@@ -397,7 +397,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         let writer = RecordWriter::with_config(sink, self.config.writer_config.clone())?;
 
         // Add the writer to the resource pool
-        self.resource_queue.add_resource(WriterResource {
+        self.resource_pool.add_resource(WriterResource {
             writer: Box::new(writer),
             bytes_written: 0,
         })
@@ -405,7 +405,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
 
     pub fn write_record(&self, data: &[u8]) -> Result<()> {
         // Process a resource by writing the record to it
-        let mut resource = self.resource_queue.get_resource()?;
+        let mut resource = self.resource_pool.get_resource()?;
 
         // Write the record using the underlying writer - return early if error
         resource.writer.write_record(data)?;
@@ -650,7 +650,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// ```
     pub fn flush(&self) -> Result<()> {
         // Use the enhanced method that handles pause/process/resume in one operation
-        self.resource_queue
+        self.resource_pool
             .process_all_resources(|resource| resource.writer.flush())
     }
 
@@ -728,7 +728,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     pub fn close(&self) -> Result<()> {
         // First, try to close all writer resources
         let resource_close_result = self
-            .resource_queue
+            .resource_pool
             .process_then_close(|resource| resource.writer.close());
 
         // Then, try to close the task queue, regardless of whether the resource close succeeded
@@ -818,6 +818,6 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// println!("There are {} available writer resources", count);
     /// ```
     pub fn available_resource_count(&self) -> Result<usize> {
-        self.resource_queue.available_count()
+        self.resource_pool.available_count()
     }
 }

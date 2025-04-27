@@ -30,7 +30,7 @@ fn test_file_shard_locator_basic() -> Result<()> {
     drop(file_handles);
     
     // Create a locator for the shards
-    let mut locator = FileShardLocator::new(dir_path, "test")?;
+    let locator = FileShardLocator::new(dir_path, "test")?;
     
     // Test estimated_shard_count
     assert_eq!(locator.estimated_shard_count(), Some(shard_count));
@@ -77,7 +77,7 @@ fn test_file_shard_locator_empty() -> Result<()> {
     let result = FileShardLocator::new(dir_path, "nonexistent");
     
     // The constructor should succeed, but there should be no shards
-    let mut locator = result?;
+    let locator = result?;
     
     // Estimated shard count should be 0
     assert_eq!(locator.estimated_shard_count(), Some(0));
@@ -109,7 +109,7 @@ fn test_memory_shard_locator() -> Result<()> {
     
     // Create a memory shard locator with 3 shards
     let shard_count = 3;
-    let mut locator = MemoryShardLocator::new(factory, shard_count);
+    let locator = MemoryShardLocator::new(factory, shard_count);
     
     // Check estimated shard count
     assert_eq!(locator.estimated_shard_count(), Some(shard_count));
@@ -169,7 +169,7 @@ fn test_shard_locator_error_handling() -> Result<()> {
     
     // Create a memory shard locator with 3 shards
     let shard_count = 3;
-    let mut locator = MemoryShardLocator::new(factory, shard_count);
+    let locator = MemoryShardLocator::new(factory, shard_count);
     
     // First shard should be readable
     let mut shard = locator.next_shard()?;

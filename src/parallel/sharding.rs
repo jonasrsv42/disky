@@ -30,11 +30,13 @@ pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
     /// This method is called repeatedly to get all available shards.
     /// When no more shards are available, it returns Err(DiskyError::NoMoreShards).
     ///
+    /// This method is thread-safe and does not require mutable access to self.
+    ///
     /// # Returns
     /// - Ok(source) if a shard was successfully located and opened
     /// - Err(DiskyError::NoMoreShards) if no more shards are available
     /// - Err(...) if some other error occurred while trying to locate or open a shard
-    fn next_shard(&mut self) -> Result<Source>;
+    fn next_shard(&self) -> Result<Source>;
     
     /// Returns the estimated total number of shards, if known.
     ///
@@ -54,7 +56,7 @@ pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
     ///
     /// # Returns
     /// Ok(()) if the reset was successful, Err(...) otherwise.
-    fn reset(&mut self) -> Result<()>;
+    fn reset(&self) -> Result<()>;
 }
 
 /// A general-purpose auto sharder that can create new sink instances on demand.
@@ -228,7 +230,7 @@ pub struct FileShardLocator {
     shard_paths: Vec<PathBuf>,
     
     /// Index of the next shard to return
-    next_index: usize,
+    next_index: AtomicUsize,
 }
 
 impl FileShardLocator {
@@ -261,29 +263,31 @@ impl FileShardLocator {
         
         Ok(Self {
             shard_paths,
-            next_index: 0,
+            next_index: AtomicUsize::new(0),
         })
     }
 }
 
 impl ShardLocator<File> for FileShardLocator {
-    fn next_shard(&mut self) -> Result<File> {
+    fn next_shard(&self) -> Result<File> {
+        // Get the current index and increment it atomically
+        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
+        
         // Check if we have any more shards
-        if self.next_index >= self.shard_paths.len() {
+        if index >= self.shard_paths.len() {
             return Err(DiskyError::NoMoreShards);
         }
         
         // Get the next shard path
-        let file_path = &self.shard_paths[self.next_index];
-        self.next_index += 1;
+        let file_path = &self.shard_paths[index];
         
         // Open the file for reading
         File::open(file_path).map_err(|e| DiskyError::Io(e))
     }
     
-    fn reset(&mut self) -> Result<()> {
+    fn reset(&self) -> Result<()> {
         // Reset the index to start reading from the beginning
-        self.next_index = 0;
+        self.next_index.store(0, Ordering::SeqCst);
         Ok(())
     }
     
@@ -308,7 +312,7 @@ where
     shard_count: usize,
     
     /// Index of the next shard to return
-    next_index: usize,
+    next_index: AtomicUsize,
 }
 
 impl<F> MemoryShardLocator<F>
@@ -327,7 +331,7 @@ where
         Self {
             source_factory,
             shard_count,
-            next_index: 0,
+            next_index: AtomicUsize::new(0),
         }
     }
 }
@@ -336,22 +340,22 @@ impl<F> ShardLocator<std::io::Cursor<Vec<u8>>> for MemoryShardLocator<F>
 where
     F: Fn() -> Result<std::io::Cursor<Vec<u8>>> + Send + Sync + 'static,
 {
-    fn next_shard(&mut self) -> Result<std::io::Cursor<Vec<u8>>> {
+    fn next_shard(&self) -> Result<std::io::Cursor<Vec<u8>>> {
+        // Get the current index and increment it atomically
+        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
+        
         // Check if we have any more shards
-        if self.next_index >= self.shard_count {
+        if index >= self.shard_count {
             return Err(DiskyError::NoMoreShards);
         }
-        
-        // Increment index
-        self.next_index += 1;
         
         // Create a new cursor
         (self.source_factory)()
     }
     
-    fn reset(&mut self) -> Result<()> {
+    fn reset(&self) -> Result<()> {
         // Reset the index to start from the beginning
-        self.next_index = 0;
+        self.next_index.store(0, Ordering::SeqCst);
         Ok(())
     }
     

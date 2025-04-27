@@ -32,6 +32,23 @@ pub enum ResourcePoolState {
 /// The pool tracks both available resources (in the queue) and active resources
 /// (checked out but not yet returned). It uses a condition variable to coordinate
 /// access and notify waiters when resources become available or the state changes.
+///
+/// # Deadlock Prevention
+///
+/// To prevent deadlocks when using this pool, follow these guidelines:
+///
+/// 1. Never call `process_all_resources` or `process_then_close` while holding a resource
+///    from the same pool. These methods wait for all resources to be returned, which would
+///    cause a deadlock.
+///
+/// 2. Resource processing functions should not attempt to get more resources from the same
+///    pool, as this would also cause a deadlock since the pool is in Suspended state.
+///
+/// 3. When multiple pools interact, be careful about the order of resource acquisition to
+///    avoid circular wait conditions.
+///
+/// 4. Always drop resources when you're done with them, preferably within the same scope
+///    they were acquired.
 pub struct ResourcePool<T> {
     /// Internal state protected by mutex
     inner: Arc<Mutex<ResourcePoolInner<T>>>,
@@ -924,5 +941,138 @@ mod tests {
         // Resources should all be back in the queue
         assert_eq!(queue.available_count().unwrap(), 10);
         assert_eq!(queue.borrows().unwrap(), 0);
+    }
+    
+    #[test]
+    fn test_proper_resource_release_with_process_all() {
+        let pool = Arc::new(ResourcePool::new());
+        
+        // Add some resources
+        pool.add_resource(1).unwrap();
+        pool.add_resource(2).unwrap();
+        pool.add_resource(3).unwrap();
+        
+        // Set up channels for thread synchronization
+        let (start_tx, start_rx) = mpsc::channel();
+        let (resource_acquired_tx, resource_acquired_rx) = mpsc::channel();
+        let (process_ready_tx, process_ready_rx) = mpsc::channel();
+        let (process_done_tx, process_done_rx) = mpsc::channel();
+        
+        // Thread that will get a resource and hold it
+        let pool_clone = Arc::clone(&pool);
+        let handle = thread::spawn(move || {
+            // Wait for signal to start
+            start_rx.recv().unwrap();
+            
+            // Get a resource
+            let resource = pool_clone.get_resource().unwrap();
+            
+            // Signal that we have a resource
+            resource_acquired_tx.send(()).unwrap();
+            
+            // Wait until the main thread is ready to process
+            process_ready_rx.recv().unwrap();
+            
+            // Drop the resource before processing starts
+            drop(resource);
+            
+            // Wait for processing to complete
+            process_done_rx.recv().unwrap();
+        });
+        
+        // Start the thread
+        start_tx.send(()).unwrap();
+        
+        // Wait for the thread to acquire a resource
+        resource_acquired_rx.recv().unwrap();
+        
+        // Signal that we're ready to process
+        process_ready_tx.send(()).unwrap();
+        
+        // Now process all resources - this should work because the resource is released
+        pool.process_all_resources(|n| {
+            *n *= 2;
+            Ok(())
+        }).unwrap();
+        
+        // Signal processing is done
+        process_done_tx.send(()).unwrap();
+        
+        // Wait for thread to complete
+        handle.join().unwrap();
+        
+        // Verify all resources were processed
+        let resources = pool.drain_all_resources().unwrap();
+        assert_eq!(resources.len(), 3);
+        for r in &resources {
+            assert!(*r == 2 || *r == 4 || *r == 6);
+        }
+    }
+    
+    #[test]
+    #[ignore = "This test demonstrates a deadlock and should not be run in normal test suites"]
+    fn test_deadlock_with_process_all() {
+        let pool = Arc::new(ResourcePool::new());
+        
+        // Add some resources
+        pool.add_resource(1).unwrap();
+        pool.add_resource(2).unwrap();
+        pool.add_resource(3).unwrap();
+        
+        // Set up channels for thread synchronization
+        let (start_tx, start_rx) = mpsc::channel();
+        let (resource_acquired_tx, resource_acquired_rx) = mpsc::channel();
+        let (process_started_tx, process_started_rx) = mpsc::channel();
+        
+        // Thread that will get a resource and hold it
+        let pool_clone = Arc::clone(&pool);
+        let handle = thread::spawn(move || {
+            // Wait for signal to start
+            start_rx.recv().unwrap();
+            
+            // Get a resource and hold it
+            let _resource = pool_clone.get_resource().unwrap();
+            
+            // Signal that we have a resource
+            resource_acquired_tx.send(()).unwrap();
+            
+            // Wait until the processing starts (which will deadlock)
+            match process_started_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok(_) => {
+                    // We got a signal, processing started
+                }
+                Err(_) => {
+                    // Timeout - this is expected in deadlock condition
+                    // This is actually where we would end up in a real deadlock
+                }
+            }
+            
+            // Resource will be dropped here
+        });
+        
+        // Start the thread and wait for it to acquire a resource
+        start_tx.send(()).unwrap();
+        resource_acquired_rx.recv().unwrap();
+        
+        // Signal that we're starting processing
+        process_started_tx.send(()).unwrap();
+        
+        // This would deadlock in a real scenario because the thread is holding a resource,
+        // and process_all_resources waits for all resources to be returned.
+        // For test purposes, we use a timeout to avoid an actual deadlock.
+        match pool.process_all_resources(|n| {
+            *n *= 2;
+            Ok(())
+        }) {
+            Ok(_) => {
+                // No deadlock occurred (resource was released in time)
+            }
+            Err(_) => {
+                // Error occurred, possibly because we couldn't acquire lock or resources
+            }
+        }
+        
+        // Wait for thread to complete
+        handle.join().unwrap();
     }
 }

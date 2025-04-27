@@ -1,8 +1,8 @@
+use std::fs::File;
 use std::io::{Seek, Write};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::fs::File;
 
 use crate::error::{DiskyError, Result};
 
@@ -50,7 +50,7 @@ where
 {
     /// Factory function for creating new sinks
     sink_factory: F,
-    
+
     /// Phantom data for the Sink type
     _phantom: PhantomData<Sink>,
 }
@@ -109,13 +109,13 @@ where
 pub struct FileSharder {
     /// Directory to create files in
     output_dir: PathBuf,
-    
+
     /// Prefix for file names
     file_prefix: String,
-    
+
     /// Suffix for file names (file extension)
     file_suffix: String,
-    
+
     /// Counter for generating sequential file names
     counter: AtomicUsize,
 }
@@ -142,7 +142,7 @@ impl FileSharder {
             counter: AtomicUsize::new(0),
         }
     }
-    
+
     /// Create a new FileSharder with the given directory, prefix, suffix, and starting index.
     ///
     /// # Arguments
@@ -166,27 +166,28 @@ impl FileSharder {
             counter: AtomicUsize::new(start_index),
         }
     }
-    
+
     /// Get the next file path for a new shard
     fn next_file_path(&self) -> PathBuf {
         let file_num = self.counter.fetch_add(1, Ordering::SeqCst);
-        self.output_dir.join(format!("{}_{}{}", self.file_prefix, file_num, self.file_suffix))
+        self.output_dir.join(format!(
+            "{}_{}{}",
+            self.file_prefix, file_num, self.file_suffix
+        ))
     }
 }
 
 impl Sharder<File> for FileSharder {
     fn create_sink(&self) -> Result<File> {
         let file_path = self.next_file_path();
-        
+
         // Create the directory if it doesn't exist
         if let Some(parent) = file_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| DiskyError::Io(e))?;
+            std::fs::create_dir_all(parent).map_err(|e| DiskyError::Io(e))?;
         }
-        
+
         // Create the file
-        File::create(&file_path)
-            .map_err(|e| DiskyError::Io(e))
+        File::create(&file_path).map_err(|e| DiskyError::Io(e))
     }
 }
 

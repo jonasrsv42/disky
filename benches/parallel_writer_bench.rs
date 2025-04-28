@@ -147,9 +147,9 @@ mod parallel_benchmarks {
         );
 
         // Benchmark single-threaded writer
-        //group.bench_function(BenchmarkId::new("single_threaded", "single_file"), |b| {
-        //    b.iter(|| write_single_file(total_records, RECORD_SIZE).unwrap())
-        //});
+        group.bench_function(BenchmarkId::new("single_threaded", "single_file"), |b| {
+            b.iter(|| write_single_file(total_records, RECORD_SIZE).unwrap())
+        });
 
         // Benchmark multi-threaded writer with default settings (no queue capacity limit)
         group.bench_function(

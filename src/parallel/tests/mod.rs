@@ -6,4 +6,5 @@ mod shard_locator_tests;
 mod reader_tests;
 mod resource_draining_tests;
 mod error_handling_tests;
+mod multi_threaded_reader_tests;
 

@@ -476,10 +476,10 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                 }
             },
             Err(DiskyError::PoolExhausted) => {
-                // No more resources in the pool and we've already tried to create new shards,
-                // so we are truly at EOF
+                // No more resources in the pool and we've already tried to create new shards.
+                // Signal EOF but also propagate the PoolExhausted error so workers can exit
                 byte_queue.push_back(DiskyParallelPiece::EOF)?;
-                Ok(())
+                Err(DiskyError::PoolExhausted)
             },
             Err(e) => Err(e),
         }

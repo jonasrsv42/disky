@@ -314,7 +314,16 @@ fn test_byte_queue_drain_multiple_resources() -> Result<()> {
     assert_eq!(second_record_count, 2, "Expected 2 records from second shard");
     
     // Drain again - should get EOF
-    reader.drain_resource(byte_queue.clone())?;
+    match reader.drain_resource(byte_queue.clone()) {
+        Ok(_) => (),
+        Err(err) => {
+            match err {
+                DiskyError::PoolExhausted => (),
+                _ => panic!("Unexpected error {}", err)
+                    
+            }
+        },
+    };
     
     // Should get EOF in the queue
     match byte_queue.try_read_front()? {

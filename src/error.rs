@@ -125,6 +125,10 @@ pub enum DiskyError {
     #[error("Resource pool is exhausted")]
     PoolExhausted,
     
+    /// Indicates that an operation was attempted on a closed reader.
+    #[error("Reader is closed")]
+    ReaderClosed,
+    
     /// A general error occurred.
     #[error("{0}")]
     Other(String),

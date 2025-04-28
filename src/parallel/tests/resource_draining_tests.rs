@@ -3,6 +3,7 @@ use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, DiskyParallelPiece, ShardingConfig};
 use crate::parallel::sharding::MemoryShardLocator;
 use crate::writer::RecordWriter;
+use crate::error::DiskyError;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -314,7 +315,13 @@ fn test_drain_resource_mixed_records() -> Result<()> {
     // Keep draining until we get EOF
     'second: loop {
         // Drain a resource
-        reader.drain_resource(byte_queue.clone())?;
+        match reader.drain_resource(byte_queue.clone()) {
+            Ok(_) => (),
+            Err(err) => match err {
+                DiskyError::PoolExhausted => (),
+                _ => panic!("Unexpected error {}", err)
+            },
+        };
 
         // Read all records from this drain
         let mut shard_records = 0;

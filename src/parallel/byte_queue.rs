@@ -301,10 +301,10 @@ impl ByteQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
-use bytes::Bytes;
 
     // Helper to create a ReadResult::Record with the specified size
     fn create_record(size: usize) -> ReadResult {
@@ -387,6 +387,122 @@ use bytes::Bytes;
     }
 
     #[test]
+    fn test_large_item_blocks_try_push_back() {
+        let queue = ByteQueue::new(500);
+
+        // Add a large record, this should be accepted even though it's larger than the limit
+        queue.push_back(create_record(600)).unwrap();
+        assert_eq!(queue.bytes_used().unwrap(), 600);
+
+        // Try to add another record, should fail because we're over the limit
+        assert_eq!(queue.try_push_back(create_record(100)).unwrap(), false);
+
+        // After reading the large record, try_push_back should succeed
+        match queue.read_front().unwrap() {
+            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 600),
+            _ => panic!("Expected Record"),
+        }
+        assert_eq!(queue.bytes_used().unwrap(), 0);
+
+        // Now we can add more records
+        assert_eq!(queue.try_push_back(create_record(100)).unwrap(), true);
+        assert_eq!(queue.bytes_used().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_multiple_readers_and_writers() {
+        let queue = Arc::new(ByteQueue::new(1000));
+        let reader_count = 3;
+        let writer_count = 2;
+        let records_per_writer = 10;
+        let record_size = 50;
+
+        // Channel to track completion
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        // Spawn reader threads
+        let mut reader_handles = vec![];
+        for _ in 0..reader_count {
+            let queue_clone = Arc::clone(&queue);
+            let tx_clone = tx.clone();
+            let handle = thread::spawn(move || {
+                let mut read_count = 0;
+                let mut _total_bytes = 0; // Using underscore to avoid warning
+
+                loop {
+                    match queue_clone.read_front() {
+                        Ok(result) => {
+                            match &result {
+                                ReadResult::Record(bytes) => {
+                                    _total_bytes += bytes.len();
+                                    read_count += 1;
+                                }
+                                ReadResult::EOF => {
+                                    // End marker, we're done
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(DiskyError::QueueClosed(_)) => {
+                            // Queue closed, we're done
+                            break;
+                        }
+                        Err(e) => panic!("Unexpected error: {:?}", e),
+                    }
+                }
+
+                // Return how many records this thread read
+                tx_clone.send(read_count).unwrap();
+                read_count
+            });
+            reader_handles.push(handle);
+        }
+
+        // Spawn writer threads
+        let mut writer_handles = vec![];
+        for _ in 0..writer_count {
+            let queue_clone = Arc::clone(&queue);
+            let handle = thread::spawn(move || {
+                for _ in 0..records_per_writer {
+                    queue_clone.push_back(create_record(record_size)).unwrap();
+                    thread::sleep(Duration::from_millis(5)); // Small delay to interleave operations
+                }
+                true
+            });
+            writer_handles.push(handle);
+        }
+
+        // Wait for writers to finish
+        for handle in writer_handles {
+            handle.join().unwrap();
+        }
+
+        // Send EOF markers for all readers and then close the queue
+        for _ in 0..reader_count {
+            queue.push_back(ReadResult::EOF).unwrap();
+        }
+        queue.close().unwrap();
+
+        // Wait for readers to finish
+        for handle in reader_handles {
+            handle.join().unwrap();
+        }
+
+        // Drop the original sender to close the channel
+        drop(tx);
+
+        // Collect results
+        let mut total_records_read = 0;
+        while let Ok(count) = rx.recv() {
+            total_records_read += count;
+        }
+
+        // Verify that all records were read
+        assert_eq!(total_records_read, writer_count * records_per_writer);
+    }
+
+    #[test]
     fn test_close_queue() {
         let queue = ByteQueue::new(1000);
 
@@ -458,6 +574,105 @@ use bytes::Bytes;
 
         assert_eq!(queue.len().unwrap(), 1);
         assert_eq!(queue.bytes_used().unwrap(), 100);
+    }
+
+    /// Test that verifies the queue properly handles wake ordering
+    ///
+    /// Rather than try to test that notify_all wakes multiple waiters, which is 
+    /// very hard to test deterministically, this test checks the behavior of the queue
+    /// when multiple threads are pushing data in a specific pattern that confirms
+    /// proper ordering and waking without relying on timing.
+    #[test]
+    fn test_multiple_waiters_and_wakeups() {
+        // Create a queue with a capacity big enough for 2 items
+        let item_size = 50;
+        let queue_capacity = item_size * 2; 
+        let queue = Arc::new(ByteQueue::new(queue_capacity));
+        
+        // Fill the queue completely to force readers to block
+        queue.push_back(create_record(item_size)).unwrap();
+        queue.push_back(create_record(item_size)).unwrap();
+        
+        // Create channels for synchronization
+        let (push_tx, push_rx) = std::sync::mpsc::channel();
+        let (pop_tx, pop_rx) = std::sync::mpsc::channel();
+        
+        // First, start a thread that will be blocked trying to push
+        let q1 = Arc::clone(&queue);
+        let push_thread = thread::spawn(move || {
+            // Signal we're about to push
+            push_tx.send(1).unwrap();
+            
+            // This will block until there's space
+            q1.push_back(create_record(item_size)).unwrap();
+            
+            // Signal we've completed the push
+            push_tx.send(2).unwrap();
+        });
+        
+        // Wait for the push thread to start
+        assert_eq!(push_rx.recv().unwrap(), 1);
+        
+        // Start a thread that will read from the queue
+        let q2 = Arc::clone(&queue);
+        let pop_thread = thread::spawn(move || {
+            // Signal we're about to start popping
+            pop_tx.send(1).unwrap();
+            
+            // Pop two items to make room
+            let item1 = q2.read_front().unwrap();
+            pop_tx.send(2).unwrap();
+            
+            let item2 = q2.read_front().unwrap();
+            pop_tx.send(3).unwrap();
+            
+            // Wait for the pusher to have pushed an item
+            assert_eq!(push_rx.recv().unwrap(), 2);
+            
+            // Read the item that was pushed
+            let item3 = q2.read_front().unwrap();
+            pop_tx.send(4).unwrap();
+            
+            (item1, item2, item3)
+        });
+        
+        // Wait for pop thread to signal it's starting
+        assert_eq!(pop_rx.recv().unwrap(), 1);
+        
+        // Wait for pop thread to signal it popped the first item
+        assert_eq!(pop_rx.recv().unwrap(), 2);
+        
+        // Wait for pop thread to signal it popped the second item
+        assert_eq!(pop_rx.recv().unwrap(), 3);
+        
+        // By this point, the push thread should have been unblocked
+        
+        // Wait for pop thread to signal it read the pushed item
+        assert_eq!(pop_rx.recv().unwrap(), 4);
+        
+        // Wait for threads to complete
+        push_thread.join().unwrap();
+        let (item1, item2, item3) = pop_thread.join().unwrap();
+        
+        // Verify items were records with correct size
+        match item1 {
+            ReadResult::Record(bytes) => assert_eq!(bytes.len(), item_size),
+            _ => panic!("Expected Record"),
+        }
+        
+        match item2 {
+            ReadResult::Record(bytes) => assert_eq!(bytes.len(), item_size),
+            _ => panic!("Expected Record"),
+        }
+        
+        match item3 {
+            ReadResult::Record(bytes) => assert_eq!(bytes.len(), item_size),
+            _ => panic!("Expected Record"),
+        }
+        
+        // Queue should now be empty
+        assert_eq!(queue.len().unwrap(), 0);
+        assert_eq!(queue.bytes_used().unwrap(), 0);
     }
 }
 

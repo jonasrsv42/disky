@@ -10,6 +10,7 @@ use bytes::Bytes;
 use log::error;
 
 use crate::error::{DiskyError, Result};
+use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::sharding::ShardLocator;
@@ -38,6 +39,14 @@ pub enum Task {
         completion: Arc<Promise<Result<ReadResult>>>,
     },
     
+    /// Drain all records from a resource into a byte queue
+    DrainResource {
+        /// The byte queue to drain records into
+        byte_queue: Arc<ByteQueue>,
+        /// Promise that will be fulfilled when the drain completes
+        completion: Arc<Promise<Result<()>>>,
+    },
+    
     /// Close a reader
     Close {
         /// Promise that will be fulfilled when the close completes
@@ -49,6 +58,10 @@ impl Clone for Task {
     fn clone(&self) -> Self {
         match self {
             Task::NextRecord { completion } => Task::NextRecord {
+                completion: Arc::clone(completion),
+            },
+            Task::DrainResource { byte_queue, completion } => Task::DrainResource {
+                byte_queue: Arc::clone(byte_queue),
                 completion: Arc::clone(completion),
             },
             Task::Close { completion } => Task::Close {
@@ -236,6 +249,15 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                     error!("Failed to fulfill read promise: {}", e);
                 }
             }
+            Task::DrainResource { byte_queue, completion } => {
+                // Process the drain resource task
+                let result = self.drain_resource(byte_queue);
+                
+                // Complete the promise with the result
+                if let Err(e) = completion.fulfill(result) {
+                    error!("Failed to fulfill drain resource promise: {}", e);
+                }
+            }
             Task::Close { completion } => {
                 // Process the close task
                 let result = self.close();
@@ -408,6 +430,83 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// true if there are pending tasks, false otherwise, or an error
     pub fn has_pending_tasks(&self) -> Result<bool> {
         Ok(!self.task_queue.is_empty()?)
+    }
+    
+    /// Drains records from a resource into a byte queue
+    ///
+    /// This method grabs a reader resource and drains all records from it
+    /// until it completes (reaches EOF or needs a new shard), putting all
+    /// records into the provided ByteQueue.
+    ///
+    /// # Arguments
+    /// * `byte_queue` - The byte queue to drain records into
+    ///
+    /// # Returns
+    /// Ok(()) if the drain was successful, or an error
+    pub fn drain_resource(&self, byte_queue: Arc<ByteQueue>) -> Result<()> {
+        // Try to get a reader resource directly
+        match self.reader_pool.get_resource() {
+            Ok(mut resource) => {
+                // Drain all records from this resource
+                loop {
+                    match resource.reader.next_record() {
+                        Ok(DiskyPiece::Record(bytes)) => {
+                            // Successfully read a record, add to the queue
+                            byte_queue.push_back(ReadResult::Record(bytes))?;
+                        },
+                        Ok(DiskyPiece::EOF) => {
+                            // This reader reached EOF, remove it from the pool
+                            resource.forget();
+                            
+                            // Try to get a new shard
+                            match self.get_new_shard() {
+                                Ok(_) | Err(DiskyError::NoMoreShards) => {
+                                    // Signal that this shard is finished
+                                    byte_queue.push_back(ReadResult::ShardFinished)?;
+                                    return Ok(());
+                                },
+                                Err(e) => {
+                                    // Error creating a new shard
+                                    return Err(e);
+                                }
+                            }
+                        },
+                        Err(e) => return Err(e),
+                    }
+                }
+            },
+            Err(DiskyError::PoolExhausted) => {
+                // No more resources in the pool and we've already tried to create new shards,
+                // so we are truly at EOF
+                byte_queue.push_back(ReadResult::EOF)?;
+                Ok(())
+            },
+            Err(e) => Err(e),
+        }
+    }
+    
+    /// Drains records asynchronously from a resource into a byte queue
+    ///
+    /// This method queues a drain operation and returns a Promise that will be fulfilled
+    /// when the drain is completed. The actual drain operation will be performed when
+    /// `process_task` or `process_all_tasks` is called.
+    ///
+    /// # Arguments
+    /// * `byte_queue` - The byte queue to drain records into
+    ///
+    /// # Returns
+    /// A Promise that will be fulfilled with the drain result
+    pub fn drain_resource_async(&self, byte_queue: Arc<ByteQueue>) -> Result<Arc<Promise<Result<()>>>> {
+        let completion = Arc::new(Promise::new());
+        
+        let task = Task::DrainResource {
+            byte_queue: Arc::clone(&byte_queue),
+            completion: Arc::clone(&completion),
+        };
+        
+        self.task_queue.push_back(task)?;
+        
+        Ok(completion)
     }
 }
 

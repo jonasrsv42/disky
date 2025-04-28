@@ -134,68 +134,68 @@ fn test_multi_threaded_reader_multiple_shards() -> Result<()> {
     Ok(())
 }
 
-///// Test try_read functionality
-//#[test]
-//fn test_multi_threaded_reader_try_read() -> Result<()> {
-//    // Create a locator with a single shard
-//    let locator = create_multi_shard_locator(1);
-//
-//    // Create the sharding config
-//    let sharding_config = ShardingConfig::new(locator, 1);
-//
-//    // Create the reader config
-//    let reader_config = MultiThreadedReaderConfig::new(
-//        ParallelReaderConfig::default(),
-//        2, // Two worker threads
-//        1024 * 1024, // 1MB queue
-//    );
-//
-//    // Create the reader
-//    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
-//
-//    // Give workers time to read into the queue
-//    std::thread::sleep(std::time::Duration::from_millis(50));
-//
-//    // Read records using try_read
-//    let mut records = Vec::new();
-//    while let Some(piece) = reader.try_read()? {
-//        match piece {
-//            DiskyParallelPiece::Record(bytes) => {
-//                records.push(bytes);
-//            }
-//            DiskyParallelPiece::EOF => break,
-//            _ => {}
-//        }
-//    }
-//
-//    // If we got records, verify them
-//    if !records.is_empty() {
-//        assert!(records.len() <= 5);
-//        assert_eq!(&records[0][..], b"record1");
-//    }
-//
-//    // Now read the rest using blocking read
-//    while records.len() < 5 {
-//        match reader.read()? {
-//            DiskyParallelPiece::Record(bytes) => {
-//                records.push(bytes);
-//            }
-//            DiskyParallelPiece::EOF => break,
-//            _ => {}
-//        }
-//    }
-//
-//    // Verify all records
-//    assert_eq!(records.len(), 5);
-//    assert_eq!(&records[0][..], b"record1");
-//    assert_eq!(&records[1][..], b"record2");
-//    assert_eq!(&records[2][..], b"record3");
-//    assert_eq!(&records[3][..], b"record4");
-//    assert_eq!(&records[4][..], b"record5");
-//
-//    // Close the reader
-//    reader.close()?;
-//
-//    Ok(())
-//}
+/// Test try_read functionality
+#[test]
+fn test_multi_threaded_reader_try_read() -> Result<()> {
+    // Create a locator with a single shard
+    let locator = create_multi_shard_locator(1);
+
+    // Create the sharding config
+    let sharding_config = ShardingConfig::new(locator, 1);
+
+    // Create the reader config
+    let reader_config = MultiThreadedReaderConfig::new(
+        ParallelReaderConfig::default(),
+        2, // Two worker threads
+        1024 * 1024, // 1MB queue
+    );
+
+    // Create the reader
+    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+
+    // Give workers time to read into the queue
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Read records using try_read
+    let mut records = Vec::new();
+    while let Some(piece) = reader.try_read()? {
+        match piece {
+            DiskyParallelPiece::Record(bytes) => {
+                records.push(bytes);
+            }
+            DiskyParallelPiece::EOF => break,
+            _ => {}
+        }
+    }
+
+    // If we got records, verify them
+    if !records.is_empty() {
+        assert!(records.len() <= 5);
+        assert_eq!(&records[0][..], b"record1");
+    }
+
+    // Now read the rest using blocking read
+    while records.len() < 5 {
+        match reader.read()? {
+            DiskyParallelPiece::Record(bytes) => {
+                records.push(bytes);
+            }
+            DiskyParallelPiece::EOF => break,
+            _ => {}
+        }
+    }
+
+    // Verify all records
+    assert_eq!(records.len(), 5);
+    assert_eq!(&records[0][..], b"record1");
+    assert_eq!(&records[1][..], b"record2");
+    assert_eq!(&records[2][..], b"record3");
+    assert_eq!(&records[3][..], b"record4");
+    assert_eq!(&records[4][..], b"record5");
+
+    // Close the reader
+    reader.close()?;
+
+    Ok(())
+}
 

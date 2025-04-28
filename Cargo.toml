@@ -25,3 +25,8 @@ criterion = "0.5.1"
 [[bench]]
 name = "record_io_bench"
 harness = false
+
+[[bench]]
+name = "parallel_reader_bench"
+harness = false
+required-features = ["parallel"]

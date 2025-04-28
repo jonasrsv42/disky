@@ -11,13 +11,13 @@
 //! disky = { version = "0.1.0", features = ["parallel"] }
 //! ```
 
+pub mod byte_queue;
 pub mod promise;
 pub mod reader;
-pub mod sharding;
-pub mod writer;
-
 pub mod resource_pool;
-pub(crate) mod task_queue;
+pub mod sharding;
+pub mod task_queue;
+pub mod writer;
 
 #[cfg(test)]
 mod tests;

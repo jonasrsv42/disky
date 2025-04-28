@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use disky::error::Result;
 use disky::parallel::reader::{
-    ParallelReader, ParallelReaderConfig, ReadResult, ShardingConfig as ReaderShardingConfig,
+    ParallelReader, ParallelReaderConfig, DiskyParallelPiece, ShardingConfig as ReaderShardingConfig,
 };
 use disky::parallel::sharding::{FileShardLocator, FileSharder};
 use disky::parallel::writer::{
@@ -53,15 +53,15 @@ fn test_parallel_reader_with_parallel_writer() -> Result<()> {
     let mut actual_records = HashSet::new();
     loop {
         match reader.read()? {
-            ReadResult::Record(bytes) => {
+            DiskyParallelPiece::Record(bytes) => {
                 let record = String::from_utf8(bytes.to_vec()).expect("Invalid UTF-8");
                 actual_records.insert(record);
             }
-            ReadResult::ShardFinished => {
+            DiskyParallelPiece::ShardFinished => {
                 // Shard finished, continue to next shard
                 continue;
             }
-            ReadResult::EOF => {
+            DiskyParallelPiece::EOF => {
                 // No more records
                 break;
             }
@@ -138,15 +138,15 @@ fn test_parallel_reader_async_with_parallel_writer() -> Result<()> {
     let mut actual_records = HashSet::new();
     for promise in read_promises {
         match promise.wait()? {
-            Ok(ReadResult::Record(bytes)) => {
+            Ok(DiskyParallelPiece::Record(bytes)) => {
                 let record = String::from_utf8(bytes.to_vec()).expect("Invalid UTF-8");
                 actual_records.insert(record);
             }
-            Ok(ReadResult::ShardFinished) => {
+            Ok(DiskyParallelPiece::ShardFinished) => {
                 // This shouldn't happen in the promises
                 panic!("Unexpected ShardFinished in read promise");
             }
-            Ok(ReadResult::EOF) => {
+            Ok(DiskyParallelPiece::EOF) => {
                 // This shouldn't happen with exactly num_records reads
                 panic!("Unexpected EOF in read promise");
             }
@@ -228,7 +228,7 @@ fn test_large_records_parallel_read_write() -> Result<()> {
     let mut actual_hashes = Vec::new();
     loop {
         match reader.read()? {
-            ReadResult::Record(bytes) => {
+            DiskyParallelPiece::Record(bytes) => {
                 // Calculate the hash of the record
                 let hash = {
                     let mut hasher = DefaultHasher::new();
@@ -241,11 +241,11 @@ fn test_large_records_parallel_read_write() -> Result<()> {
                 // Verify the record size
                 assert_eq!(bytes.len(), record_size);
             }
-            ReadResult::ShardFinished => {
+            DiskyParallelPiece::ShardFinished => {
                 // Shard finished, continue to next shard
                 continue;
             }
-            ReadResult::EOF => {
+            DiskyParallelPiece::EOF => {
                 // No more records
                 break;
             }

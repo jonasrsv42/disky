@@ -1,5 +1,5 @@
 use crate::error::{DiskyError, Result};
-use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, ReadResult, ShardingConfig};
+use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, DiskyParallelPiece, ShardingConfig};
 use crate::parallel::sharding::MemoryShardLocator;
 use crate::writer::RecordWriter;
 use std::io::Cursor;
@@ -56,17 +56,17 @@ fn test_parallel_reader_basic() -> Result<()> {
     let mut record_count = 0;
     loop {
         match reader.read()? {
-            ReadResult::Record(bytes) => {
+            DiskyParallelPiece::Record(bytes) => {
                 record_count += 1;
                 let record = String::from_utf8_lossy(&bytes);
                 assert!(record.starts_with("Shard "));
                 assert!(record.contains("Record "));
             }
-            ReadResult::ShardFinished => {
+            DiskyParallelPiece::ShardFinished => {
                 // Shard finished, continue to next shard
                 continue;
             }
-            ReadResult::EOF => {
+            DiskyParallelPiece::EOF => {
                 // No more records
                 break;
             }
@@ -106,13 +106,13 @@ fn test_parallel_reader_basic() -> Result<()> {
     for promise in promises {
         let read_result = promise.wait()??; // Double ? to unwrap both Promise and inner Result
         match read_result {
-            ReadResult::Record(_) => {
+            DiskyParallelPiece::Record(_) => {
                 record_count += 1;
             }
-            ReadResult::ShardFinished => {
+            DiskyParallelPiece::ShardFinished => {
                 // Shouldn't get this in the promises as it's handled internally
             }
-            ReadResult::EOF => {
+            DiskyParallelPiece::EOF => {
                 // Shouldn't get this with exactly 9 reads
             }
         }
@@ -128,10 +128,10 @@ fn test_parallel_reader_basic() -> Result<()> {
     
     // Should be either EOF or ShardFinished
     match result {
-        ReadResult::Record(_) => {
+        DiskyParallelPiece::Record(_) => {
             panic!("Expected EOF, got record");
         }
-        ReadResult::ShardFinished | ReadResult::EOF => {
+        DiskyParallelPiece::ShardFinished | DiskyParallelPiece::EOF => {
             // This is expected
         }
     }
@@ -173,13 +173,13 @@ fn test_parallel_reader_empty_shards() -> Result<()> {
     
     // First read should return EOF (since all shards are empty)
     match reader.read()? {
-        ReadResult::Record(_) => {
+        DiskyParallelPiece::Record(_) => {
             panic!("Expected EOF, got record");
         }
-        ReadResult::ShardFinished => {
+        DiskyParallelPiece::ShardFinished => {
             // Also acceptable
         }
-        ReadResult::EOF => {
+        DiskyParallelPiece::EOF => {
             // This is expected
         }
     }
@@ -235,7 +235,7 @@ fn test_reader_error_handling() -> Result<()> {
     // Read records successfully
     for i in 0..2 {
         match reader.read()? {
-            ReadResult::Record(bytes) => {
+            DiskyParallelPiece::Record(bytes) => {
                 let record = String::from_utf8_lossy(&bytes);
                 assert_eq!(record, format!("Record {}", i));
             }
@@ -248,13 +248,13 @@ fn test_reader_error_handling() -> Result<()> {
     // The next read should return EOF since all records have been read
     // and the locator will return an error if we try to get a new shard
     match reader.read()? {
-        ReadResult::Record(_) => {
+        DiskyParallelPiece::Record(_) => {
             panic!("Unexpected record, should be EOF");
         }
-        ReadResult::ShardFinished => {
+        DiskyParallelPiece::ShardFinished => {
             // This is also acceptable
         }
-        ReadResult::EOF => {
+        DiskyParallelPiece::EOF => {
             // This is expected
         }
     }

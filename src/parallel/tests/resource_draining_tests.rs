@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::parallel::byte_queue::ByteQueue;
-use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, ReadResult, ShardingConfig};
+use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, DiskyParallelPiece, ShardingConfig};
 use crate::parallel::sharding::MemoryShardLocator;
 use crate::writer::RecordWriter;
 use std::io::Cursor;
@@ -60,17 +60,17 @@ fn test_drain_resource_basic() -> Result<()> {
     let mut record_count = 0;
     loop {
         match byte_queue.try_read_front()? {
-            Some(ReadResult::Record(bytes)) => {
+            Some(DiskyParallelPiece::Record(bytes)) => {
                 record_count += 1;
                 let record = String::from_utf8_lossy(&bytes);
                 assert!(record.starts_with("Shard "));
                 assert!(record.contains("Record "));
             }
-            Some(ReadResult::ShardFinished) => {
+            Some(DiskyParallelPiece::ShardFinished) => {
                 // Shard finished, break out and test draining again
                 break;
             }
-            Some(ReadResult::EOF) => {
+            Some(DiskyParallelPiece::EOF) => {
                 // No more records
                 break;
             }
@@ -91,17 +91,17 @@ fn test_drain_resource_basic() -> Result<()> {
     let mut record_count = 0;
     loop {
         match byte_queue.try_read_front()? {
-            Some(ReadResult::Record(bytes)) => {
+            Some(DiskyParallelPiece::Record(bytes)) => {
                 record_count += 1;
                 let record = String::from_utf8_lossy(&bytes);
                 assert!(record.starts_with("Shard "));
                 assert!(record.contains("Record "));
             }
-            Some(ReadResult::ShardFinished) => {
+            Some(DiskyParallelPiece::ShardFinished) => {
                 // Shard finished, break
                 break;
             }
-            Some(ReadResult::EOF) => {
+            Some(DiskyParallelPiece::EOF) => {
                 // No more records
                 break;
             }
@@ -122,17 +122,17 @@ fn test_drain_resource_basic() -> Result<()> {
     let mut record_count = 0;
     loop {
         match byte_queue.try_read_front()? {
-            Some(ReadResult::Record(bytes)) => {
+            Some(DiskyParallelPiece::Record(bytes)) => {
                 record_count += 1;
                 let record = String::from_utf8_lossy(&bytes);
                 assert!(record.starts_with("Shard "));
                 assert!(record.contains("Record "));
             }
-            Some(ReadResult::ShardFinished) => {
+            Some(DiskyParallelPiece::ShardFinished) => {
                 // Shard finished, continue
                 continue;
             }
-            Some(ReadResult::EOF) => {
+            Some(DiskyParallelPiece::EOF) => {
                 // No more records
                 break;
             }
@@ -175,17 +175,17 @@ fn test_drain_resource_basic() -> Result<()> {
     let mut record_count = 0;
     loop {
         match async_queue.try_read_front()? {
-            Some(ReadResult::Record(bytes)) => {
+            Some(DiskyParallelPiece::Record(bytes)) => {
                 record_count += 1;
                 let record = String::from_utf8_lossy(&bytes);
                 assert!(record.starts_with("Shard "));
                 assert!(record.contains("Record "));
             }
-            Some(ReadResult::ShardFinished) => {
+            Some(DiskyParallelPiece::ShardFinished) => {
                 // Got ShardFinished control message
                 break;
             }
-            Some(ReadResult::EOF) => {
+            Some(DiskyParallelPiece::EOF) => {
                 break;
             }
             None => {
@@ -237,13 +237,13 @@ fn test_drain_resource_empty_shard() -> Result<()> {
 
     // Check the queue - should get either ShardFinished or EOF
     match byte_queue.try_read_front()? {
-        Some(ReadResult::Record(_)) => {
+        Some(DiskyParallelPiece::Record(_)) => {
             panic!("Expected ShardFinished or EOF, got record");
         }
-        Some(ReadResult::ShardFinished) => {
+        Some(DiskyParallelPiece::ShardFinished) => {
             // This is expected
         }
-        Some(ReadResult::EOF) => {
+        Some(DiskyParallelPiece::EOF) => {
             // This is also expected
         }
         None => {
@@ -321,16 +321,16 @@ fn test_drain_resource_mixed_records() -> Result<()> {
 
         loop {
             match byte_queue.try_read_front()? {
-                Some(ReadResult::Record(bytes)) => {
+                Some(DiskyParallelPiece::Record(bytes)) => {
                     shard_records += 1;
                     let record = String::from_utf8_lossy(&bytes);
                     assert!(record.starts_with("Shard "));
                     assert!(record.contains("Record "));
                 }
-                Some(ReadResult::ShardFinished) => {
+                Some(DiskyParallelPiece::ShardFinished) => {
                     break;
                 }
-                Some(ReadResult::EOF) => {
+                Some(DiskyParallelPiece::EOF) => {
                     break 'second;
                 }
                 None => {

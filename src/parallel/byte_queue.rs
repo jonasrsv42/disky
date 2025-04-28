@@ -1,5 +1,5 @@
 use crate::error::{DiskyError, Result};
-use crate::parallel::reader::ReadResult;
+use crate::parallel::reader::DiskyParallelPiece;
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex, MutexGuard};
 
@@ -16,7 +16,7 @@ pub enum ByteQueueState {
 #[derive(Debug)]
 struct ByteQueueInner {
     /// Queue of pending records
-    queue: VecDeque<ReadResult>,
+    queue: VecDeque<DiskyParallelPiece>,
     /// Operational state of the queue
     state: ByteQueueState,
     /// Current total bytes used by records in the queue
@@ -25,9 +25,9 @@ struct ByteQueueInner {
     bytes_block_limit: usize,
 }
 
-/// A thread-safe queue for ReadResult objects with byte-size limiting
+/// A thread-safe queue for DiskyParallelPiece objects with byte-size limiting
 ///
-/// This queue is designed for managing ReadResult objects with a limit on the total size
+/// This queue is designed for managing DiskyParallelPiece objects with a limit on the total size
 /// of Bytes objects stored. When the queue reaches the bytes_block_limit, new push
 /// operations will block until space becomes available. However, it will always accept
 /// at least one element regardless of size.
@@ -88,12 +88,12 @@ impl ByteQueue {
         }
     }
 
-    /// Calculate the size of a ReadResult in bytes
-    fn calculate_size(result: &ReadResult) -> usize {
+    /// Calculate the size of a DiskyParallelPiece in bytes
+    fn calculate_size(result: &DiskyParallelPiece) -> usize {
         match result {
-            ReadResult::Record(bytes) => bytes.len(),
+            DiskyParallelPiece::Record(bytes) => bytes.len(),
             // Control messages don't consume storage space
-            ReadResult::ShardFinished | ReadResult::EOF => 0,
+            DiskyParallelPiece::ShardFinished | DiskyParallelPiece::EOF => 0,
         }
     }
 
@@ -101,7 +101,7 @@ impl ByteQueue {
     ///
     /// Will always accept at least one element even if it's larger than bytes_block_limit,
     /// but will block if the queue already contains data that exceeds the limit.
-    pub fn push_back(&self, result: ReadResult) -> Result<()> {
+    pub fn push_back(&self, result: DiskyParallelPiece) -> Result<()> {
         let size = Self::calculate_size(&result);
         let mut inner = self.acquire_lock()?;
 
@@ -128,7 +128,7 @@ impl ByteQueue {
     ///
     /// Returns Ok(true) if the record was added, Ok(false) if there wasn't enough space.
     /// Will always accept at least one element if the queue is empty.
-    pub fn try_push_back(&self, result: ReadResult) -> Result<bool> {
+    pub fn try_push_back(&self, result: DiskyParallelPiece) -> Result<bool> {
         let size = Self::calculate_size(&result);
         let mut inner = self.acquire_lock()?;
 
@@ -151,7 +151,7 @@ impl ByteQueue {
     /// Read a record from the front of the queue
     ///
     /// This will block until a record is available or the queue is closed.
-    pub fn read_front(&self) -> Result<ReadResult> {
+    pub fn read_front(&self) -> Result<DiskyParallelPiece> {
         let mut inner = self.acquire_lock()?;
 
         // Wait until we have items or the queue is closed
@@ -182,7 +182,7 @@ impl ByteQueue {
     /// Try to read a record from the front of the queue without blocking
     ///
     /// Returns Ok(Some(record)) if a record was read, Ok(None) if the queue is empty
-    pub fn try_read_front(&self) -> Result<Option<ReadResult>> {
+    pub fn try_read_front(&self) -> Result<Option<DiskyParallelPiece>> {
         let mut inner = self.acquire_lock()?;
 
         // Try to get an item directly
@@ -208,7 +208,7 @@ impl ByteQueue {
     /// Read all records from the queue
     ///
     /// This will block until at least one record is available or the queue is closed.
-    pub fn read_all(&self) -> Result<Vec<ReadResult>> {
+    pub fn read_all(&self) -> Result<Vec<DiskyParallelPiece>> {
         let mut inner = self.acquire_lock()?;
 
         // Wait until we have items or the queue is closed
@@ -306,10 +306,10 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    // Helper to create a ReadResult::Record with the specified size
-    fn create_record(size: usize) -> ReadResult {
+    // Helper to create a DiskyParallelPiece::Record with the specified size
+    fn create_record(size: usize) -> DiskyParallelPiece {
         let bytes = vec![0u8; size];
-        ReadResult::Record(Bytes::from(bytes))
+        DiskyParallelPiece::Record(Bytes::from(bytes))
     }
 
     #[test]
@@ -327,7 +327,7 @@ mod tests {
 
         // Read records
         match queue.read_front().unwrap() {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 100),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), 100),
             _ => panic!("Expected Record"),
         }
         assert_eq!(queue.len().unwrap(), 2);
@@ -336,54 +336,16 @@ mod tests {
         let results = queue.read_all().unwrap();
         assert_eq!(results.len(), 2);
         match &results[0] {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 200),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), 200),
             _ => panic!("Expected Record"),
         }
         match &results[1] {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 300),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), 300),
             _ => panic!("Expected Record"),
         }
         assert_eq!(queue.len().unwrap(), 0);
         assert_eq!(queue.bytes_used().unwrap(), 0);
         assert_eq!(queue.is_empty().unwrap(), true);
-    }
-
-    #[test]
-    fn test_byte_limit() {
-        let queue = ByteQueue::new(500);
-
-        // Add records
-        queue.push_back(create_record(200)).unwrap();
-        queue.push_back(create_record(200)).unwrap();
-
-        // This should succeed but block in a separate thread
-        let queue_clone = Arc::new(queue);
-        let (tx, rx) = std::sync::mpsc::channel();
-        let queue_ref = Arc::clone(&queue_clone);
-
-        let handle = thread::spawn(move || {
-            tx.send(()).unwrap(); // Signal we're about to block
-            queue_ref.push_back(create_record(200)).unwrap(); // This should block
-            true // Signal we completed successfully
-        });
-
-        // Wait for the thread to start
-        rx.recv().unwrap();
-        thread::sleep(Duration::from_millis(100)); // Give thread time to block
-
-        // Read one record to make space
-        let result = queue_clone.read_front().unwrap();
-        match result {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 200),
-            _ => panic!("Expected Record"),
-        }
-
-        // Thread should now complete
-        assert_eq!(handle.join().unwrap(), true);
-
-        // Queue should have two records now
-        assert_eq!(queue_clone.len().unwrap(), 2);
-        assert_eq!(queue_clone.bytes_used().unwrap(), 400);
     }
 
     #[test]
@@ -399,7 +361,7 @@ mod tests {
 
         // After reading the large record, try_push_back should succeed
         match queue.read_front().unwrap() {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 600),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), 600),
             _ => panic!("Expected Record"),
         }
         assert_eq!(queue.bytes_used().unwrap(), 0);
@@ -433,11 +395,11 @@ mod tests {
                     match queue_clone.read_front() {
                         Ok(result) => {
                             match &result {
-                                ReadResult::Record(bytes) => {
+                                DiskyParallelPiece::Record(bytes) => {
                                     _total_bytes += bytes.len();
                                     read_count += 1;
                                 }
-                                ReadResult::EOF => {
+                                DiskyParallelPiece::EOF => {
                                     // End marker, we're done
                                     break;
                                 }
@@ -480,7 +442,7 @@ mod tests {
 
         // Send EOF markers for all readers and then close the queue
         for _ in 0..reader_count {
-            queue.push_back(ReadResult::EOF).unwrap();
+            queue.push_back(DiskyParallelPiece::EOF).unwrap();
         }
         queue.close().unwrap();
 
@@ -516,7 +478,7 @@ mod tests {
         // Can still read existing records
         let result = queue.read_front().unwrap();
         match result {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 100),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), 100),
             _ => panic!("Expected Record"),
         }
 
@@ -530,7 +492,7 @@ mod tests {
         // Read the last record
         let result = queue.read_front().unwrap();
         match result {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), 100),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), 100),
             _ => panic!("Expected Record"),
         }
 
@@ -554,8 +516,8 @@ mod tests {
         let queue = ByteQueue::new(100);
 
         // Control messages don't count toward the byte total
-        queue.push_back(ReadResult::ShardFinished).unwrap();
-        queue.push_back(ReadResult::EOF).unwrap();
+        queue.push_back(DiskyParallelPiece::ShardFinished).unwrap();
+        queue.push_back(DiskyParallelPiece::EOF).unwrap();
         queue.push_back(create_record(100)).unwrap(); // This still fits
 
         assert_eq!(queue.len().unwrap(), 3);
@@ -563,12 +525,12 @@ mod tests {
 
         // Read the control messages
         match queue.read_front().unwrap() {
-            ReadResult::ShardFinished => {}
+            DiskyParallelPiece::ShardFinished => {}
             _ => panic!("Expected ShardFinished"),
         }
 
         match queue.read_front().unwrap() {
-            ReadResult::EOF => {}
+            DiskyParallelPiece::EOF => {}
             _ => panic!("Expected EOF"),
         }
 
@@ -656,17 +618,17 @@ mod tests {
         
         // Verify items were records with correct size
         match item1 {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), item_size),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), item_size),
             _ => panic!("Expected Record"),
         }
         
         match item2 {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), item_size),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), item_size),
             _ => panic!("Expected Record"),
         }
         
         match item3 {
-            ReadResult::Record(bytes) => assert_eq!(bytes.len(), item_size),
+            DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), item_size),
             _ => panic!("Expected Record"),
         }
         

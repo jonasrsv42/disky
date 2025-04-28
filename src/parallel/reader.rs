@@ -17,9 +17,9 @@ use crate::parallel::sharding::ShardLocator;
 use crate::parallel::task_queue::TaskQueue;
 use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
 
-/// Result of reading a record
+/// Result of reading a record from the parallel reader
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadResult {
+pub enum DiskyParallelPiece {
     /// A record was successfully read
     Record(Bytes),
     
@@ -36,7 +36,7 @@ pub enum Task {
     /// Read the next record from a reader
     NextRecord {
         /// Promise that will be fulfilled when the read completes
-        completion: Arc<Promise<Result<ReadResult>>>,
+        completion: Arc<Promise<Result<DiskyParallelPiece>>>,
     },
     
     /// Drain all records from a resource into a byte queue
@@ -303,7 +303,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     ///
     /// # Returns
     /// A Promise that will be fulfilled with the result
-    pub fn read_async(&self) -> Result<Arc<Promise<Result<ReadResult>>>> {
+    pub fn read_async(&self) -> Result<Arc<Promise<Result<DiskyParallelPiece>>>> {
         let completion = Arc::new(Promise::new());
         
         let task = Task::NextRecord {
@@ -321,11 +321,11 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// to read a record. The resource is removed from the pool if it has reached EOF.
     ///
     /// # Returns
-    /// - Ok(ReadResult::Record(bytes)) if a record was read
-    /// - Ok(ReadResult::ShardFinished) if the current shard is exhausted but there might be more
-    /// - Ok(ReadResult::EOF) if all shards are exhausted
+    /// - Ok(DiskyParallelPiece::Record(bytes)) if a record was read
+    /// - Ok(DiskyParallelPiece::ShardFinished) if the current shard is exhausted but there might be more
+    /// - Ok(DiskyParallelPiece::EOF) if all shards are exhausted
     /// - Err(...) if an error occurred
-    pub fn read(&self) -> Result<ReadResult> {
+    pub fn read(&self) -> Result<DiskyParallelPiece> {
         // Try to get a reader resource
         match self.reader_pool.get_resource() {
             Ok(mut resource) => {
@@ -333,7 +333,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                 match resource.reader.next_record() {
                     Ok(DiskyPiece::Record(bytes)) => {
                         // Successfully read a record
-                        Ok(ReadResult::Record(bytes))
+                        Ok(DiskyParallelPiece::Record(bytes))
                     },
                     Ok(DiskyPiece::EOF) => {
                         // This reader reached EOF, remove it from the pool
@@ -343,7 +343,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                         match self.get_new_shard() {
                             Ok(_) | Err(DiskyError::NoMoreShards) => {
                                 // Signal that this shard is finished, but we can try another
-                                Ok(ReadResult::ShardFinished)
+                                Ok(DiskyParallelPiece::ShardFinished)
                             },
                             Err(e) => {
                                 // Error creating a new shard
@@ -357,7 +357,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             Err(DiskyError::PoolExhausted) => {
                 // No more resources in the pool and we've already tried to create new shards,
                 // so we are truly at EOF
-                Ok(ReadResult::EOF)
+                Ok(DiskyParallelPiece::EOF)
             },
             Err(e) => Err(e),
         }
@@ -452,7 +452,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                     match resource.reader.next_record() {
                         Ok(DiskyPiece::Record(bytes)) => {
                             // Successfully read a record, add to the queue
-                            byte_queue.push_back(ReadResult::Record(bytes))?;
+                            byte_queue.push_back(DiskyParallelPiece::Record(bytes))?;
                         },
                         Ok(DiskyPiece::EOF) => {
                             // This reader reached EOF, remove it from the pool
@@ -462,7 +462,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                             match self.get_new_shard() {
                                 Ok(_) | Err(DiskyError::NoMoreShards) => {
                                     // Signal that this shard is finished
-                                    byte_queue.push_back(ReadResult::ShardFinished)?;
+                                    byte_queue.push_back(DiskyParallelPiece::ShardFinished)?;
                                     return Ok(());
                                 },
                                 Err(e) => {
@@ -478,7 +478,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             Err(DiskyError::PoolExhausted) => {
                 // No more resources in the pool and we've already tried to create new shards,
                 // so we are truly at EOF
-                byte_queue.push_back(ReadResult::EOF)?;
+                byte_queue.push_back(DiskyParallelPiece::EOF)?;
                 Ok(())
             },
             Err(e) => Err(e),

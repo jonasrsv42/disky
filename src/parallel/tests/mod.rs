@@ -7,4 +7,5 @@ mod reader_tests;
 mod resource_draining_tests;
 mod error_handling_tests;
 mod multi_threaded_reader_tests;
+mod multi_threaded_writer_tests;
 

@@ -4,7 +4,10 @@
 // of Disky records, utilizing the underlying ParallelWriter for resource management.
 
 use std::io::{Seek, Write};
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread::{self, JoinHandle};
 
 use bytes::Bytes;
@@ -20,7 +23,7 @@ use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConf
 pub struct MultiThreadedWriterConfig {
     /// Configuration for the underlying parallel writer
     pub writer_config: ParallelWriterConfig,
-    
+
     /// Number of worker threads to spawn
     pub worker_threads: usize,
 }
@@ -32,7 +35,7 @@ impl Default for MultiThreadedWriterConfig {
             Ok(num) => num.get(),
             Err(_) => 2, // Fallback if we can't determine parallelism
         };
-        
+
         Self {
             writer_config: ParallelWriterConfig::default(),
             worker_threads,
@@ -42,10 +45,7 @@ impl Default for MultiThreadedWriterConfig {
 
 impl MultiThreadedWriterConfig {
     /// Creates a new configuration with custom settings
-    pub fn new(
-        writer_config: ParallelWriterConfig,
-        worker_threads: usize,
-    ) -> Self {
+    pub fn new(writer_config: ParallelWriterConfig, worker_threads: usize) -> Self {
         Self {
             writer_config,
             worker_threads: worker_threads.max(1), // Ensure at least one worker
@@ -57,7 +57,7 @@ impl MultiThreadedWriterConfig {
 struct Worker {
     /// Thread handle
     handle: JoinHandle<Result<()>>,
-    
+
     /// Flag to indicate if this worker should continue running
     running: Arc<AtomicBool>,
 }
@@ -69,10 +69,10 @@ struct Worker {
 pub struct MultiThreadedWriter<Sink: Write + Seek + Send + 'static> {
     /// The underlying parallel writer
     writer: Arc<ParallelWriter<Sink>>,
-    
+
     /// Worker threads
     workers: Vec<Worker>,
-    
+
     /// Flag to indicate if the writer has been closed
     closed: AtomicBool,
 }
@@ -94,40 +94,28 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         config: MultiThreadedWriterConfig,
     ) -> Result<Self> {
         // Create the underlying parallel writer
-        let writer = Arc::new(ParallelWriter::new(
-            sharding_config,
-            config.writer_config,
-        )?);
-        
+        let writer = Arc::new(ParallelWriter::new(sharding_config, config.writer_config)?);
+
         // Start worker threads
         let mut workers = Vec::with_capacity(config.worker_threads);
         for i in 0..config.worker_threads {
             let writer_clone = Arc::clone(&writer);
             let running = Arc::new(AtomicBool::new(true));
             let running_clone = Arc::clone(&running);
-            
+
             // Spawn a worker thread
-            let handle = thread::spawn(move || {
-                Self::worker_loop(
-                    i,
-                    writer_clone,
-                    running_clone,
-                )
-            });
-            
-            workers.push(Worker {
-                handle,
-                running,
-            });
+            let handle = thread::spawn(move || Self::worker_loop(i, writer_clone, running_clone));
+
+            workers.push(Worker { handle, running });
         }
-        
+
         Ok(Self {
             writer,
             workers,
             closed: AtomicBool::new(false),
         })
     }
-    
+
     /// Worker thread main loop
     ///
     /// This function runs in each worker thread and continuously processes
@@ -138,7 +126,7 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         running: Arc<AtomicBool>,
     ) -> Result<()> {
         debug!("Worker thread {} starting", id);
-        
+
         // Loop until signaled to stop
         while running.load(Ordering::Acquire) {
             // Process next task from the queue
@@ -159,11 +147,11 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
                 }
             }
         }
-        
+
         debug!("Worker thread {} exiting", id);
         Ok(())
     }
-    
+
     /// Writes a record asynchronously
     ///
     /// This method writes a record using the underlying parallel writer.
@@ -179,11 +167,11 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         if self.closed.load(Ordering::Acquire) {
             return Err(DiskyError::WritingClosedFile);
         }
-        
+
         // Write the record asynchronously
         self.writer.write_record_async(data)
     }
-    
+
     /// Writes a record and waits for completion
     ///
     /// This method writes a record asynchronously using the underlying parallel writer
@@ -199,14 +187,14 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         if self.closed.load(Ordering::Acquire) {
             return Err(DiskyError::WritingClosedFile);
         }
-        
+
         // Write the record asynchronously
         let promise = self.writer.write_record_async(data)?;
-        
+
         // Wait for the write to complete
         promise.wait()?
     }
-    
+
     /// Writes a record from a slice and waits for completion
     ///
     /// This method is a convenience wrapper that converts a slice to Bytes
@@ -222,14 +210,14 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         if self.closed.load(Ordering::Acquire) {
             return Err(DiskyError::WritingClosedFile);
         }
-        
+
         // Convert to Bytes
         let bytes_data = Bytes::copy_from_slice(data);
-        
+
         // Write the record blocking
         self.write_record_blocking(bytes_data)
     }
-    
+
     /// Flushes all writers asynchronously
     ///
     /// This method queues a flush operation to be processed by worker threads,
@@ -242,11 +230,11 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         if self.closed.load(Ordering::Acquire) {
             return Err(DiskyError::WritingClosedFile);
         }
-        
+
         // Queue a flush operation
         self.writer.flush_async()
     }
-    
+
     /// Flushes all writers and waits for completion
     ///
     /// This method queues a flush operation and waits for it to complete.
@@ -258,12 +246,12 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         if self.closed.load(Ordering::Acquire) {
             return Err(DiskyError::WritingClosedFile);
         }
-        
+
         // Queue a flush operation and wait for it to complete
         let promise = self.writer.flush_async()?;
         promise.wait()?
     }
-    
+
     /// Closes the writer asynchronously
     ///
     /// This method signals all worker threads to stop and initiates the closing
@@ -275,16 +263,16 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
     pub fn close_async(&self) -> Result<Arc<Promise<Result<()>>>> {
         // Set the closed flag
         self.closed.store(true, Ordering::Release);
-        
+
         // Signal all workers to stop
         for worker in &self.workers {
             worker.running.store(false, Ordering::Release);
         }
-        
+
         // Close the underlying writer
         self.writer.close_async()
     }
-    
+
     /// Closes the writer and waits for completion
     ///
     /// This method shuts down all worker threads and closes the underlying resources.
@@ -295,19 +283,19 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
     pub fn close(&self) -> Result<()> {
         // Set the closed flag
         self.closed.store(true, Ordering::Release);
-        
+
         // Signal all workers to stop
         for worker in &self.workers {
             worker.running.store(false, Ordering::Release);
         }
-        
+
         // Close the underlying writer
         let promise = self.writer.close_async()?;
-        
+
         // Wait for the close to complete
         promise.wait()?
     }
-    
+
     /// Waits for all worker threads to join
     ///
     /// This method waits for all worker threads to complete and returns
@@ -318,10 +306,10 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         if !self.closed.load(Ordering::Acquire) {
             self.close()?;
         }
-        
+
         // Take the workers out of self to avoid borrow checker issues
         let workers = std::mem::take(&mut self.workers);
-        
+
         // Wait for all workers to complete
         for (i, worker) in workers.into_iter().enumerate() {
             match worker.handle.join() {
@@ -335,15 +323,15 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Returns the number of pending tasks
     pub fn pending_tasks(&self) -> Result<usize> {
         self.writer.pending_task_count()
     }
-    
+
     /// Returns the number of available writer resources
     pub fn available_writers(&self) -> Result<usize> {
         self.writer.available_resource_count()
@@ -356,3 +344,4 @@ impl<Sink: Write + Seek + Send + 'static> Drop for MultiThreadedWriter<Sink> {
         let _ = self.close();
     }
 }
+

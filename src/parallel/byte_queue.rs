@@ -156,31 +156,26 @@ impl ByteQueue {
 
         // Wait until we have items or the queue is closed
         loop {
-            // If we have items, return one
-            if !inner.queue.is_empty() {
-                let result = inner.queue.pop_front().ok_or_else(|| {
-                    DiskyError::Other(
-                        "Non-empty queue with no records. Race condition?".to_string(),
-                    )
-                })?;
+            // Try to get an item directly
+            match inner.queue.pop_front() {
+                Some(result) => {
+                    // Update byte count
+                    let size = Self::calculate_size(&result);
+                    inner.current_bytes -= size;
 
-                // Update byte count
-                let size = Self::calculate_size(&result);
-                inner.current_bytes -= size;
+                    // Notify waiters since the queue state has changed
+                    self.signal.notify_all();
 
-                // Notify waiters since the queue state has changed
-                self.signal.notify_all();
+                    return Ok(result);
+                }
+                None => {
+                    // No items, check if queue is closed
+                    Self::check_closed(&inner, "Queue is closed and empty")?;
 
-                return Ok(result);
+                    // Wait for more records
+                    inner = self.await_signal(inner)?;
+                }
             }
-
-            // If closed and empty, return error
-            if inner.state == ByteQueueState::Closed {
-                return Err(queue_closed_err("Queue is closed and empty"));
-            }
-
-            // Wait for more records
-            inner = self.await_signal(inner)?;
         }
     }
 
@@ -190,28 +185,24 @@ impl ByteQueue {
     pub fn try_read_front(&self) -> Result<Option<ReadResult>> {
         let mut inner = self.acquire_lock()?;
 
-        // Check if we have items
-        if inner.queue.is_empty() {
-            // If closed and empty, return error
-            if inner.state == ByteQueueState::Closed {
-                return Err(queue_closed_err("Queue is closed and empty"));
+        // Try to get an item directly
+        match inner.queue.pop_front() {
+            Some(result) => {
+                // Update byte count
+                let size = Self::calculate_size(&result);
+                inner.current_bytes -= size;
+
+                // Notify waiters since the queue state has changed
+                self.signal.notify_all();
+
+                Ok(Some(result))
             }
-            return Ok(None);
+            None => {
+                // No items, check if queue is closed
+                Self::check_closed(&inner, "Queue is closed and empty")?;
+                Ok(None)
+            }
         }
-
-        // Get a record
-        let result = inner.queue.pop_front().ok_or_else(|| {
-            DiskyError::Other("Non-empty queue with no records. Race condition?".to_string())
-        })?;
-
-        // Update byte count
-        let size = Self::calculate_size(&result);
-        inner.current_bytes -= size;
-
-        // Notify waiters since the queue state has changed
-        self.signal.notify_all();
-
-        Ok(Some(result))
     }
 
     /// Read all records from the queue

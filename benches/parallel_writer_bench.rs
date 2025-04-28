@@ -190,4 +190,3 @@ criterion_group!(benches, parallel_benchmarks::bench_writer_performance);
 criterion_group!(benches, dummy_benchmark);
 
 criterion_main!(benches);
-

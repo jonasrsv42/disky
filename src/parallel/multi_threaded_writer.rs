@@ -260,16 +260,22 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         promise.wait()?
     }
 
-
     /// Closes the writer and waits for completion
     ///
     /// This method shuts down all worker threads and closes the underlying resources.
     /// It blocks until the close operation is complete.
+    /// 
+    /// Only the first thread to call this method will proceed with closing;
+    /// subsequent calls will return a WritingClosedFile error.
     ///
     /// # Returns
     /// A Result indicating success or failure
     pub fn close(&self) -> Result<()> {
-        self.closed.store(true, Ordering::Release);
+        // Atomically set closed to true and get old value
+        // Only proceed if old value was false (first thread to call close)
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Err(DiskyError::WritingClosedFile);
+        }
 
         let promise = self.writer.close_async()?;
         let _ = promise.wait()?;

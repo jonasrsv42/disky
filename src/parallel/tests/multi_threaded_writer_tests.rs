@@ -192,6 +192,26 @@ fn test_error_handling() -> Result<()> {
 }
 
 #[test]
+fn test_double_close_returns_error() -> Result<()> {
+    // Create a writer with 2 shards and 2 worker threads
+    let writer = create_test_writer(2, 2)?;
+
+    // First close should succeed
+    writer.close()?;
+
+    // Second close should fail with WritingClosedFile error
+    let result = writer.close();
+    assert!(result.is_err());
+
+    // Verify it's the specific error we expect
+    if let Err(e) = result {
+        assert!(matches!(e, crate::error::DiskyError::WritingClosedFile));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_writer_shutdown() -> Result<()> {
     // Create a writer with 2 shards and 4 worker threads
     let writer = create_test_writer(2, 4)?;

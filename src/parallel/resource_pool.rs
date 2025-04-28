@@ -2,7 +2,7 @@ use crate::error::{DiskyError, Result};
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex, MutexGuard};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 /// Represents the operational state of a ResourcePool
@@ -51,9 +51,9 @@ pub enum ResourcePoolState {
 ///    they were acquired.
 pub struct ResourcePool<T> {
     /// Internal state protected by mutex
-    inner: Arc<Mutex<ResourcePoolInner<T>>>,
+    inner: Mutex<ResourcePoolInner<T>>,
     /// Condition variable for signaling state changes
-    signal: Arc<Condvar>,
+    signal: Condvar,
 }
 
 #[derive(Debug)]
@@ -71,7 +71,7 @@ struct ResourcePoolInner<T> {
 ///
 /// When this struct is dropped, the wrapped resource is automatically
 /// returned to the resource pool unless `forget()` has been called.
-pub struct Resource<T> {
+pub struct Resource<'a, T> {
     /// The actual resource being managed, wrapped in ManuallyDrop to control drop behavior
     resource: ManuallyDrop<T>,
 
@@ -79,18 +79,18 @@ pub struct Resource<T> {
     forget: bool,
 
     /// Reference to the resource pool's inner state
-    inner: Arc<Mutex<ResourcePoolInner<T>>>,
+    inner: &'a Mutex<ResourcePoolInner<T>>,
 
     /// Reference to the condition variable for signaling resource availability
-    signal: Arc<Condvar>,
+    signal: &'a Condvar,
 }
 
-impl<T> Resource<T> {
+impl<'a, T> Resource<'a, T> {
     /// Create a new Resource wrapper
     ///
     /// This is an internal method used by the ResourcePool to create
     /// a new resource wrapper when checking out a resource.
-    fn new(resource: T, inner: Arc<Mutex<ResourcePoolInner<T>>>, signal: Arc<Condvar>) -> Self {
+    fn new(resource: T, inner: &'a Mutex<ResourcePoolInner<T>>, signal: &'a Condvar) -> Self {
         Self {
             resource: ManuallyDrop::new(resource),
             forget: false,
@@ -107,7 +107,7 @@ impl<T> Resource<T> {
     }
 }
 
-impl<T> Deref for Resource<T> {
+impl<'a, T> Deref for Resource<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -115,13 +115,13 @@ impl<T> Deref for Resource<T> {
     }
 }
 
-impl<T> DerefMut for Resource<T> {
+impl<'a, T> DerefMut for Resource<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.resource
     }
 }
 
-impl<T> Drop for Resource<T> {
+impl<'a, T> Drop for Resource<'a, T> {
     fn drop(&mut self) {
         // Second scope: return the resource and update state
         {
@@ -202,12 +202,12 @@ impl<T> ResourcePool<T> {
     /// ```
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ResourcePoolInner {
+            inner: Mutex::new(ResourcePoolInner {
                 queue: VecDeque::new(),
                 borrows: 0,
                 state: ResourcePoolState::Active,
-            })),
-            signal: Arc::new(Condvar::new()),
+            }),
+            signal: Condvar::new(),
         }
     }
 
@@ -275,11 +275,7 @@ impl<T> ResourcePool<T> {
                     if let Some(resource) = inner.queue.pop_front() {
                         // Got a resource, increment borrows and return
                         inner.borrows += 1;
-                        return Ok(Resource::new(
-                            resource,
-                            self.inner.clone(),
-                            self.signal.clone(),
-                        ));
+                        return Ok(Resource::new(resource, &self.inner, &self.signal));
                     }
                     // No resources available, need to wait
                     inner = self.await_signal(inner)?;

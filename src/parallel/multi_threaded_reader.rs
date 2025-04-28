@@ -327,8 +327,3 @@ impl<Source: Read + Seek + Send + 'static> Drop for MultiThreadedReader<Source> 
         let _ = self.close();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    // Tests will be added in a future PR
-}

@@ -222,7 +222,7 @@ fn test_large_records_multi_threaded() -> Result<()> {
 
     // Flush and close the writer
     writer.flush()?;
-    writer.join()?; // Use join to ensure all resources are properly cleaned up
+    drop(writer); // joins and closes to ensure all resources are properly cleaned up
 
     // Now create a reader to read the records back
     let locator = FileShardLocator::new(dir_path, "mt_large_test")?;

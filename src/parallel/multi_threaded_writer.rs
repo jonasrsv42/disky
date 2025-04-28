@@ -4,6 +4,7 @@
 // of Disky records, utilizing the underlying ParallelWriter for resource management.
 
 use std::io::{Seek, Write};
+use std::mem::ManuallyDrop;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -70,8 +71,8 @@ pub struct MultiThreadedWriter<Sink: Write + Seek + Send + 'static> {
     /// The underlying parallel writer
     writer: Arc<ParallelWriter<Sink>>,
 
-    /// Worker threads
-    workers: Vec<Worker>,
+    /// Worker threads wrapped in ManuallyDrop so they can be taken in drop
+    workers: ManuallyDrop<Vec<Worker>>,
 
     /// Flag to indicate if the writer has been closed
     closed: AtomicBool,
@@ -111,7 +112,7 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
 
         Ok(Self {
             writer,
-            workers,
+            workers: ManuallyDrop::new(workers),
             closed: AtomicBool::new(false),
         })
     }
@@ -265,7 +266,7 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         self.closed.store(true, Ordering::Release);
 
         // Signal all workers to stop
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             worker.running.store(false, Ordering::Release);
         }
 
@@ -285,7 +286,7 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         self.closed.store(true, Ordering::Release);
 
         // Signal all workers to stop
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             worker.running.store(false, Ordering::Release);
         }
 
@@ -296,36 +297,6 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         promise.wait()?
     }
 
-    /// Waits for all worker threads to join
-    ///
-    /// This method waits for all worker threads to complete and returns
-    /// any errors that occurred. This will close the writer if it hasn't
-    /// already been closed.
-    pub fn join(mut self) -> Result<()> {
-        // Close if not already closed
-        if !self.closed.load(Ordering::Acquire) {
-            self.close()?;
-        }
-
-        // Take the workers out of self to avoid borrow checker issues
-        let workers = std::mem::take(&mut self.workers);
-
-        // Wait for all workers to complete
-        for (i, worker) in workers.into_iter().enumerate() {
-            match worker.handle.join() {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        error!("Worker {} returned error: {}", i, e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to join worker {}: {:?}", i, e);
-                }
-            }
-        }
-
-        Ok(())
-    }
 
     /// Returns the number of pending tasks
     pub fn pending_tasks(&self) -> Result<usize> {
@@ -340,8 +311,27 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
 
 impl<Sink: Write + Seek + Send + 'static> Drop for MultiThreadedWriter<Sink> {
     fn drop(&mut self) {
-        // Close the writer, but ignore any errors since we can't return them
+        // First, close the writer to signal shutdown
         let _ = self.close();
+        
+        // Now, take ownership of the workers and join them
+        // SAFETY: This is safe because we're in Drop, so the struct is being destroyed
+        // and we need to join the threads to prevent resource leaks
+        let workers = unsafe { ManuallyDrop::take(&mut self.workers) };
+        
+        // Join all worker threads
+        for (i, worker) in workers.into_iter().enumerate() {
+            match worker.handle.join() {
+                Ok(result) => {
+                    if let Err(e) = result {
+                        error!("Worker {} returned error in drop: {}", i, e);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to join worker {} in drop: {:?}", i, e);
+                }
+            }
+        }
     }
 }
 

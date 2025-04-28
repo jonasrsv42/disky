@@ -4,6 +4,7 @@
 // of Disky records, utilizing the underlying ParallelReader for resource management.
 
 use std::io::{Read, Seek};
+use std::mem::ManuallyDrop;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::thread::{self, JoinHandle};
 
@@ -79,8 +80,8 @@ pub struct MultiThreadedReader<Source: Read + Seek + Send + 'static> {
     /// Queue for passing records between threads
     byte_queue: Arc<ByteQueue>,
     
-    /// Worker threads
-    workers: Vec<Worker>,
+    /// Worker threads wrapped in ManuallyDrop so they can be taken in drop
+    workers: ManuallyDrop<Vec<Worker>>,
     
     /// Flag to indicate if the reader has been closed
     closed: AtomicBool,
@@ -138,7 +139,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
         Ok(Self {
             reader,
             byte_queue,
-            workers,
+            workers: ManuallyDrop::new(workers),
             closed: AtomicBool::new(false),
         })
     }
@@ -243,7 +244,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
         self.closed.store(true, Ordering::Release);
         
         // Signal all workers to stop
-        for worker in &self.workers {
+        for worker in self.workers.iter() {
             worker.running.store(false, Ordering::Release);
         }
         
@@ -256,35 +257,6 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
         Ok(())
     }
     
-    /// Waits for all worker threads to join
-    ///
-    /// This method waits for all worker threads to complete and returns
-    /// any errors that occurred.
-    pub fn join(mut self) -> Result<()> {
-        // Close if not already closed
-        if !self.closed.load(Ordering::Acquire) {
-            self.close()?;
-        }
-        
-        // Take the workers out of self to avoid borrow checker issues
-        let workers = std::mem::take(&mut self.workers);
-        
-        // Wait for all workers to complete
-        for (i, worker) in workers.into_iter().enumerate() {
-            match worker.handle.join() {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        error!("Worker {} returned error: {}", i, e);
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to join worker {}: {:?}", i, e);
-                }
-            }
-        }
-        
-        Ok(())
-    }
     
     /// Returns the number of records in the queue
     pub fn queued_records(&self) -> Result<usize> {
@@ -323,7 +295,26 @@ impl<Source: Read + Seek + Send + 'static> Iterator for MultiThreadedReader<Sour
 
 impl<Source: Read + Seek + Send + 'static> Drop for MultiThreadedReader<Source> {
     fn drop(&mut self) {
-        // Close the reader, but ignore any errors since we can't return them
+        // First, close the reader to signal shutdown
         let _ = self.close();
+        
+        // Now, take ownership of the workers and join them
+        // SAFETY: This is safe because we're in Drop, so the struct is being destroyed
+        // and we need to join the threads to prevent resource leaks
+        let workers = unsafe { ManuallyDrop::take(&mut self.workers) };
+        
+        // Join all worker threads
+        for (i, worker) in workers.into_iter().enumerate() {
+            match worker.handle.join() {
+                Ok(result) => {
+                    if let Err(e) = result {
+                        error!("Worker {} returned error in drop: {}", i, e);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to join worker {} in drop: {:?}", i, e);
+                }
+            }
+        }
     }
 }

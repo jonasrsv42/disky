@@ -171,8 +171,6 @@ mod parallel_benchmarks {
             }
         }
 
-        // Join all threads to ensure proper cleanup
-        reader.join()?;
 
         Ok((record_count, total_size))
     }
@@ -187,7 +185,7 @@ mod parallel_benchmarks {
 
         // Configure benchmark parameters for large data benchmarks
         group.sample_size(10);
-        group.measurement_time(Duration::from_secs(15)); 
+        group.measurement_time(Duration::from_secs(15));
 
         println!("Preparing benchmark data...");
         println!(

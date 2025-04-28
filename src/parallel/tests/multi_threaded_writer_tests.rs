@@ -98,16 +98,15 @@ fn test_async_operations() -> Result<()> {
     // Flush asynchronously
     let flush_promise = writer.flush_async()?;
 
-    // Close asynchronously
-    let close_promise = writer.close_async()?;
-
     // Wait for all operations to complete
     for promise in promises {
         let _ = promise.wait()?;
     }
 
     let _ = flush_promise.wait()?;
-    let _ = close_promise.wait()?;
+
+    // Close. 
+    let _ = writer.close()?;
 
     Ok(())
 }
@@ -244,4 +243,3 @@ fn test_large_number_of_records() -> Result<()> {
 
     Ok(())
 }
-

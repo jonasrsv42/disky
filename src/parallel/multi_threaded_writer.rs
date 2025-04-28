@@ -52,7 +52,7 @@ impl MultiThreadedWriterConfig {
             worker_threads: worker_threads.max(1), // Ensure at least one worker
         }
     }
-    
+
     /// Creates a new configuration with task queue capacity
     pub fn with_task_queue_capacity(mut self, capacity: usize) -> Self {
         // Update the writer_config with the task_queue_capacity
@@ -260,26 +260,6 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         promise.wait()?
     }
 
-    /// Closes the writer asynchronously
-    ///
-    /// This method signals all worker threads to stop and initiates the closing
-    /// of the underlying resources. It returns a Promise that will be fulfilled
-    /// when the close operation completes.
-    ///
-    /// # Returns
-    /// A Result containing a Promise that will be fulfilled when the close completes
-    pub fn close_async(&self) -> Result<Arc<Promise<Result<()>>>> {
-        // Set the closed flag
-        self.closed.store(true, Ordering::Release);
-
-        // Signal all workers to stop
-        for worker in self.workers.iter() {
-            worker.running.store(false, Ordering::Release);
-        }
-
-        // Close the underlying writer
-        self.writer.close_async()
-    }
 
     /// Closes the writer and waits for completion
     ///
@@ -289,21 +269,17 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
     /// # Returns
     /// A Result indicating success or failure
     pub fn close(&self) -> Result<()> {
-        // Set the closed flag
         self.closed.store(true, Ordering::Release);
+
+        let promise = self.writer.close_async()?;
+        let _ = promise.wait()?;
 
         // Signal all workers to stop
         for worker in self.workers.iter() {
             worker.running.store(false, Ordering::Release);
         }
-
-        // Close the underlying writer
-        let promise = self.writer.close_async()?;
-
-        // Wait for the close to complete
-        promise.wait()?
+        Ok(())
     }
-
 
     /// Returns the number of pending tasks
     pub fn pending_tasks(&self) -> Result<usize> {
@@ -320,12 +296,12 @@ impl<Sink: Write + Seek + Send + 'static> Drop for MultiThreadedWriter<Sink> {
     fn drop(&mut self) {
         // First, close the writer to signal shutdown
         let _ = self.close();
-        
+
         // Now, take ownership of the workers and join them
         // SAFETY: This is safe because we're in Drop, so the struct is being destroyed
         // and we need to join the threads to prevent resource leaks
         let workers = unsafe { ManuallyDrop::take(&mut self.workers) };
-        
+
         // Join all worker threads
         for (i, worker) in workers.into_iter().enumerate() {
             match worker.handle.join() {
@@ -341,4 +317,3 @@ impl<Sink: Write + Seek + Send + 'static> Drop for MultiThreadedWriter<Sink> {
         }
     }
 }
-

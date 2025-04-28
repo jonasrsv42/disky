@@ -128,8 +128,7 @@ fn test_multi_threaded_reader_writer_async() -> Result<()> {
     let _ = flush_promise.wait()?;
 
     // Close asynchronously and wait
-    let close_promise = writer.close_async()?;
-    let _ = close_promise.wait()?;
+    writer.close()?;
 
     // Now create a reader to read the records back
     let locator = FileShardLocator::new(dir_path, "mt_async_test")?;
@@ -282,4 +281,3 @@ fn test_large_records_multi_threaded() -> Result<()> {
 
     Ok(())
 }
-

@@ -5,4 +5,5 @@ mod auto_sharding_tests;
 mod shard_locator_tests;
 mod reader_tests;
 mod resource_draining_tests;
+mod error_handling_tests;
 

@@ -147,6 +147,11 @@ pub struct ParallelWriterConfig {
     /// Maximum number of bytes a writer can write before it's dropped from the pool
     /// Set to None to allow unlimited bytes per writer (default)
     pub max_bytes_per_writer: Option<usize>,
+    
+    /// Optional maximum capacity for the task queue
+    /// When this capacity is reached, write operations will block
+    /// until space becomes available in the queue
+    pub task_queue_capacity: Option<usize>,
 }
 
 impl Default for ParallelWriterConfig {
@@ -154,7 +159,16 @@ impl Default for ParallelWriterConfig {
         Self {
             writer_config: RecordWriterConfig::default(),
             max_bytes_per_writer: None,
+            task_queue_capacity: None, // Default to unbounded queue
         }
+    }
+}
+
+impl ParallelWriterConfig {
+    /// Creates a new configuration with task queue capacity
+    pub fn with_task_queue_capacity(mut self, capacity: usize) -> Self {
+        self.task_queue_capacity = Some(capacity.max(1)); // Ensure capacity is at least 1
+        self
     }
 }
 
@@ -296,9 +310,13 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         sharding_config: ShardingConfig<Sink>,
         config: ParallelWriterConfig,
     ) -> Result<Self> {
-        let task_queue = Arc::new(TaskQueue::new());
+        // Create a task queue with capacity limit if specified in config
+        let task_queue = match config.task_queue_capacity {
+            Some(capacity) => Arc::new(TaskQueue::with_capacity(capacity)),
+            None => Arc::new(TaskQueue::new()),
+        };
+        
         let resource_pool = Arc::new(ResourcePool::new());
-
         let initial_shards = sharding_config.shards;
 
         let writer = Self {

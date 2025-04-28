@@ -18,6 +18,8 @@ struct TaskQueueInner<T> {
     queue: VecDeque<T>,
     /// Operational state of the queue
     state: TaskQueueState,
+    /// Optional maximum capacity of the queue
+    max_capacity: Option<usize>,
 }
 
 /// A thread-safe queue for tasks
@@ -33,35 +35,76 @@ pub struct TaskQueue<T> {
 }
 
 impl<T> TaskQueue<T> {
-    /// Create a new empty task queue
+    /// Create a new empty task queue without capacity limit
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(TaskQueueInner {
                 queue: VecDeque::new(),
                 state: TaskQueueState::Normal,
+                max_capacity: None,
+            }),
+            signal: Condvar::new(),
+        }
+    }
+    
+    /// Create a new empty task queue with a maximum capacity
+    ///
+    /// When the queue reaches this capacity, push_back will block until
+    /// space becomes available.
+    ///
+    /// # Arguments
+    /// * `max_capacity` - The maximum number of items the queue can hold
+    pub fn with_capacity(max_capacity: usize) -> Self {
+        // Ensure capacity is at least 1
+        let max_capacity = max_capacity.max(1);
+        
+        Self {
+            inner: Mutex::new(TaskQueueInner {
+                queue: VecDeque::new(),
+                state: TaskQueueState::Normal,
+                max_capacity: Some(max_capacity),
             }),
             signal: Condvar::new(),
         }
     }
 
     /// Add a task to the back of the queue
+    ///
+    /// If the queue has a maximum capacity and is full, this method will
+    /// block until space becomes available or the queue is closed.
     pub fn push_back(&self, t: T) -> Result<()> {
         let mut inner = self
             .inner
             .lock()
             .map_err(|e| DiskyError::Other(e.to_string()))?;
 
-        // Check if queue is closed
-        if inner.state == TaskQueueState::Closed {
-            return Err(DiskyError::QueueClosed(
-                "Cannot add to a closed queue".to_string(),
-            ));
+        // Wait until we have space or the queue is closed
+        loop {
+            // Check if queue is closed
+            if inner.state == TaskQueueState::Closed {
+                return Err(DiskyError::QueueClosed(
+                    "Cannot add to a closed queue".to_string(),
+                ));
+            }
+            
+            // Check if we're at capacity
+            if let Some(max_capacity) = inner.max_capacity {
+                if inner.queue.len() >= max_capacity {
+                    // We're at capacity, wait for space
+                    inner = self.signal.wait(inner).unwrap();
+                    // After wait, continue the loop to check queue state again
+                    continue;
+                }
+            }
+            
+            // Either no capacity limit or we have space, add the task
+            inner.queue.push_back(t);
+            
+            // Notify waiting threads (especially those waiting in read_front or read_all)
+            self.signal.notify_one();
+            
+            return Ok(());
         }
-
-        inner.queue.push_back(t);
-        self.signal.notify_one();
-
-        Ok(())
     }
 
     /// Read a task from the front of the queue
@@ -75,17 +118,14 @@ impl<T> TaskQueue<T> {
 
         // Wait until we have items or the queue is closed
         loop {
-            // If we have items, return one
-            if !inner.queue.is_empty() {
-                return match inner.queue.pop_front() {
-                    Some(task) => Ok(task),
-                    None => Err(DiskyError::Other(
-                        "non-empty queue with no tasks. Race condition?".to_string(),
-                    )),
-                };
+            // Try to get an item directly
+            if let Some(task) = inner.queue.pop_front() {
+                // Notify any threads waiting due to capacity limits
+                self.signal.notify_one();
+                return Ok(task);
             }
 
-            // If closed and empty, return error
+            // No items - if closed, return error
             if inner.state == TaskQueueState::Closed {
                 return Err(DiskyError::QueueClosed(
                     "Queue is closed and empty".to_string(),
@@ -108,12 +148,15 @@ impl<T> TaskQueue<T> {
 
         // Wait until we have items or the queue is closed
         loop {
-            // If we have items, return all of them
-            if !inner.queue.is_empty() {
-                let mut all = Vec::new();
-                while let Some(task) = inner.queue.pop_front() {
-                    all.push(task);
-                }
+            // Drain all items from the queue
+            let mut all = Vec::new();
+            while let Some(task) = inner.queue.pop_front() {
+                all.push(task);
+            }
+            
+            // If we got any items, notify any threads waiting due to capacity limits and return
+            if !all.is_empty() {
+                self.signal.notify_all(); // Notify all waiters since we freed up multiple slots
                 return Ok(all);
             }
 

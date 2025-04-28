@@ -52,6 +52,13 @@ impl MultiThreadedWriterConfig {
             worker_threads: worker_threads.max(1), // Ensure at least one worker
         }
     }
+    
+    /// Creates a new configuration with task queue capacity
+    pub fn with_task_queue_capacity(mut self, capacity: usize) -> Self {
+        // Update the writer_config with the task_queue_capacity
+        self.writer_config = self.writer_config.with_task_queue_capacity(capacity);
+        self
+    }
 }
 
 /// Worker thread state
@@ -94,7 +101,7 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
         sharding_config: ShardingConfig<Sink>,
         config: MultiThreadedWriterConfig,
     ) -> Result<Self> {
-        // Create the underlying parallel writer
+        // Create the underlying parallel writer (which will handle task queue capacity if configured)
         let writer = Arc::new(ParallelWriter::new(sharding_config, config.writer_config)?);
 
         // Start worker threads

@@ -327,6 +327,7 @@ fn test_writer_rotation_on_byte_limit() {
     let config = ParallelWriterConfig {
         writer_config: RecordWriterConfig::default(),
         max_bytes_per_writer: Some(15), // Only allow 15 bytes per writer
+        task_queue_capacity: None,
     };
 
     let parallel_writer = ParallelWriter::new(sharding_config, config).unwrap();
@@ -393,6 +394,7 @@ fn test_partial_writer_rotation_on_byte_limit() {
         // Only allow 8 bytes per writer, which means first writer will be dropped
         // after the first record, but second writer should remain available
         max_bytes_per_writer: Some(8),
+        task_queue_capacity: None
     };
 
     let parallel_writer = ParallelWriter::new(sharding_config, config).unwrap();

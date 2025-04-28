@@ -30,3 +30,8 @@ harness = false
 name = "parallel_reader_bench"
 harness = false
 required-features = ["parallel"]
+
+[[bench]]
+name = "parallel_writer_bench"
+harness = false
+required-features = ["parallel"]

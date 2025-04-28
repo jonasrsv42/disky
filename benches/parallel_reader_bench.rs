@@ -39,7 +39,7 @@ const RECORDS_PER_SHARD: usize = 1_000; // 1,000 records per shard = ~1GB
 const SHARD_COUNT: usize = 10; // 10 shards = ~10GB total
 
 // Number of threads to use for multi-threaded reader and writer
-const DEFAULT_THREAD_COUNT: usize = SHARD_COUNT;
+const DEFAULT_THREAD_COUNT: usize = 4;
 
 /// Generate test record data of a specific size
 fn generate_test_record(record_index: usize, record_size: usize) -> Vec<u8> {
@@ -170,7 +170,6 @@ mod parallel_benchmarks {
                 DiskyParallelPiece::ShardFinished => continue,
             }
         }
-
 
         Ok((record_count, total_size))
     }

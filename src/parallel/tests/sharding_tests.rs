@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
-use crate::parallel::sharding::{Autosharder, FileSharder, Sharder};
+use crate::parallel::sharding::{Autosharder, FileSharder, Sharder, FileSharderConfig};
 use crate::error::Result;
 
 // Helper function to create a simple memory-based sharder
@@ -63,7 +63,7 @@ fn test_file_sharder_basic() {
     let dir_path = temp_dir.path().to_path_buf();
     
     // Create a file sharder
-    let sharder = FileSharder::new(
+    let sharder = FileSharder::with_prefix(
         dir_path.clone(),
         "test"
     );
@@ -96,7 +96,7 @@ fn test_file_sharder_sequential_numbering() {
     let dir_path = temp_dir.path().to_path_buf();
     
     // Create a file sharder
-    let sharder = FileSharder::new(
+    let sharder = FileSharder::with_prefix(
         dir_path.clone(),
         "seq"
     );
@@ -123,7 +123,7 @@ fn test_file_sharder_with_nested_directory() {
     let dir_path = temp_dir.path().join("nested").join("folders");
     
     // Create a file sharder with a nested directory path
-    let sharder = FileSharder::new(
+    let sharder = FileSharder::with_prefix(
         dir_path.clone(),
         "file"
     );
@@ -227,4 +227,47 @@ fn test_file_sharder_with_custom_starting_index() {
         let file_path = dir_path.join(format!("custom_{}", 100 + i));
         assert!(file_path.exists());
     }
+}
+
+#[test]
+fn test_file_sharder_with_append_mode() {
+    // Create a temporary directory
+    let temp_dir = tempdir().unwrap();
+    let dir_path = temp_dir.path().to_path_buf();
+    
+    // Create some existing files first
+    std::fs::create_dir_all(&dir_path).unwrap();
+    for i in 0..3 {
+        let file_path = dir_path.join(format!("append_{}", i));
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(format!("existing file {}", i).as_bytes()).unwrap();
+    }
+    
+    // Create a file sharder with append mode enabled
+    let config = FileSharderConfig::new("append").with_append(true);
+    let sharder = FileSharder::with_config(dir_path.clone(), config);
+    
+    // Create a new sink - should skip the existing files
+    let mut sink = sharder.create_sink().unwrap();
+    sink.write_all(b"new file").unwrap();
+    sink.flush().unwrap();
+    
+    // Verify that a new file was created with the next index
+    let file_path = dir_path.join("append_3");
+    assert!(file_path.exists());
+    
+    // Verify that the original files still have their original content
+    for i in 0..3 {
+        let file_path = dir_path.join(format!("append_{}", i));
+        let mut file = std::fs::File::open(&file_path).unwrap();
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).unwrap();
+        assert_eq!(buffer, format!("existing file {}", i).as_bytes());
+    }
+    
+    // Verify the new file has the correct content
+    let mut file = std::fs::File::open(dir_path.join("append_3")).unwrap();
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).unwrap();
+    assert_eq!(buffer, b"new file");
 }

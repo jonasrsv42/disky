@@ -13,7 +13,7 @@ fn test_file_shard_locator_basic() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
     
     // Create a file sharder to generate some test files
-    let sharder = FileSharder::new(dir_path.clone(), "test");
+    let sharder = FileSharder::with_prefix(dir_path.clone(), "test");
     
     // Create a few shard files
     let shard_count = 3;

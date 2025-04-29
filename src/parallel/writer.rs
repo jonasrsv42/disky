@@ -26,14 +26,21 @@
 //!
 //! ```rust,no_run
 //! use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-//! use disky::parallel::sharding::{Autosharder, FileSharder};
+//! use disky::parallel::sharding::{Autosharder, FileSharder, FileSharderConfig};
 //! use std::path::PathBuf;
 //! use bytes::Bytes;
 //!
 //! // Create a file sharder that creates sequentially numbered files
-//! let file_sharder = FileSharder::new(
+//! let file_sharder = FileSharder::with_prefix(
 //!     PathBuf::from("/tmp/output"),
 //!     "shard"
+//! );
+//! 
+//! // Or with append mode for appending to an existing sharded file
+//! let config = FileSharderConfig::new("shard").with_append(true);
+//! let append_sharder = FileSharder::with_config(
+//!     PathBuf::from("/tmp/output"),
+//!     config
 //! );
 //!
 //! // Configure with 4 shards

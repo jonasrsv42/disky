@@ -19,7 +19,7 @@ fn test_parallel_reader_with_parallel_writer() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with the temporary directory
-    let file_sharder = FileSharder::new(dir_path.clone(), "test_shard");
+    let file_sharder = FileSharder::with_prefix(dir_path.clone(), "test_shard");
 
     // Configure with 3 shards
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 3);
@@ -85,7 +85,7 @@ fn test_parallel_reader_async_with_parallel_writer() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with the temporary directory
-    let file_sharder = FileSharder::new(dir_path.clone(), "async_test");
+    let file_sharder = FileSharder::with_prefix(dir_path.clone(), "async_test");
 
     // Configure with 5 shards for more parallelism
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 5);
@@ -173,7 +173,7 @@ fn test_large_records_parallel_read_write() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with the temporary directory
-    let file_sharder = FileSharder::new(dir_path.clone(), "large_test");
+    let file_sharder = FileSharder::with_prefix(dir_path.clone(), "large_test");
 
     // Configure with 2 shards
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 2);

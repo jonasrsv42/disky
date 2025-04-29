@@ -94,7 +94,7 @@ mod parallel_benchmarks {
         let dir = tempdir().expect("Failed to create temp directory");
 
         // Create a FileSharder for the multi-threaded writer
-        let sharder = FileSharder::new(dir.path().to_path_buf(), "shard");
+        let sharder = FileSharder::with_prefix(dir.path().to_path_buf(), "shard");
 
         // Create sharding config for the multi-threaded writer
         let sharding_config = ShardingConfig::new(Box::new(sharder), shard_count);

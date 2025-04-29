@@ -24,7 +24,7 @@ use disky::reader::{RecordReader, DiskyPiece};
 use disky::writer::RecordWriter;
 
 // Writing records
-let file = File::create("data.riegeli")?;
+let file = File::create("data.disky")?;
 let mut writer = RecordWriter::new(file)?;
 
 // Write some records
@@ -36,7 +36,7 @@ writer.write_record(b"Record 3")?;
 writer.close()?;
 
 // Reading records
-let file = File::open("data.riegeli")?;
+let file = File::open("data.disky")?;
 let mut reader = RecordReader::new(file)?;
 
 // Read all records
@@ -56,7 +56,7 @@ loop {
 use std::fs::File;
 use disky::reader::RecordReader;
 
-let file = File::open("data.riegeli")?;
+let file = File::open("data.disky")?;
 let reader = RecordReader::new(file)?;
 
 // Iterate over all records

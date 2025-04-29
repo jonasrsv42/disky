@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 
-use crate::parallel::sharding::{Autosharder, FileSharder, Sharder, FileSharderConfig};
+use crate::parallel::sharding::{
+    Autosharder, FileSharder, FileSharderConfig, RandomRepeatingFileShardLocator, Sharder, ShardLocator
+};
 use crate::error::Result;
 
 // Helper function to create a simple memory-based sharder
@@ -270,4 +272,145 @@ fn test_file_sharder_with_append_mode() {
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
     assert_eq!(buffer, b"new file");
+}
+
+#[test]
+fn test_random_repeating_file_shard_locator() {
+    // Create a temporary directory
+    let temp_dir = tempdir().unwrap();
+    let dir_path = temp_dir.path().to_path_buf();
+    
+    // Create some test files
+    std::fs::create_dir_all(&dir_path).unwrap();
+    for i in 0..5 {
+        let file_path = dir_path.join(format!("random_{}", i));
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(format!("file content {}", i).as_bytes()).unwrap();
+    }
+    
+    // Create a random repeating locator with a fixed seed for deterministic testing
+    let locator = RandomRepeatingFileShardLocator::with_seed(
+        dir_path.clone(),
+        "random",
+        42 // fixed seed for deterministic shuffling
+    ).unwrap();
+    
+    // Read first round of shards and verify all files are accessed exactly once
+    let mut content_set = std::collections::HashSet::new();
+    for _ in 0..5 {
+        let mut file = locator.next_shard().unwrap();
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).unwrap();
+        let content = String::from_utf8_lossy(&buffer).to_string();
+        
+        // Verify this is the first time we've seen this content
+        assert!(content_set.insert(content));
+    }
+    
+    // Check that we have content from all 5 files
+    assert_eq!(content_set.len(), 5);
+    
+    // Now read second round - should get all files again in a potentially different order
+    let mut second_round_set = std::collections::HashSet::new();
+    for _ in 0..5 {
+        let mut file = locator.next_shard().unwrap();
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).unwrap();
+        let content = String::from_utf8_lossy(&buffer).to_string();
+        
+        // Verify this is the first time we've seen this content in the second round
+        // and that this content was also in the first round
+        assert!(second_round_set.insert(content.clone()));
+        assert!(content_set.contains(&content));
+    }
+    
+    // Check that we have content from all 5 files in the second round
+    assert_eq!(second_round_set.len(), 5);
+}
+
+#[test]
+fn test_random_repeating_file_shard_locator_with_empty_directory() {
+    // Create a temporary directory
+    let temp_dir = tempdir().unwrap();
+    let dir_path = temp_dir.path().to_path_buf();
+    
+    // Ensure the directory exists but is empty
+    std::fs::create_dir_all(&dir_path).unwrap();
+    
+    // Attempting to create a locator with no matching files should fail
+    let result = RandomRepeatingFileShardLocator::new(
+        dir_path.clone(),
+        "empty"
+    );
+    
+    // Verify we get the expected error
+    assert!(result.is_err());
+    if let Err(e) = result {
+        assert!(e.to_string().contains("No shards found"));
+    }
+}
+
+#[test]
+fn test_random_repeating_file_shard_locator_two_threads() {
+    use std::sync::Arc;
+    use std::thread;
+    
+    // Create a temporary directory
+    let temp_dir = tempdir().unwrap();
+    let dir_path = temp_dir.path().to_path_buf();
+    
+    // Create some test files
+    std::fs::create_dir_all(&dir_path).unwrap();
+    for i in 0..10 {
+        let file_path = dir_path.join(format!("mt_{}", i));
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        file.write_all(format!("thread test {}", i).as_bytes()).unwrap();
+    }
+    
+    // Create a shared locator
+    let locator = Arc::new(RandomRepeatingFileShardLocator::new(
+        dir_path.clone(),
+        "mt"
+    ).unwrap());
+    
+    // Create two threads that each read 10 files (full set)
+    let locator1 = Arc::clone(&locator);
+    let thread1 = thread::spawn(move || {
+        let mut contents = Vec::new();
+        for _ in 0..10 {
+            let mut file = locator1.next_shard().unwrap();
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer).unwrap();
+            contents.push(String::from_utf8_lossy(&buffer).to_string());
+        }
+        contents
+    });
+
+    // Read thread 1 first to ensure unique files.
+    let contents1 = thread1.join().unwrap();
+    
+    let locator2 = Arc::clone(&locator);
+    let thread2 = thread::spawn(move || {
+        let mut contents = Vec::new();
+        for _ in 0..10 {
+            let mut file = locator2.next_shard().unwrap();
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer).unwrap();
+            contents.push(String::from_utf8_lossy(&buffer).to_string());
+        }
+        contents
+    });
+    
+    let contents2 = thread2.join().unwrap();
+    
+    // Each thread should have read all 10 files
+    let set1: std::collections::HashSet<_> = contents1.iter().collect();
+    let set2: std::collections::HashSet<_> = contents2.iter().collect();
+    
+    assert_eq!(set1.len(), 10, "Thread 1 should read all 10 unique files");
+    assert_eq!(set2.len(), 10, "Thread 2 should read all 10 unique files");
+    
+    // The combined set should have 10 unique file contents
+    let all_contents: std::collections::HashSet<_> = contents1.iter().chain(contents2.iter()).collect();
+    assert_eq!(all_contents.len(), 10, "There should be exactly 10 unique file contents");
 }

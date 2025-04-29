@@ -363,7 +363,6 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
         }
     }
     
-    // Iterator functionality removed - will be implemented in a future update
     
     /// Close the reader
     ///

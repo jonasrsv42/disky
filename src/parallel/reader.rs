@@ -366,7 +366,9 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     
     /// Close the reader
     ///
-    /// This method closes the task queue and resource pool.
+    /// This method closes the resource pool and task queue, then processes any remaining
+    /// tasks in the queue by fulfilling their promises with a QueueClosed error. This prevents
+    /// deadlocks where threads are waiting for promises that never get fulfilled.
     ///
     /// # Returns
     /// Ok(()) if the reader was closed successfully, or an error
@@ -375,7 +377,32 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
         let resource_close_result = self.reader_pool.close();
         
         // Then, try to close the task queue, regardless of whether the resource close succeeded
+        // This prevents new tasks from being added
         let task_close_result = self.task_queue.close();
+        
+        // Now drain any remaining tasks from the queue and fulfill their promises with an error
+        // This prevents deadlocks where threads are waiting for promises that never get fulfilled
+        let remaining_tasks = self.task_queue.read_all().unwrap_or_default();
+        
+        for task in remaining_tasks {
+            match task {
+                Task::NextRecord { completion } => {
+                    let _ = completion.fulfill(Err(DiskyError::QueueClosed(
+                        "Reader queue was closed before read could be processed".to_string(),
+                    )));
+                },
+                Task::DrainResource { completion, .. } => {
+                    let _ = completion.fulfill(Err(DiskyError::QueueClosed(
+                        "Reader queue was closed before drain could be processed".to_string(),
+                    )));
+                },
+                Task::Close { completion } => {
+                    let _ = completion.fulfill(Err(DiskyError::QueueClosed(
+                        "Reader queue was already closed".to_string(),
+                    )));
+                },
+            }
+        }
         
         // Return the first error encountered, prioritizing resource errors over task queue errors
         match (resource_close_result, task_close_result) {

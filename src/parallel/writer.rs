@@ -35,7 +35,7 @@
 //!     PathBuf::from("/tmp/output"),
 //!     "shard"
 //! );
-//! 
+//!
 //! // Or with append mode for appending to an existing sharded file
 //! let config = FileSharderConfig::new("shard").with_append(true);
 //! let append_sharder = FileSharder::with_config(
@@ -77,7 +77,7 @@
 use std::io::{Seek, Write};
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{Result, DiskyError};
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::sharding::Sharder;
@@ -154,7 +154,7 @@ pub struct ParallelWriterConfig {
     /// Maximum number of bytes a writer can write before it's dropped from the pool
     /// Set to None to allow unlimited bytes per writer (default)
     pub max_bytes_per_writer: Option<usize>,
-    
+
     /// Optional maximum capacity for the task queue
     /// When this capacity is reached, write operations will block
     /// until space becomes available in the queue
@@ -322,7 +322,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
             Some(capacity) => Arc::new(TaskQueue::with_capacity(capacity)),
             None => Arc::new(TaskQueue::new()),
         };
-        
+
         let resource_pool = Arc::new(ResourcePool::new());
         let initial_shards = sharding_config.shards;
 
@@ -728,8 +728,12 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// It's safe to use in a single thread without causing deadlocks because
     /// it uses the pause mechanism to ensure no resources are being processed.
     ///
-    /// This method first closes all writer resources, then closes the task queue.
-    /// If either operation returns an error, the error is propagated, with
+    /// This method first closes all writer resources, then closes the task queue
+    /// to prevent new tasks from being added. Finally, it processes any remaining tasks
+    /// in the queue by fulfilling their promises with a QueueClosed error, which prevents
+    /// deadlocks where threads are waiting for promises that never get fulfilled.
+    ///
+    /// If any operation returns an error, the error is propagated, with
     /// resource errors taking precedence over task queue errors.
     ///
     /// # Returns
@@ -757,7 +761,32 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
             .process_then_close(|resource| resource.writer.close());
 
         // Then, try to close the task queue, regardless of whether the resource close succeeded
+        // This prevents new tasks from being added
         let task_close_result = self.task_queue.close();
+
+        // Now drain any remaining tasks from the queue and fulfill their promises with an error
+        // This prevents deadlocks where threads are waiting for promises that never get fulfilled
+        let remaining_tasks = self.task_queue.read_all().unwrap_or_default();
+
+        for task in remaining_tasks {
+            match task {
+                Task::Write { completion, .. } => {
+                    let _ = completion.fulfill(Err(DiskyError::QueueClosed(
+                        "Writer queue was closed before task could be processed".to_string(),
+                    )));
+                }
+                Task::Flush { completion } => {
+                    let _ = completion.fulfill(Err(DiskyError::QueueClosed(
+                        "Writer queue was closed before flush could be processed".to_string(),
+                    )));
+                }
+                Task::Close { completion } => {
+                    let _ = completion.fulfill(Err(DiskyError::QueueClosed(
+                        "Writer queue was already closed".to_string(),
+                    )));
+                }
+            }
+        }
 
         // Return the first error encountered, prioritizing resource errors over task queue errors
         match (resource_close_result, task_close_result) {

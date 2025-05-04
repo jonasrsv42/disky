@@ -87,9 +87,6 @@ pub struct MultiThreadedReader<Source: Read + Seek + Send + 'static> {
 
     /// Flag to indicate if the reader has been closed
     closed: AtomicBool,
-    
-    /// Tracks the number of active worker threads
-    active_workers: Arc<AtomicUsize>,
 }
 
 impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
@@ -113,7 +110,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
 
         // Create the byte queue
         let byte_queue = Arc::new(ByteQueue::new(config.queue_size_bytes));
-        
+
         // Create active worker counter
         let active_workers = Arc::new(AtomicUsize::new(config.worker_threads));
 
@@ -133,7 +130,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
                     reader_clone,
                     byte_queue_clone,
                     running_clone,
-                    active_workers_clone
+                    active_workers_clone,
                 )
             });
 
@@ -145,7 +142,6 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
             byte_queue,
             workers: ManuallyDrop::new(workers),
             closed: AtomicBool::new(false),
-            active_workers,
         })
     }
 
@@ -188,19 +184,19 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
         }
 
         debug!("Worker thread {} exiting", id);
-        
+
         // Decrement the active worker count and check if this is the last worker
         let remaining = active_workers.fetch_sub(1, Ordering::SeqCst);
-        
+
         // If this was the last worker (remaining will be 1 before subtraction)
         if remaining == 1 {
             debug!("Last worker exiting, closing byte queue to unblock any waiting readers");
-            
+
             // If we're the last worker, close the byte queue to unblock any waiting readers
             // This will cause read() to return EOF
             let _ = byte_queue.close();
         }
-        
+
         Ok(())
     }
 
@@ -270,13 +266,13 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
         // Try to close the byte queue to unblock any readers
         // Ignore errors if it's already closed (which might happen if last worker closed it)
         let byte_queue_result = self.byte_queue.close();
-        
+
         // Close the underlying reader
         let reader_result = self.reader.close();
-        
+
         // Return the first error, prioritizing reader errors
         match (reader_result, byte_queue_result) {
-            (Err(e), _) => Err(e),      // Reader error takes precedence
+            (Err(e), _) => Err(e), // Reader error takes precedence
             (Ok(()), Err(e)) => {
                 // Only report byte queue errors that aren't "already closed"
                 if let DiskyError::QueueClosed(_) = e {
@@ -285,7 +281,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
                 } else {
                     Err(e)
                 }
-            },
+            }
             (Ok(()), Ok(())) => Ok(()),
         }
     }

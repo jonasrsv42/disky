@@ -10,4 +10,5 @@ mod multi_threaded_reader_tests;
 mod multi_threaded_writer_tests;
 mod task_queue_capacity_tests;
 mod close_behavior_tests;
+mod corruption_handling_tests;
 

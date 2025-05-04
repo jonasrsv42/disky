@@ -172,6 +172,9 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
                     trace!("Worker {} found no resources, exiting", id);
                     break;
                 }
+                Err(DiskyError::QueueClosed(e)) => {
+                    debug!("Worker {} encountered queue closed {}, exiting", id, e);
+                }
                 Err(e) => {
                     // Log the error and exit the worker
                     error!("Worker {} encountered error, exiting: {}", id, e);

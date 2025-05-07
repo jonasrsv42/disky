@@ -354,16 +354,17 @@ pub struct FileShardLocator {
 /// let shard2 = locator.next_shard().unwrap();
 /// // Will continue to provide all shards in randomized batches
 /// ```
+#[derive(Debug)]
 pub struct RandomRepeatingFileShardLocator {
     /// List of all shard file paths
     shard_paths: Vec<PathBuf>,
-
-    /// Current randomized order of indices - shuffled when exhausted
-    current_indices: Mutex<Vec<usize>>,
     
     /// Current position in the shuffled indices
     position: AtomicUsize,
 
+    /// Current randomized order of indices - shuffled when exhausted
+    indices: Mutex<Vec<usize>>,
+    
     /// RNG for shuffling
     rng: Mutex<StdRng>,
 }
@@ -410,6 +411,228 @@ impl ShardLocator<File> for FileShardLocator {
 
     fn estimated_shard_count(&self) -> Option<usize> {
         // Return the actual count of shards we found
+        Some(self.shard_paths.len())
+    }
+}
+
+/// A shard locator that uses an explicit list of file paths.
+///
+/// This locator allows directly specifying the file paths to use as shards,
+/// rather than discovering them through glob patterns or directory traversal.
+#[derive(Debug)]
+pub struct MultiPathShardLocator {
+    /// List of shard file paths
+    shard_paths: Vec<PathBuf>,
+
+    /// Index of the next shard to return
+    next_index: AtomicUsize,
+}
+
+impl MultiPathShardLocator {
+    /// Create a new MultiPathShardLocator with the given file paths.
+    ///
+    /// # Arguments
+    /// * `file_paths` - List of file paths to use as shards
+    ///
+    /// # Returns
+    /// A new MultiPathShardLocator instance
+    pub fn new(file_paths: Vec<PathBuf>) -> Result<Self> {
+        // Verify that we have at least one file path
+        if file_paths.is_empty() {
+            return Err(DiskyError::Other("No shard paths provided".to_string()));
+        }
+        
+        // Validate that all files exist
+        for path in &file_paths {
+            if !path.exists() {
+                return Err(DiskyError::Other(format!(
+                    "Shard file does not exist: {}",
+                    path.display()
+                )));
+            }
+        }
+        
+        Ok(Self {
+            shard_paths: file_paths,
+            next_index: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl ShardLocator<File> for MultiPathShardLocator {
+    fn next_shard(&self) -> Result<File> {
+        // Get the current index and increment it atomically
+        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
+
+        // Check if we have any more shards
+        if index >= self.shard_paths.len() {
+            return Err(DiskyError::NoMoreShards);
+        }
+
+        // Get the next shard path
+        let file_path = &self.shard_paths[index];
+
+        // Open the file for reading
+        File::open(file_path).map_err(|e| DiskyError::Io(e))
+    }
+
+    fn estimated_shard_count(&self) -> Option<usize> {
+        // Return the actual count of shards we have
+        Some(self.shard_paths.len())
+    }
+}
+
+/// A random access variant of the MultiPathShardLocator.
+///
+/// This locator returns shards in a random order, exhausting all shards before repeating.
+/// It's useful for scenarios like training on data in random order while ensuring all
+/// records are processed.
+#[derive(Debug)]
+pub struct RandomMultiPathShardLocator {
+    /// List of all shard file paths
+    shard_paths: Vec<PathBuf>,
+    
+    /// Current position in the shuffled indices
+    position: AtomicUsize,
+
+    /// Current randomized order of indices - shuffled when exhausted
+    indices: Mutex<Vec<usize>>,
+    
+    /// RNG for shuffling
+    rng: Mutex<StdRng>,
+}
+
+impl RandomMultiPathShardLocator {
+    /// Create a new RandomMultiPathShardLocator with the given file paths.
+    ///
+    /// # Arguments
+    /// * `file_paths` - List of file paths to use as shards
+    ///
+    /// # Returns
+    /// A new RandomMultiPathShardLocator instance with a random seed
+    pub fn new(file_paths: Vec<PathBuf>) -> Result<Self> {
+        // Verify that we have at least one file path
+        if file_paths.is_empty() {
+            return Err(DiskyError::Other("No shard paths provided".to_string()));
+        }
+        
+        // Validate that all files exist
+        for path in &file_paths {
+            if !path.exists() {
+                return Err(DiskyError::Other(format!(
+                    "Shard file does not exist: {}",
+                    path.display()
+                )));
+            }
+        }
+        
+        // Create initial randomized indices
+        let mut indices: Vec<usize> = (0..file_paths.len()).collect();
+        
+        // Create a new RNG with a random seed
+        let mut rng = StdRng::from_entropy();
+        
+        // Shuffle the indices
+        indices.shuffle(&mut rng);
+        
+        Ok(Self {
+            shard_paths: file_paths,
+            position: AtomicUsize::new(0),
+            indices: Mutex::new(indices),
+            rng: Mutex::new(rng),
+        })
+    }
+
+    /// Create a new RandomMultiPathShardLocator with a specific seed.
+    ///
+    /// This is useful for reproducible randomization, such as in testing
+    /// or when you want the same random sequence across runs.
+    ///
+    /// # Arguments
+    /// * `file_paths` - List of file paths to use as shards
+    /// * `seed` - Seed for the random number generator
+    /// 
+    /// # Returns
+    /// A new RandomMultiPathShardLocator instance with a deterministic random sequence
+    pub fn with_seed(file_paths: Vec<PathBuf>, seed: u64) -> Result<Self> {
+        // Verify that we have at least one file path
+        if file_paths.is_empty() {
+            return Err(DiskyError::Other("No shard paths provided".to_string()));
+        }
+        
+        // Validate that all files exist
+        for path in &file_paths {
+            if !path.exists() {
+                return Err(DiskyError::Other(format!(
+                    "Shard file does not exist: {}",
+                    path.display()
+                )));
+            }
+        }
+        
+        // Create initial randomized indices
+        let mut indices: Vec<usize> = (0..file_paths.len()).collect();
+        
+        // Create a new RNG with the given seed
+        let mut rng = StdRng::seed_from_u64(seed);
+        
+        // Shuffle the indices
+        indices.shuffle(&mut rng);
+        
+        Ok(Self {
+            shard_paths: file_paths,
+            position: AtomicUsize::new(0),
+            indices: Mutex::new(indices),
+            rng: Mutex::new(rng),
+        })
+    }
+    
+    /// Reshuffles the indices when all shards have been exhausted
+    /// 
+    /// Takes a mutable reference to the already locked indices
+    fn reshuffle_if_needed(&self, indices: &mut Vec<usize>) -> Result<()> {
+        let position = self.position.load(Ordering::Acquire);
+            
+        // If we've gone through all shards, reshuffle
+        if position >= indices.len() {
+            // Reset position counter
+            self.position.store(0, Ordering::Release);
+            
+            // Lock RNG for shuffling
+            let mut rng = self.rng.lock().map_err(|_| 
+                DiskyError::Other("Failed to lock RNG".to_string()))?;
+                
+            // Shuffle the indices
+            indices.shuffle(&mut *rng);
+        }
+        
+        Ok(())
+    }
+}
+
+impl ShardLocator<File> for RandomMultiPathShardLocator {
+    fn next_shard(&self) -> Result<File> {
+        // Lock the indices to check/reshuffle if needed
+        let mut indices = self.indices.lock().map_err(|_| 
+            DiskyError::Other("Failed to lock indices".to_string()))?;
+        
+        // Call reshuffle_if_needed with the locked indices
+        self.reshuffle_if_needed(&mut indices)?;
+        
+        // Get the current position and increment it
+        let position = self.position.fetch_add(1, Ordering::SeqCst);
+            
+        // Get the file path for the current position
+        let index = indices[position % indices.len()];
+        let file_path = &self.shard_paths[index];
+        
+        // Open the file for reading
+        File::open(file_path).map_err(|e| DiskyError::Io(e))
+    }
+    
+    fn estimated_shard_count(&self) -> Option<usize> {
+        // We know the exact count, but since we repeat indefinitely,
+        // we return the number of unique shards
         Some(self.shard_paths.len())
     }
 }
@@ -529,8 +752,8 @@ impl RandomRepeatingFileShardLocator {
         
         Ok(Self {
             shard_paths,
-            current_indices: Mutex::new(indices),
             position: AtomicUsize::new(0),
+            indices: Mutex::new(indices),
             rng: Mutex::new(rng),
         })
     }
@@ -562,13 +785,14 @@ impl RandomRepeatingFileShardLocator {
         
         Ok(Self {
             shard_paths,
-            current_indices: Mutex::new(indices),
             position: AtomicUsize::new(0),
+            indices: Mutex::new(indices),
             rng: Mutex::new(rng),
         })
     }
     
     /// Reshuffles the indices when all shards have been exhausted
+    /// 
     /// Takes a mutable reference to the already locked indices
     fn reshuffle_if_needed(&self, indices: &mut Vec<usize>) -> Result<()> {
         let position = self.position.load(Ordering::Acquire);
@@ -578,12 +802,12 @@ impl RandomRepeatingFileShardLocator {
             // Reset position counter
             self.position.store(0, Ordering::Release);
             
-            // Lock the RNG and shuffle the indices
-            let mut rng_guard = self.rng.lock().map_err(|_| 
+            // Lock RNG for shuffling
+            let mut rng = self.rng.lock().map_err(|_| 
                 DiskyError::Other("Failed to lock RNG".to_string()))?;
                 
             // Shuffle the indices
-            indices.shuffle(&mut *rng_guard);
+            indices.shuffle(&mut *rng);
         }
         
         Ok(())
@@ -592,18 +816,18 @@ impl RandomRepeatingFileShardLocator {
 
 impl ShardLocator<File> for RandomRepeatingFileShardLocator {
     fn next_shard(&self) -> Result<File> {
-        // Get the indices in their current shuffled order - only lock once
-        let mut indices_guard = self.current_indices.lock().map_err(|_| 
+        // Lock the indices to check/reshuffle if needed
+        let mut indices = self.indices.lock().map_err(|_| 
             DiskyError::Other("Failed to lock indices".to_string()))?;
         
-        // Reshuffle if we've used all shards
-        self.reshuffle_if_needed(&mut indices_guard)?;
+        // Call reshuffle_if_needed with the locked indices
+        self.reshuffle_if_needed(&mut indices)?;
         
         // Get the current position and increment it
         let position = self.position.fetch_add(1, Ordering::SeqCst);
             
         // Get the file path for the current position
-        let index = indices_guard[position];
+        let index = indices[position % indices.len()];
         let file_path = &self.shard_paths[index];
         
         // Open the file for reading

@@ -21,6 +21,7 @@ pub mod conformance;
 pub mod conformance_append;
 pub mod conformance_edge_cases;
 pub mod empty_records_test;
+pub mod flush_between_writes_test;
 
 use std::io::Cursor;
 

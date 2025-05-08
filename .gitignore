@@ -2,3 +2,5 @@
 example.riegeli
 .nvim.lua
 basic_example.riegeli
+
+**/.claude/settings.local.json

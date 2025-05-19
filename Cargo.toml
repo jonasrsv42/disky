@@ -9,6 +9,8 @@ license = "Apache-2.0"
 [features]
 # Parallel implementation using multiple threads for improved performance
 parallel = ["dep:glob", "dep:rand"]
+# Sampling reader implementation for weighted sampling from multiple sources
+sampling = ["dep:rand"]
 
 [dependencies]
 thiserror = "1.0.60"

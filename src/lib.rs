@@ -31,6 +31,10 @@ pub mod writer;
 #[cfg(feature = "parallel")]
 pub mod parallel;
 
+// Conditionally include sampling module behind the 'sampling' feature flag
+#[cfg(feature = "sampling")]
+pub mod sampling;
+
 #[cfg(test)]
 mod tests;
 

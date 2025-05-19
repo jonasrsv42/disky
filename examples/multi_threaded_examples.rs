@@ -1,7 +1,7 @@
 #[cfg(feature = "parallel")]
 mod parallel_example {
     use bytes::Bytes;
-    use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
+    use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder};
     use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
     use disky::parallel::reader::{ShardingConfig as ReaderShardingConfig, ParallelReaderConfig, DiskyParallelPiece};
     use disky::parallel::writer::{ShardingConfig as WriterShardingConfig, ParallelWriterConfig};
@@ -83,6 +83,8 @@ mod parallel_example {
             reader_config: ParallelReaderConfig::default(),
             worker_threads: 4,
             queue_size_bytes: 8 * 1024 * 1024, // 8MB queue
+            reading_order: ReadingOrder::Drain
+
         };
         
         // Create the multi-threaded reader

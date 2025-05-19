@@ -20,6 +20,22 @@ use crate::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
 };
 
+/// Reading order for the multi-threaded reader
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadingOrder {
+    /// Drain each file completely before moving to the next
+    Drain,
+    
+    /// Read from files in a round-robin fashion
+    RoundRobin,
+}
+
+impl Default for ReadingOrder {
+    fn default() -> Self {
+        Self::Drain
+    }
+}
+
 /// Configuration for the multi-threaded reader
 #[derive(Debug, Clone)]
 pub struct MultiThreadedReaderConfig {
@@ -31,6 +47,9 @@ pub struct MultiThreadedReaderConfig {
 
     /// Size of the byte queue in bytes
     pub queue_size_bytes: usize,
+    
+    /// Reading order strategy
+    pub reading_order: ReadingOrder,
 }
 
 impl Default for MultiThreadedReaderConfig {
@@ -42,6 +61,7 @@ impl Default for MultiThreadedReaderConfig {
             reader_config: ParallelReaderConfig::default(),
             worker_threads,
             queue_size_bytes: 8 * 1024 * 1024, // Default to 8MB queue size
+            reading_order: ReadingOrder::default(),
         }
     }
 }
@@ -57,7 +77,14 @@ impl MultiThreadedReaderConfig {
             reader_config,
             worker_threads: worker_threads.max(1), // Ensure at least one worker
             queue_size_bytes: queue_size_bytes.max(1024), // Ensure reasonable minimum queue size
+            reading_order: ReadingOrder::default(),
         }
+    }
+    
+    /// Sets the reading order for this configuration
+    pub fn with_reading_order(mut self, reading_order: ReadingOrder) -> Self {
+        self.reading_order = reading_order;
+        self
     }
 }
 
@@ -123,16 +150,27 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
             let running_clone = Arc::clone(&running);
             let active_workers_clone = Arc::clone(&active_workers);
 
-            // Spawn a worker thread
-            let handle = thread::spawn(move || {
-                Self::worker_loop(
-                    i,
-                    reader_clone,
-                    byte_queue_clone,
-                    running_clone,
-                    active_workers_clone,
-                )
-            });
+            // Spawn a worker thread with the appropriate loop function based on reading order
+            let handle = match config.reading_order {
+                ReadingOrder::Drain => thread::spawn(move || {
+                    Self::drain_loop(
+                        i,
+                        reader_clone,
+                        byte_queue_clone,
+                        running_clone,
+                        active_workers_clone,
+                    )
+                }),
+                ReadingOrder::RoundRobin => thread::spawn(move || {
+                    Self::round_robin_loop(
+                        i,
+                        reader_clone,
+                        byte_queue_clone,
+                        running_clone,
+                        active_workers_clone,
+                    )
+                }),
+            };
 
             workers.push(Worker { handle, running });
         }
@@ -145,18 +183,19 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
         })
     }
 
-    /// Worker thread main loop
+    /// Drain loop worker thread function
     ///
     /// This function runs in each worker thread and continuously drains
     /// resources from the parallel reader into the byte queue.
-    fn worker_loop(
+    /// Each worker will fully drain a resource before moving to the next.
+    fn drain_loop(
         id: usize,
         reader: Arc<ParallelReader<Source>>,
         byte_queue: Arc<ByteQueue>,
         running: Arc<AtomicBool>,
         active_workers: Arc<AtomicUsize>,
     ) -> Result<()> {
-        debug!("Worker thread {} starting", id);
+        debug!("Worker thread {} starting in drain mode", id);
 
         // Loop until signaled to stop
         while running.load(Ordering::Acquire) {
@@ -181,6 +220,68 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
 
                     // Exit on error without sending EOF
                     // (other workers may still be able to read data successfully)
+                    break;
+                }
+            }
+        }
+
+        debug!("Worker thread {} exiting", id);
+
+        // Decrement the active worker count and check if this is the last worker
+        let remaining = active_workers.fetch_sub(1, Ordering::SeqCst);
+
+        // If this was the last worker (remaining will be 1 before subtraction)
+        if remaining == 1 {
+            debug!("Last worker exiting, closing byte queue to unblock any waiting readers");
+
+            // If we're the last worker, close the byte queue to unblock any waiting readers
+            // This will cause read() to return EOF
+            let _ = byte_queue.close();
+        }
+
+        Ok(())
+    }
+    
+    /// Round robin loop worker thread function
+    ///
+    /// This function runs in each worker thread and reads records from resources
+    /// in a round-robin fashion, reading one record at a time from each resource
+    /// before moving to the next.
+    fn round_robin_loop(
+        id: usize,
+        reader: Arc<ParallelReader<Source>>,
+        byte_queue: Arc<ByteQueue>,
+        running: Arc<AtomicBool>,
+        active_workers: Arc<AtomicUsize>,
+    ) -> Result<()> {
+        debug!("Worker thread {} starting in round-robin mode", id);
+
+        // Loop until signaled to stop
+        while running.load(Ordering::Acquire) {
+            // Try to read a record from a resource
+            trace!("Worker {} attempting to read a record", id);
+            match reader.read() {
+                Ok(DiskyParallelPiece::Record(bytes)) => {
+                    // Successfully read a record, add to the queue
+                    trace!("Worker {} successfully read a record", id);
+                    byte_queue.push_back(DiskyParallelPiece::Record(bytes))?;
+                }
+                Ok(DiskyParallelPiece::ShardFinished) => {
+                    // Shard finished, but more available - just continue to the next
+                    trace!("Worker {} encountered end of shard, continuing to next", id);
+                    continue;
+                }
+                Ok(DiskyParallelPiece::EOF) => {
+                    // No more records available, exit worker thread
+                    trace!("Worker {} reached EOF, exiting", id);
+                    break;
+                }
+                Err(DiskyError::QueueClosed(e)) => {
+                    debug!("Worker {} encountered queue closed {}, exiting", id, e);
+                }
+                Err(e) => {
+                    // Log the error and exit the worker
+                    error!("Worker {} encountered error, exiting: {}", id, e);
                     break;
                 }
             }

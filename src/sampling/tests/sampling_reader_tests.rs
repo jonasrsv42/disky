@@ -302,3 +302,103 @@ fn test_sampling_reader_with_record_readers() {
         assert!(results.contains(&expected));
     }
 }
+
+// This test is only run when both 'sampling' and 'parallel' features are enabled
+#[cfg(feature = "parallel")]
+#[test]
+fn test_sampling_reader_with_multi_threaded_readers() {
+    use std::io::{Cursor, SeekFrom, Seek};
+    use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder};
+    use crate::parallel::reader::ShardingConfig;
+    use crate::parallel::sharding::MemoryShardLocator;
+    use crate::writer::RecordWriter;
+    
+    // Helper function to create a cursor with "A" records
+    fn create_a_cursor() -> Result<Cursor<Vec<u8>>> {
+        let mut data = Vec::new();
+        {
+            let cursor = Cursor::new(&mut data);
+            let mut writer = RecordWriter::new(cursor).unwrap();
+            
+            for i in 0..5 {
+                let record_data = Bytes::from(format!("A{}", i));
+                writer.write_record(&record_data).unwrap();
+            }
+            writer.close().unwrap();
+        }
+        
+        let mut cursor = Cursor::new(data);
+        cursor.seek(SeekFrom::Start(0)).unwrap();
+        Ok(cursor)
+    }
+    
+    // Helper function to create a cursor with "B" records
+    fn create_b_cursor() -> Result<Cursor<Vec<u8>>> {
+        let mut data = Vec::new();
+        {
+            let cursor = Cursor::new(&mut data);
+            let mut writer = RecordWriter::new(cursor).unwrap();
+            
+            for i in 0..3 {
+                let record_data = Bytes::from(format!("B{}", i));
+                writer.write_record(&record_data).unwrap();
+            }
+            writer.close().unwrap();
+        }
+        
+        let mut cursor = Cursor::new(data);
+        cursor.seek(SeekFrom::Start(0)).unwrap();
+        Ok(cursor)
+    }
+    
+    // Create MemoryShardLocator for the first buffer - with "A" records
+    let locator_a = MemoryShardLocator::new(create_a_cursor, 1);
+    let sharding_config_a = ShardingConfig::new(Box::new(locator_a), 1);
+    
+    // Create MemoryShardLocator for the second buffer - with "B" records
+    let locator_b = MemoryShardLocator::new(create_b_cursor, 1);
+    let sharding_config_b = ShardingConfig::new(Box::new(locator_b), 1);
+    
+    // Create MultiThreadedReader configs
+    let mt_config = MultiThreadedReaderConfig::default()
+        .with_reading_order(ReadingOrder::Drain);
+    
+    // Create two MultiThreadedReaders
+    let reader_a = MultiThreadedReader::new(sharding_config_a, mt_config.clone()).unwrap();
+    let reader_b = MultiThreadedReader::new(sharding_config_b, mt_config).unwrap();
+    
+    // Create a SamplingReader with both MultiThreadedReaders
+    // Use a fixed seed for deterministic testing
+    let config = SamplingReaderConfig::with_seed(42);
+    let sources = vec![(1.0, reader_a), (1.0, reader_b)];
+    let sampling_reader = SamplingReader::with_config(sources, config).unwrap();
+    
+    // Read all records using the Iterator trait
+    let results: Vec<String> = sampling_reader
+        .map(|result| {
+            let bytes = result.unwrap();
+            String::from_utf8_lossy(&bytes).to_string()
+        })
+        .collect();
+    
+    // Verify we have all 8 records
+    assert_eq!(results.len(), 8);
+    
+    // Verify we have 5 "A" records
+    assert_eq!(results.iter().filter(|s| s.starts_with("A")).count(), 5);
+    
+    // Verify we have 3 "B" records
+    assert_eq!(results.iter().filter(|s| s.starts_with("B")).count(), 3);
+    
+    // Verify that all "A" records are included
+    for i in 0..5 {
+        let expected = format!("A{}", i);
+        assert!(results.contains(&expected));
+    }
+    
+    // Verify that all "B" records are included
+    for i in 0..3 {
+        let expected = format!("B{}", i);
+        assert!(results.contains(&expected));
+    }
+}

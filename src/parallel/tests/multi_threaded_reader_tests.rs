@@ -3,7 +3,9 @@ use std::io::{Cursor, Seek, SeekFrom};
 use bytes::Bytes;
 
 use crate::error::Result;
-use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder};
+use crate::parallel::multi_threaded_reader::{
+    MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
+};
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
 use crate::parallel::sharding::MemoryShardLocator;
 
@@ -90,12 +92,15 @@ fn create_identifiable_shard_locator(
 ) -> Box<dyn crate::parallel::sharding::ShardLocator<Cursor<Vec<u8>>> + Send + Sync> {
     // Track which shard we're currently creating
     let counter = std::sync::atomic::AtomicUsize::new(0);
-    
+
     // Create the locator where each shard has records identifying which shard they're from
-    let locator = MemoryShardLocator::new(move || {
-        let shard_id = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1; // +1 so we have shards numbered from 1
-        create_identifiable_cursor(shard_id)
-    }, shard_count);
+    let locator = MemoryShardLocator::new(
+        move || {
+            let shard_id = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1; // +1 so we have shards numbered from 1
+            create_identifiable_cursor(shard_id)
+        },
+        shard_count,
+    );
 
     Box::new(locator)
 }
@@ -194,15 +199,12 @@ fn test_multi_threaded_reader_try_read() -> Result<()> {
     // Create the reader config
     let reader_config = MultiThreadedReaderConfig::new(
         ParallelReaderConfig::default(),
-        2, // Two worker threads
+        2,           // Two worker threads
         1024 * 1024, // 1MB queue
     );
 
     // Create the reader
     let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
-
-    // Give workers time to read into the queue
-    std::thread::sleep(std::time::Duration::from_millis(50));
 
     // Read records using try_read
     let mut records = Vec::new();
@@ -259,9 +261,10 @@ fn test_single_threaded_drain_mode() -> Result<()> {
     // Create the reader config with only one worker thread and drain mode
     let reader_config = MultiThreadedReaderConfig::new(
         ParallelReaderConfig::default(),
-        1, // One worker thread (single-threaded)
+        1,           // One worker thread (single-threaded)
         1024 * 1024, // 1MB queue
-    ).with_reading_order(ReadingOrder::Drain);
+    )
+    .with_reading_order(ReadingOrder::Drain);
 
     // Create the reader
     let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
@@ -283,7 +286,8 @@ fn test_single_threaded_drain_mode() -> Result<()> {
 
     // With drain mode, we should read all records from shard 1 first, then shard 2, then shard 3
     // Convert bytes to strings for easier assertions
-    let record_strings: Vec<String> = records.iter()
+    let record_strings: Vec<String> = records
+        .iter()
         .map(|b| String::from_utf8_lossy(&b[..]).to_string())
         .collect();
 
@@ -329,9 +333,10 @@ fn test_single_threaded_round_robin_mode() -> Result<()> {
     // Create the reader config with only one worker thread and round-robin mode
     let reader_config = MultiThreadedReaderConfig::new(
         ParallelReaderConfig::default(),
-        1, // One worker thread (single-threaded)
+        1,           // One worker thread (single-threaded)
         1024 * 1024, // 1MB queue
-    ).with_reading_order(ReadingOrder::RoundRobin);
+    )
+    .with_reading_order(ReadingOrder::RoundRobin);
 
     // Create the reader
     let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
@@ -352,7 +357,8 @@ fn test_single_threaded_round_robin_mode() -> Result<()> {
     assert_eq!(records.len(), 15);
 
     // Convert bytes to strings for easier assertions
-    let record_strings: Vec<String> = records.iter()
+    let record_strings: Vec<String> = records
+        .iter()
         .map(|b| String::from_utf8_lossy(&b[..]).to_string())
         .collect();
 
@@ -389,16 +395,17 @@ fn test_multi_threaded_reading_order() -> Result<()> {
     for reading_order in [ReadingOrder::Drain, ReadingOrder::RoundRobin] {
         // Create a fresh locator for each test (instead of trying to clone the box)
         let locator = create_identifiable_shard_locator(3);
-        
+
         // Create the sharding config
         let sharding_config = ShardingConfig::new(locator, 3);
 
         // Create the reader config with multiple threads
         let reader_config = MultiThreadedReaderConfig::new(
             ParallelReaderConfig::default(),
-            2, // Two worker threads
+            2,           // Two worker threads
             1024 * 1024, // 1MB queue
-        ).with_reading_order(reading_order);
+        )
+        .with_reading_order(reading_order);
 
         // Create the reader
         let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
@@ -419,7 +426,8 @@ fn test_multi_threaded_reading_order() -> Result<()> {
         assert_eq!(records.len(), 15);
 
         // Convert bytes to strings for easier assertions
-        let record_strings: Vec<String> = records.iter()
+        let record_strings: Vec<String> = records
+            .iter()
             .map(|b| String::from_utf8_lossy(&b[..]).to_string())
             .collect();
 
@@ -427,8 +435,11 @@ fn test_multi_threaded_reading_order() -> Result<()> {
         for shard_id in 1..=3 {
             for record_num in 1..=5 {
                 let expected = format!("shard{}_record{}", shard_id, record_num);
-                assert!(record_strings.iter().any(|s| s == &expected),
-                       "Missing record: {}", expected);
+                assert!(
+                    record_strings.iter().any(|s| s == &expected),
+                    "Missing record: {}",
+                    expected
+                );
             }
         }
 
@@ -438,3 +449,4 @@ fn test_multi_threaded_reading_order() -> Result<()> {
 
     Ok(())
 }
+

@@ -22,10 +22,10 @@ use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
 pub enum DiskyParallelPiece {
     /// A record was successfully read
     Record(Bytes),
-    
+
     /// Current shard is finished, but there might be more shards
     ShardFinished,
-    
+
     /// All shards are finished, no more records available
     EOF,
 }
@@ -38,7 +38,7 @@ pub enum Task {
         /// Promise that will be fulfilled when the read completes
         completion: Arc<Promise<Result<DiskyParallelPiece>>>,
     },
-    
+
     /// Drain all records from a resource into a byte queue
     DrainResource {
         /// The byte queue to drain records into
@@ -46,7 +46,7 @@ pub enum Task {
         /// Promise that will be fulfilled when the drain completes
         completion: Arc<Promise<Result<()>>>,
     },
-    
+
     /// Close a reader
     Close {
         /// Promise that will be fulfilled when the close completes
@@ -60,7 +60,10 @@ impl Clone for Task {
             Task::NextRecord { completion } => Task::NextRecord {
                 completion: Arc::clone(completion),
             },
-            Task::DrainResource { byte_queue, completion } => Task::DrainResource {
+            Task::DrainResource {
+                byte_queue,
+                completion,
+            } => Task::DrainResource {
                 byte_queue: Arc::clone(byte_queue),
                 completion: Arc::clone(completion),
             },
@@ -83,7 +86,7 @@ pub struct ReaderResource<Source: Read + Seek + Send + 'static> {
 pub struct ShardingConfig<Source: Read + Seek + Send + 'static> {
     /// The shard locator for finding and opening shards
     pub locator: Box<dyn ShardLocator<Source> + Send + Sync>,
-    
+
     /// Number of shards to keep active at once
     pub shards: usize,
 }
@@ -103,13 +106,13 @@ impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
     pub fn new(locator: Box<dyn ShardLocator<Source> + Send + Sync>, shards: usize) -> Self {
         // Ensure shards is at least 1
         let requested_shards = std::cmp::max(shards, 1);
-        
+
         // Calculate the actual number of shards based on estimated count
         let actual_shards = match locator.estimated_shard_count() {
             Some(count) => std::cmp::min(requested_shards, count),
             None => requested_shards,
         };
-        
+
         Self {
             locator,
             shards: actual_shards,
@@ -135,9 +138,7 @@ impl Default for ParallelReaderConfig {
 impl ParallelReaderConfig {
     /// Creates a new configuration with the specified reader config
     pub fn new(reader_config: RecordReaderConfig) -> Self {
-        Self {
-            reader_config,
-        }
+        Self { reader_config }
     }
 }
 
@@ -148,13 +149,13 @@ impl ParallelReaderConfig {
 pub struct ParallelReader<Source: Read + Seek + Send + 'static> {
     /// Queue of tasks to be processed
     task_queue: Arc<TaskQueue<Task>>,
-    
+
     /// Pool of reader resources
     reader_pool: Arc<ResourcePool<ReaderResource<Source>>>,
-    
+
     /// Configuration for the parallel reader
     config: ParallelReaderConfig,
-    
+
     /// Sharding configuration for the reader
     sharding_config: ShardingConfig<Source>,
 }
@@ -170,16 +171,16 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     fn get_new_shard(&self) -> Result<()> {
         // Get a new source using the locator
         let source = self.sharding_config.locator.next_shard()?;
-            
+
         // Create a new RecordReader with the source and configuration
         let reader = RecordReader::with_config(source, self.config.reader_config.clone())?;
-            
+
         // Add the reader to the resource pool
         self.reader_pool.add_resource(ReaderResource {
             reader: Box::new(reader),
         })
     }
-    
+
     /// Creates a new ParallelReader with the given sharding and reader configurations
     ///
     /// This constructor initializes a reader with shards from the provided sharding config.
@@ -196,37 +197,37 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     ) -> Result<Self> {
         let task_queue = Arc::new(TaskQueue::new());
         let reader_pool = Arc::new(ResourcePool::new());
-        
+
         let reader = Self {
             task_queue,
             reader_pool,
             config,
             sharding_config,
         };
-        
+
         // Create initial shards using the count from sharding_config
         for _ in 0..reader.sharding_config.shards {
             match reader.get_new_shard() {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(DiskyError::NoMoreShards) => {
                     // No more shards available, that's okay
                     break;
-                },
+                }
                 Err(e) => {
                     // Actual error
                     return Err(e);
                 }
             }
         }
-        
+
         // Check if we found any shards
         if reader.reader_pool.available_count()? == 0 {
             return Err(DiskyError::Other("No shards found".to_string()));
         }
-        
+
         Ok(reader)
     }
-    
+
     /// Process a read task
     ///
     /// This method processes a single read task. It retrieves the appropriate reader
@@ -242,17 +243,20 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             Task::NextRecord { completion } => {
                 // Process the read task
                 let result = self.read();
-                
+
                 // Complete the promise with the result
                 if let Err(e) = completion.fulfill(result) {
                     // Log the error but continue processing
                     error!("Failed to fulfill read promise: {}", e);
                 }
             }
-            Task::DrainResource { byte_queue, completion } => {
+            Task::DrainResource {
+                byte_queue,
+                completion,
+            } => {
                 // Process the drain resource task
                 let result = self.drain_resource(byte_queue);
-                
+
                 // Complete the promise with the result
                 if let Err(e) = completion.fulfill(result) {
                     error!("Failed to fulfill drain resource promise: {}", e);
@@ -261,17 +265,17 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             Task::Close { completion } => {
                 // Process the close task
                 let result = self.close();
-                
+
                 // Complete the promise with the result
                 if let Err(e) = completion.fulfill(result) {
                     error!("Failed to fulfill close promise: {}", e);
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Process the next available task in the queue
     ///
     /// # Returns
@@ -279,10 +283,10 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     pub fn process_next_task(&self) -> Result<()> {
         // Try to get a task from the queue
         let task = self.task_queue.read_front()?;
-        
+
         self.process_task(task)
     }
-    
+
     /// Process all available tasks in the queue
     ///
     /// # Returns
@@ -291,10 +295,10 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
         for task in self.task_queue.read_all()? {
             self.process_task(task)?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Read a record asynchronously
     ///
     /// This method queues a read operation and returns a Promise that will be fulfilled
@@ -305,16 +309,16 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// A Promise that will be fulfilled with the result
     pub fn read_async(&self) -> Result<Arc<Promise<Result<DiskyParallelPiece>>>> {
         let completion = Arc::new(Promise::new());
-        
+
         let task = Task::NextRecord {
             completion: Arc::clone(&completion),
         };
-        
+
         self.task_queue.push_back(task)?;
-        
+
         Ok(completion)
     }
-    
+
     /// Read a record synchronously
     ///
     /// This method directly gets a reader resource from the pool and uses it
@@ -334,36 +338,35 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                     Ok(DiskyPiece::Record(bytes)) => {
                         // Successfully read a record
                         Ok(DiskyParallelPiece::Record(bytes))
-                    },
+                    }
                     Ok(DiskyPiece::EOF) => {
                         // This reader reached EOF, remove it from the pool
                         resource.forget();
-                        
+
                         // Try to get a new shard
                         match self.get_new_shard() {
                             Ok(_) | Err(DiskyError::NoMoreShards) => {
                                 // Signal that this shard is finished, but we can try another
                                 Ok(DiskyParallelPiece::ShardFinished)
-                            },
+                            }
                             Err(e) => {
                                 // Error creating a new shard
                                 Err(e)
                             }
                         }
-                    },
+                    }
                     Err(e) => Err(e),
                 }
-            },
+            }
             Err(DiskyError::PoolExhausted) => {
                 // No more resources in the pool and we've already tried to create new shards,
                 // so we are truly at EOF
                 Ok(DiskyParallelPiece::EOF)
-            },
+            }
             Err(e) => Err(e),
         }
     }
-    
-    
+
     /// Close the reader
     ///
     /// This method closes the resource pool and task queue, then processes any remaining
@@ -375,35 +378,35 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     pub fn close(&self) -> Result<()> {
         // First, try to close the resource pool
         let resource_close_result = self.reader_pool.close();
-        
+
         // Then, try to close the task queue, regardless of whether the resource close succeeded
         // This prevents new tasks from being added
         let task_close_result = self.task_queue.close();
-        
+
         // Now drain any remaining tasks from the queue and fulfill their promises with an error
         // This prevents deadlocks where threads are waiting for promises that never get fulfilled
         let remaining_tasks = self.task_queue.read_all().unwrap_or_default();
-        
+
         for task in remaining_tasks {
             match task {
                 Task::NextRecord { completion } => {
                     let _ = completion.fulfill(Err(DiskyError::QueueClosed(
                         "Reader queue was closed before read could be processed".to_string(),
                     )));
-                },
+                }
                 Task::DrainResource { completion, .. } => {
                     let _ = completion.fulfill(Err(DiskyError::QueueClosed(
                         "Reader queue was closed before drain could be processed".to_string(),
                     )));
-                },
+                }
                 Task::Close { completion } => {
                     let _ = completion.fulfill(Err(DiskyError::QueueClosed(
                         "Reader queue was already closed".to_string(),
                     )));
-                },
+                }
             }
         }
-        
+
         // Return the first error encountered, prioritizing resource errors over task queue errors
         match (resource_close_result, task_close_result) {
             (Err(e), _) => Err(e),      // Resource error takes precedence
@@ -411,7 +414,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             (Ok(()), Ok(())) => Ok(()), // Success if both operations succeeded
         }
     }
-    
+
     /// Close the reader asynchronously
     ///
     /// This will queue a close task and return a Promise that will be fulfilled
@@ -422,18 +425,18 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// A Promise that will be fulfilled when the close is complete
     pub fn close_async(&self) -> Result<Arc<Promise<Result<()>>>> {
         let completion = Arc::new(Promise::new());
-        
+
         // Create a close task
         let task = Task::Close {
             completion: Arc::clone(&completion),
         };
-        
+
         // Queue the task
         self.task_queue.push_back(task)?;
-        
+
         Ok(completion)
     }
-    
+
     /// Get the number of available reader resources
     ///
     /// # Returns
@@ -441,7 +444,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     pub fn available_reader_count(&self) -> Result<usize> {
         self.reader_pool.available_count()
     }
-    
+
     /// Get the number of pending tasks
     ///
     /// # Returns
@@ -449,7 +452,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     pub fn pending_task_count(&self) -> Result<usize> {
         self.task_queue.len()
     }
-    
+
     /// Check if there are any pending tasks
     ///
     /// # Returns
@@ -457,7 +460,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     pub fn has_pending_tasks(&self) -> Result<bool> {
         Ok(!self.task_queue.is_empty()?)
     }
-    
+
     /// Drains records from a resource into a byte queue
     ///
     /// This method grabs a reader resource and drains all records from it
@@ -479,38 +482,38 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                         Ok(DiskyPiece::Record(bytes)) => {
                             // Successfully read a record, add to the queue
                             byte_queue.push_back(DiskyParallelPiece::Record(bytes))?;
-                        },
+                        }
                         Ok(DiskyPiece::EOF) => {
                             // This reader reached EOF, remove it from the pool
                             resource.forget();
-                            
+
                             // Try to get a new shard
                             match self.get_new_shard() {
                                 Ok(_) | Err(DiskyError::NoMoreShards) => {
                                     // Signal that this shard is finished
                                     byte_queue.push_back(DiskyParallelPiece::ShardFinished)?;
                                     return Ok(());
-                                },
+                                }
                                 Err(e) => {
                                     // Error creating a new shard
                                     return Err(e);
                                 }
                             }
-                        },
+                        }
                         Err(e) => return Err(e),
                     }
                 }
-            },
+            }
             Err(DiskyError::PoolExhausted) => {
                 // No more resources in the pool and we've already tried to create new shards.
                 // Signal EOF but also propagate the PoolExhausted error so workers can exit
                 byte_queue.push_back(DiskyParallelPiece::EOF)?;
                 Err(DiskyError::PoolExhausted)
-            },
+            }
             Err(e) => Err(e),
         }
     }
-    
+
     /// Drains records asynchronously from a resource into a byte queue
     ///
     /// This method queues a drain operation and returns a Promise that will be fulfilled
@@ -522,16 +525,19 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     ///
     /// # Returns
     /// A Promise that will be fulfilled with the drain result
-    pub fn drain_resource_async(&self, byte_queue: Arc<ByteQueue>) -> Result<Arc<Promise<Result<()>>>> {
+    pub fn drain_resource_async(
+        &self,
+        byte_queue: Arc<ByteQueue>,
+    ) -> Result<Arc<Promise<Result<()>>>> {
         let completion = Arc::new(Promise::new());
-        
+
         let task = Task::DrainResource {
             byte_queue: Arc::clone(&byte_queue),
             completion: Arc::clone(&completion),
         };
-        
+
         self.task_queue.push_back(task)?;
-        
+
         Ok(completion)
     }
 }

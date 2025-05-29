@@ -391,6 +391,10 @@ fn test_single_threaded_round_robin_mode() -> Result<()> {
 /// Test multi-threaded reading with different reading orders
 #[test]
 fn test_multi_threaded_reading_order() -> Result<()> {
+    let _ = env_logger::builder()
+        .filter_level(log::LevelFilter::Debug)
+        .is_test(true)
+        .try_init();
     // Test both reading modes with 2 threads (non-deterministic order, but should read all records)
     for reading_order in [ReadingOrder::Drain, ReadingOrder::RoundRobin] {
         // Create a fresh locator for each test (instead of trying to clone the box)
@@ -449,4 +453,3 @@ fn test_multi_threaded_reading_order() -> Result<()> {
 
     Ok(())
 }
-

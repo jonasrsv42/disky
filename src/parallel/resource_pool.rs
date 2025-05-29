@@ -1,8 +1,10 @@
 use crate::error::{DiskyError, Result};
+use log::debug;
 use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 /// Represents the operational state of a ResourcePool
@@ -178,9 +180,15 @@ impl<T> ResourcePool<T> {
         &'a self,
         inner: MutexGuard<'a, ResourcePoolInner<T>>,
     ) -> Result<MutexGuard<'a, ResourcePoolInner<T>>> {
-        self.signal
-            .wait(inner)
-            .map_err(|e| DiskyError::Other(e.to_string()))
+        match self.signal.wait_timeout(inner, Duration::from_secs(2)) {
+            Ok((inner, timer)) => {
+                if timer.timed_out() {
+                    debug!("Timeout while awaiting signal in resource_pool");
+                }
+                Ok(inner)
+            }
+            Err(err) => Err(DiskyError::Other(err.to_string())),
+        }
     }
 
     /// Create a new empty resource pool
@@ -260,13 +268,15 @@ impl<T> ResourcePool<T> {
     pub fn get_resource(&self) -> Result<Resource<T>> {
         let mut inner = self.acquire_lock()?;
 
-        if is_destitute_pool(&inner) {
-            // The pool has no resources and no resources are currently borrowed,
-            // so there's no hope of getting a resource
-            return Err(DiskyError::PoolExhausted);
-        }
-
         loop {
+            // We need to check it on each awake because we can have threads awaiting
+            // resources and then the pool turns destitute while waiting.
+            if is_destitute_pool(&inner) {
+                // The pool has no resources and no resources are currently borrowed,
+                // so there's no hope of getting a resource
+                return Err(DiskyError::PoolExhausted);
+            }
+
             match inner.state {
                 ResourcePoolState::Shutdown => {
                     return Err(shutdown_err("Resource queue is shutdown"));

@@ -25,7 +25,7 @@ use crate::parallel::reader::{
 pub enum ReadingOrder {
     /// Drain each file completely before moving to the next
     Drain,
-    
+
     /// Read from files in a round-robin fashion
     RoundRobin,
 }
@@ -47,7 +47,7 @@ pub struct MultiThreadedReaderConfig {
 
     /// Size of the byte queue in bytes
     pub queue_size_bytes: usize,
-    
+
     /// Reading order strategy
     pub reading_order: ReadingOrder,
 }
@@ -80,7 +80,7 @@ impl MultiThreadedReaderConfig {
             reading_order: ReadingOrder::default(),
         }
     }
-    
+
     /// Sets the reading order for this configuration
     pub fn with_reading_order(mut self, reading_order: ReadingOrder) -> Self {
         self.reading_order = reading_order;
@@ -241,7 +241,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
 
         Ok(())
     }
-    
+
     /// Round robin loop worker thread function
     ///
     /// This function runs in each worker thread and reads records from resources
@@ -278,6 +278,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
                 }
                 Err(DiskyError::QueueClosed(e)) => {
                     debug!("Worker {} encountered queue closed {}, exiting", id, e);
+                    break;
                 }
                 Err(e) => {
                     // Log the error and exit the worker
@@ -438,11 +439,16 @@ impl<Source: Read + Seek + Send + 'static> Drop for MultiThreadedReader<Source> 
         // Join all worker threads
         for (i, worker) in workers.into_iter().enumerate() {
             match worker.handle.join() {
-                Ok(result) => {
-                    if let Err(e) = result {
-                        error!("Worker {} returned error in drop: {}", i, e);
+                Ok(result) => match result {
+                    Ok(_) => (),
+                    // We consider this a debug because in our close function
+                    // we close queue without waiting for writers
+                    // to exit so this happens naturally during shutdown.
+                    Err(DiskyError::QueueClosed(err)) => {
+                        debug!("Worker {} returned error in drop: {}", i, err)
                     }
-                }
+                    Err(rem) => error!("Worker {} returned error in drop: {}", i, rem),
+                },
                 Err(e) => {
                     error!("Failed to join worker {} in drop: {:?}", i, e);
                 }

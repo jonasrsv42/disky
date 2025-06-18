@@ -3,7 +3,6 @@
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::helpers::{get_buffer,};
-use bytes::Bytes;
 use std::io::{Cursor, Write};
 
 #[test]
@@ -36,19 +35,17 @@ fn test_write_chunk_crossing_block_boundary() {
     // Truncate to exact size
     data.truncate(needed_size);
     
-    let chunk_data = Bytes::from(data);
-    
     // Calculate where the first block boundary will be
     // There will be a header at pos 0, and data starts at pos BLOCK_HEADER_SIZE
     let first_header_size = BLOCK_HEADER_SIZE as usize;
     let bytes_in_first_block = (block_size - BLOCK_HEADER_SIZE) as usize;
     
     // Verify test assumptions
-    assert!(chunk_data.len() > bytes_in_first_block,
+    assert!(data.len() > bytes_in_first_block,
            "Test chunk must cross at least one block boundary");
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&data).unwrap();
     
     // Get the buffer and check its contents
     let buffer = writer.into_inner();
@@ -58,7 +55,7 @@ fn test_write_chunk_crossing_block_boundary() {
     println!("Block size: {}", block_size);
     println!("Bytes in first block: {}", bytes_in_first_block);
     println!("Block header size: {}", BLOCK_HEADER_SIZE);
-    println!("Chunk data size: {}", chunk_data.len());
+    println!("Chunk data size: {}", data.len());
     println!("Actual size: {}", vec.len());
     
     // The output should include:
@@ -71,7 +68,7 @@ fn test_write_chunk_crossing_block_boundary() {
     println!("Note: Headers are at positions 0 and {}", block_size);
     
     // Ensure we have enough data (more than chunk + headers)
-    let minimum_expected_size = chunk_data.len() + 2 * BLOCK_HEADER_SIZE as usize;
+    let minimum_expected_size = data.len() + 2 * BLOCK_HEADER_SIZE as usize;
     assert!(vec.len() >= minimum_expected_size,
             "Output should include chunk data + at least two block headers");
     
@@ -83,7 +80,7 @@ fn test_write_chunk_crossing_block_boundary() {
     
     assert_eq!(
         &vec[first_part_start..first_part_end],
-        &chunk_data[..bytes_in_first_block],
+        &data[..bytes_in_first_block],
         "First part of chunk data after initial header should match"
     );
     
@@ -91,14 +88,14 @@ fn test_write_chunk_crossing_block_boundary() {
     let second_part_start = first_part_end + BLOCK_HEADER_SIZE as usize;
     
     // Check second part of chunk data (after second header)
-    let remaining_bytes = chunk_data.len() - bytes_in_first_block;
+    let remaining_bytes = data.len() - bytes_in_first_block;
     let second_part_end = second_part_start + remaining_bytes;
     
     println!("Second part of chunk: bytes {} to {}", second_part_start, second_part_end);
     
     assert_eq!(
         &vec[second_part_start..second_part_end],
-        &chunk_data[bytes_in_first_block..],
+        &data[bytes_in_first_block..],
         "Second part of chunk data after block boundary should match"
     );
     
@@ -107,7 +104,7 @@ fn test_write_chunk_crossing_block_boundary() {
     reconstructed.extend_from_slice(&vec[first_part_start..first_part_end]);
     reconstructed.extend_from_slice(&vec[second_part_start..second_part_end]);
     
-    assert_eq!(reconstructed, chunk_data,
+    assert_eq!(reconstructed, data,
               "Reconstructed data should match original chunk data");
 }
 
@@ -129,10 +126,9 @@ fn test_exact_block_size_boundaries() {
     
     // Create a chunk of exactly the usable block size
     let data = vec![123u8; usable_block_size];
-    let chunk_data = Bytes::from(data.clone());
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&data).unwrap();
     
     // Get the buffer
     let vec = get_buffer(writer);
@@ -160,10 +156,9 @@ fn test_exact_block_size_boundaries() {
     
     // Create data exactly 1 byte larger than usable block size
     let overflow_data = vec![42u8; usable_block_size + 1];
-    let chunk_data = Bytes::from(overflow_data.clone());
     
     // Write the chunk
-    writer.write_chunk(chunk_data).unwrap();
+    writer.write_chunk(&overflow_data).unwrap();
     
     // Get the buffer
     let vec = get_buffer(writer);
@@ -208,14 +203,13 @@ fn test_write_chunk_crossing_multiple_block_boundaries() {
     // Create a pattern-based chunk for easy verification
     // Each byte will be its position % 256, creating a recognizable pattern
     let needed_size = 250; // Cross two boundaries
-    let mut pattern_data = Vec::with_capacity(needed_size);
+    let mut data = Vec::with_capacity(needed_size);
     for i in 0..needed_size {
-        pattern_data.push((i % 256) as u8);
+        data.push((i % 256) as u8);
     }
-    let chunk_data = Bytes::from(pattern_data);
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&data).unwrap();
     
     // Get the buffer
     let buffer = writer.into_inner();
@@ -232,7 +226,7 @@ fn test_write_chunk_crossing_multiple_block_boundaries() {
     ];
     
     // Verify the size makes sense
-    let expected_data_size = chunk_data.len();
+    let expected_data_size = data.len();
     let expected_header_count = if vec.len() == expected_data_size + 3 * BLOCK_HEADER_SIZE as usize {
         3 // 3 headers is the minimum for crossing 2 boundaries 
     } else if vec.len() == expected_data_size + 4 * BLOCK_HEADER_SIZE as usize {
@@ -247,11 +241,11 @@ fn test_write_chunk_crossing_multiple_block_boundaries() {
     println!("Detected {} block headers", expected_header_count);
     
     // Now let's reconstruct the original data by skipping over the headers
-    let mut reconstructed = Vec::with_capacity(chunk_data.len());
+    let mut reconstructed = Vec::with_capacity(data.len());
     
     // Track our position in the output buffer and input chunk
     let mut output_pos = 0;
-    let mut remaining_chunk = chunk_data.len();
+    let mut remaining_chunk = data.len();
     let mut chunk_pos = 0;
     
     // Process each block and extract the data
@@ -289,7 +283,7 @@ fn test_write_chunk_crossing_multiple_block_boundaries() {
             
             // Verify this section matches the expected chunk data
             for j in 0..bytes_to_read {
-                assert_eq!(vec[output_pos + j], chunk_data[chunk_pos + j], 
+                assert_eq!(vec[output_pos + j], data[chunk_pos + j], 
                           "Data mismatch at position {}", chunk_pos + j);
             }
             
@@ -301,9 +295,9 @@ fn test_write_chunk_crossing_multiple_block_boundaries() {
     }
     
     // Final verification: we've reconstructed the entire chunk
-    assert_eq!(reconstructed.len(), chunk_data.len(), 
+    assert_eq!(reconstructed.len(), data.len(), 
               "Reconstructed data should have the same length as original chunk");
-    assert_eq!(reconstructed, chunk_data.to_vec(),
+    assert_eq!(reconstructed, data,
               "Reconstructed data should match original chunk data");
     
     println!("Successfully verified chunk data across multiple block boundaries");
@@ -333,7 +327,7 @@ fn test_header_values() {
     // First part: block_size - initial_pos bytes (to reach the boundary)
     // Second part: 50 additional bytes (after the boundary)
     let chunk_size = (block_size - initial_pos + 50) as usize;
-    let chunk_data = Bytes::from(vec![b'X'; chunk_size]);
+    let data = vec![b'X'; chunk_size];
     
     // Get the expected header values that should be calculated
     let chunk_begin = initial_pos;
@@ -354,7 +348,7 @@ fn test_header_values() {
     let expected_next_chunk = chunk_end - block_size;
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&data).unwrap();
     
     // Get the buffer
     let buffer = writer.into_inner();

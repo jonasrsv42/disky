@@ -3,7 +3,6 @@
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::helpers::{get_buffer};
-use bytes::Bytes;
 use std::io::Cursor;
 
 #[test]
@@ -22,12 +21,12 @@ fn test_write_chunks_sequentially() {
     ).unwrap();
     
     // Write first chunk with a clear pattern
-    let chunk1 = Bytes::from(b"FIRST_CHUNK_DATA".to_vec());
-    writer.write_chunk(chunk1.clone()).unwrap();
+    let chunk1 = b"FIRST_CHUNK_DATA";
+    writer.write_chunk(chunk1).unwrap();
     
     // Write second chunk with a different pattern
-    let chunk2 = Bytes::from(b"SECOND_CHUNK_WITH_DIFFERENT_DATA".to_vec());
-    writer.write_chunk(chunk2.clone()).unwrap();
+    let chunk2 = b"SECOND_CHUNK_WITH_DIFFERENT_DATA";
+    writer.write_chunk(chunk2).unwrap();
     
     // Get the buffer and check its contents
     let buffer = writer.into_inner();
@@ -51,9 +50,9 @@ fn test_write_chunks_sequentially() {
     let chunk2_start = chunk1_end;
     let chunk2_end = chunk2_start + chunk2.len();
     
-    assert_eq!(&vec[chunk1_start..chunk1_end], &chunk1[..],
+    assert_eq!(&vec[chunk1_start..chunk1_end], chunk1,
               "First chunk should be written correctly after header");
-    assert_eq!(&vec[chunk2_start..chunk2_end], &chunk2[..],
+    assert_eq!(&vec[chunk2_start..chunk2_end], chunk2,
               "Second chunk should be written correctly after first chunk");
 }
 
@@ -72,16 +71,16 @@ fn test_many_small_sequential_chunks() {
     
     // Create several small chunks
     let chunks = vec![
-        Bytes::from(b"Chunk1".to_vec()),
-        Bytes::from(b"Chunk2".to_vec()),
-        Bytes::from(b"Chunk3".to_vec()),
-        Bytes::from(b"Chunk4".to_vec()),
-        Bytes::from(b"Chunk5".to_vec()),
+        &b"Chunk1"[..],
+        &b"Chunk2"[..],
+        &b"Chunk3"[..],
+        &b"Chunk4"[..],
+        &b"Chunk5"[..],
     ];
     
     // Write all chunks
     for chunk in chunks.iter() {
-        writer.write_chunk(chunk.clone()).unwrap();
+        writer.write_chunk(chunk).unwrap();
     }
     
     // Get the buffer
@@ -131,10 +130,8 @@ fn test_very_large_chunk_many_boundaries() {
     for i in 0..chunk_size {
         pattern_data.push((i % 256) as u8);
     }
-    let chunk_data = Bytes::from(pattern_data.clone());
-    
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&pattern_data).unwrap();
     
     // Get the buffer
     let vec = get_buffer(writer);
@@ -236,7 +233,7 @@ fn test_write_interpretable_string_data() {
     for _ in 0..20 {  // 60 bytes total, will cross block boundaries
         data.extend_from_slice(pattern);
     }
-    let chunk_data = Bytes::from(data);
+    let chunk_data = data;
     
     // Calculate where the first block boundary will be
     // Since we start at position 0, there will be a header, then data starts at BLOCK_HEADER_SIZE
@@ -248,7 +245,7 @@ fn test_write_interpretable_string_data() {
            "Test chunk must cross at least one block boundary");
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&chunk_data).unwrap();
     
     // Get the buffer and check its contents
     let buffer = writer.into_inner();
@@ -323,10 +320,9 @@ fn test_appending_to_existing_file() {
     
     // Create new content to append
     let new_content = " This is new content to append.";
-    let chunk_data = Bytes::from(new_content.as_bytes().to_vec());
     
     // Append the new content
-    writer.write_chunk(chunk_data).unwrap();
+    writer.write_chunk(new_content.as_bytes()).unwrap();
     
     // Get the buffer and check its contents
     let buffer = writer.into_inner();

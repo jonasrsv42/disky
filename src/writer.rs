@@ -50,6 +50,15 @@ impl Default for RecordWriterConfig {
     }
 }
 
+impl RecordWriterConfig {
+    // Set compression type for writer.
+    pub fn with_compression(mut self, compression: CompressionType) -> Self {
+        self.compression_type = compression;
+
+        return self;
+    }
+}
+
 /// Enum to represent the state of a RecordWriter.
 #[derive(Debug, PartialEq)]
 pub(crate) enum WriterState {

@@ -128,9 +128,7 @@ impl SimpleChunkParser {
         let compression_type_byte = data.get_u8();
         let compression_type = match compression_type_byte {
             0 => CompressionType::None,
-            b'b' => CompressionType::Brotli,
             b'z' => CompressionType::Zstd,
-            b's' => CompressionType::Snappy,
             _ => {
                 return Err(DiskyError::UnsupportedCompressionType(
                     compression_type_byte,
@@ -165,22 +163,10 @@ impl SimpleChunkParser {
                 // No decompression needed
                 (compressed_sizes_data, compressed_records_data)
             }
-            CompressionType::Brotli => {
-                // Brotli decompression not yet implemented
-                return Err(DiskyError::Other(
-                    "Brotli decompression not yet implemented".to_string(),
-                ));
-            }
             CompressionType::Zstd => {
                 // Zstd decompression not yet implemented
                 return Err(DiskyError::Other(
                     "Zstd decompression not yet implemented".to_string(),
-                ));
-            }
-            CompressionType::Snappy => {
-                // Snappy decompression not yet implemented
-                return Err(DiskyError::Other(
-                    "Snappy decompression not yet implemented".to_string(),
                 ));
             }
         };

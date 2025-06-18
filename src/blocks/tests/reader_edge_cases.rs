@@ -4,7 +4,6 @@ use super::super::reader::{BlockReader, BlockReaderConfig, BlocksPiece};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::helpers::extract_bytes;
-use bytes::Bytes;
 use std::io::Cursor;
 
 #[test]
@@ -18,28 +17,28 @@ fn test_empty_and_tiny_chunks() {
 
     // Write a regular chunk first
     let chunk1 = b"Regular chunk";
-    writer.write_chunk(Bytes::from(chunk1.to_vec())).unwrap();
+    writer.write_chunk(chunk1).unwrap();
 
     // Write an empty chunk - this should be ignored by the writer
     let empty_chunk = b"";
     writer
-        .write_chunk(Bytes::from(empty_chunk.to_vec()))
+        .write_chunk(empty_chunk)
         .unwrap();
 
     // Write a tiny chunk (1 byte)
     let tiny_chunk = b"X";
     writer
-        .write_chunk(Bytes::from(tiny_chunk.to_vec()))
+        .write_chunk(tiny_chunk)
         .unwrap();
 
     // Write another empty chunk - this should also be ignored
     writer
-        .write_chunk(Bytes::from(empty_chunk.to_vec()))
+        .write_chunk(empty_chunk)
         .unwrap();
 
     // Write final regular chunk
     let chunk3 = b"Final regular chunk";
-    writer.write_chunk(Bytes::from(chunk3.to_vec())).unwrap();
+    writer.write_chunk(chunk3).unwrap();
 
     writer.flush().unwrap();
     let file_data = writer.into_inner().into_inner();
@@ -88,7 +87,7 @@ fn test_file_boundary_edge_cases() {
 
     // First, write a complete block to ensure we start at a clean boundary
     let padding = vec![b'P'; usable_block_size as usize];
-    writer.write_chunk(Bytes::from(padding.clone())).unwrap();
+    writer.write_chunk(&padding).unwrap();
 
     // Verify we're at a block boundary
     let pos = writer.current_position();
@@ -103,7 +102,7 @@ fn test_file_boundary_edge_cases() {
     // Write a chunk that's exactly one usable block size
     let one_block_chunk = vec![b'Y'; usable_block_size as usize];
     writer
-        .write_chunk(Bytes::from(one_block_chunk.clone()))
+        .write_chunk(&one_block_chunk)
         .unwrap();
 
     // Verify we're at a block boundary again
@@ -119,7 +118,7 @@ fn test_file_boundary_edge_cases() {
     // Write a tiny chunk
     let tiny_chunk = b"Z";
     writer
-        .write_chunk(Bytes::from(tiny_chunk.to_vec()))
+        .write_chunk(tiny_chunk)
         .unwrap();
 
     writer.flush().unwrap();

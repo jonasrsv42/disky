@@ -4,7 +4,6 @@ use super::super::reader::{BlockReader, BlockReaderConfig, BlocksPiece};
 use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::helpers::extract_bytes;
-use bytes::Bytes;
 use std::io::Cursor;
 
 /// Helper function to create a test file with specific data
@@ -12,7 +11,7 @@ fn create_test_file(data: &[u8], block_size: u64) -> Vec<u8> {
     let buffer = Cursor::new(Vec::new());
     let mut writer = BlockWriter::with_config(buffer, BlockWriterConfig { block_size }).unwrap();
 
-    writer.write_chunk(Bytes::from(data.to_vec())).unwrap();
+    writer.write_chunk(data).unwrap();
     writer.flush().unwrap();
 
     writer.into_inner().into_inner()
@@ -78,9 +77,9 @@ fn test_read_multiple_chunks_sequential() {
     let chunk2 = b"Second chunk with different data";
     let chunk3 = b"Third chunk";
 
-    writer.write_chunk(Bytes::from(chunk1.to_vec())).unwrap();
-    writer.write_chunk(Bytes::from(chunk2.to_vec())).unwrap();
-    writer.write_chunk(Bytes::from(chunk3.to_vec())).unwrap();
+    writer.write_chunk(chunk1).unwrap();
+    writer.write_chunk(chunk2).unwrap();
+    writer.write_chunk(chunk3).unwrap();
     writer.flush().unwrap();
 
     let file_data = writer.into_inner().into_inner();
@@ -157,13 +156,13 @@ fn test_multiple_chunks_in_single_block() {
 
     // Write all three chunks individually
     writer
-        .write_chunk(Bytes::from(small_chunk1.to_vec()))
+        .write_chunk(small_chunk1)
         .unwrap();
     writer
-        .write_chunk(Bytes::from(small_chunk2.to_vec()))
+        .write_chunk(small_chunk2)
         .unwrap();
     writer
-        .write_chunk(Bytes::from(small_chunk3.to_vec()))
+        .write_chunk(small_chunk3)
         .unwrap();
     writer.flush().unwrap();
 

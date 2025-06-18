@@ -1,4 +1,4 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use std::io::{Result as IoResult, Seek, SeekFrom, Write};
 
 use crate::blocks::utils::{self, BLOCK_HEADER_SIZE, DEFAULT_BLOCK_SIZE};
@@ -171,14 +171,13 @@ impl BlockWriterConfig {
 /// ```no_run
 /// use disky::blocks::writer::{BlockWriter, BlockWriterConfig};
 /// use std::fs::File;
-/// use bytes::Bytes;
 ///
 /// // Create a BlockWriter with a file as the underlying sink
 /// let file = File::create("example.riegeli").unwrap();
 /// let mut writer = BlockWriter::new(file).unwrap();
 ///
 /// // Write a chunk of data
-/// let data = Bytes::from(b"Some data to write".to_vec());
+/// let data = b"Some data to write";
 /// writer.write_chunk(data).unwrap();
 ///
 /// // Always call flush when done
@@ -364,17 +363,16 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     ///
     /// ```no_run
     /// # use disky::blocks::writer::BlockWriter;
-    /// # use bytes::Bytes;
     /// # let file = std::fs::File::create("example.riegeli").unwrap();
     /// # let mut writer = BlockWriter::new(file).unwrap();
     /// // Write a single chunk
-    /// let data = Bytes::from(b"Some data".to_vec());
+    /// let data = b"Some data";
     /// writer.write_chunk(data).unwrap();
     ///
     /// // Write multiple chunks (each gets its own logical boundary)
-    /// writer.write_chunk(Bytes::from(b"Chunk 1".to_vec())).unwrap();
-    /// writer.write_chunk(Bytes::from(b"Chunk 2".to_vec())).unwrap();
-    /// writer.write_chunk(Bytes::from(b"Chunk 3".to_vec())).unwrap();
+    /// writer.write_chunk(b"Chunk 1").unwrap();
+    /// writer.write_chunk(b"Chunk 2").unwrap();
+    /// writer.write_chunk(b"Chunk 3").unwrap();
     /// ```
     ///
     /// # Arguments
@@ -384,7 +382,7 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     /// # Returns
     ///
     /// * `Result<()>` - Success or an error if the write failed
-    pub fn write_chunk(&mut self, chunk_data: Bytes) -> Result<()> {
+    pub fn write_chunk(&mut self, chunk_data: &[u8]) -> Result<()> {
         // Special case: Empty chunks don't need any headers or writing
         if chunk_data.is_empty() {
             return Ok(());
@@ -443,12 +441,11 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
     ///
     /// ```no_run
     /// # use disky::blocks::writer::BlockWriter;
-    /// # use bytes::Bytes;
     /// # let file = std::fs::File::create("example.riegeli").unwrap();
     /// # let mut writer = BlockWriter::new(file).unwrap();
     /// // Write some chunks
-    /// writer.write_chunk(Bytes::from(b"Chunk 1".to_vec())).unwrap();
-    /// writer.write_chunk(Bytes::from(b"Chunk 2".to_vec())).unwrap();
+    /// writer.write_chunk(b"Chunk 1").unwrap();
+    /// writer.write_chunk(b"Chunk 2").unwrap();
     ///
     /// // Always flush when done
     /// writer.flush().unwrap();

@@ -5,7 +5,6 @@ use super::super::utils::BLOCK_HEADER_SIZE;
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::helpers::extract_bytes;
 use crate::error::DiskyError;
-use bytes::Bytes;
 use std::io::Cursor;
 
 #[test]
@@ -20,15 +19,15 @@ fn test_recover_from_corrupted_header() {
     // First chunk - small enough to fit in usable space of first block (block_size - BLOCK_HEADER_SIZE)
     // With block_size = 64 and BLOCK_HEADER_SIZE = 24, we have 40 bytes of usable space
     let chunk1 = b"Small first chunk";
-    writer.write_chunk(Bytes::from(chunk1.to_vec())).unwrap();
+    writer.write_chunk(chunk1).unwrap();
 
     // Second chunk - this will be skipped due to corruption at the block header
     let chunk2 = b"Second chunk - will be skipped due to corruption, but must be large enough to fill block to recover next";
-    writer.write_chunk(Bytes::from(chunk2.to_vec())).unwrap();
+    writer.write_chunk(chunk2).unwrap();
 
     // Third chunk (to ensure we have something to find after corrupt header)
     let chunk3 = b"Third chunk that should be readable after recovery";
-    writer.write_chunk(Bytes::from(chunk3.to_vec())).unwrap();
+    writer.write_chunk(chunk3).unwrap();
 
     writer.flush().unwrap();
     let mut file_data = writer.into_inner().into_inner();
@@ -96,20 +95,20 @@ fn test_recover_from_multiple_corrupted_headers() {
 
     // First chunk - small enough to fit in first block
     let chunk1 = b"First chunk - before any corruption";
-    writer.write_chunk(Bytes::from(chunk1.to_vec())).unwrap();
+    writer.write_chunk(chunk1).unwrap();
 
     // Second chunk - need to make this large enough to span multiple blocks
     // to ensure it forces the next chunk to start at a block boundary
     let chunk2 = b"Second chunk - will be skipped due to first corruption. This chunk is intentionally made very large to ensure it spans multiple blocks and forces proper alignment of subsequent chunks at block boundaries. We want to make sure the next chunk starts at a clean block boundary for testing.";
-    writer.write_chunk(Bytes::from(chunk2.to_vec())).unwrap();
+    writer.write_chunk(chunk2).unwrap();
 
     // Third chunk - also make this large to ensure fourth chunk starts at a block boundary
     let chunk3 = b"Third chunk - will be skipped due to second corruption. This chunk is also made large to ensure it spans multiple blocks and forces the fourth chunk to start at a clean block boundary for testing. We need to have proper alignment for our test to work correctly.";
-    writer.write_chunk(Bytes::from(chunk3.to_vec())).unwrap();
+    writer.write_chunk(chunk3).unwrap();
 
     // Fourth chunk that we expect to read after recovering from both corruptions
     let chunk4 = b"Fourth chunk - will be readable after recovery";
-    writer.write_chunk(Bytes::from(chunk4.to_vec())).unwrap();
+    writer.write_chunk(chunk4).unwrap();
 
     writer.flush().unwrap();
     let mut file_data = writer.into_inner().into_inner();
@@ -201,7 +200,7 @@ fn test_recover_from_previous_chunk_inconsistency() {
 
     // Write a large chunk that crosses into multiple blocks
     let large_chunk = vec![b'A'; (block_size * 2) as usize];
-    writer.write_chunk(Bytes::from(large_chunk)).unwrap();
+    writer.write_chunk(&large_chunk).unwrap();
     writer.flush().unwrap();
 
     // Get the file data but truncate it to simulate an incomplete write
@@ -221,7 +220,7 @@ fn test_recover_from_previous_chunk_inconsistency() {
     let usable_block_size = block_size - BLOCK_HEADER_SIZE;
     // Create a chunk larger than the usable size of a block to ensure it crosses boundary
     let new_chunk = vec![b'B'; (usable_block_size + 20) as usize];
-    writer2.write_chunk(Bytes::from(new_chunk.clone())).unwrap();
+    writer2.write_chunk(&new_chunk).unwrap();
     writer2.flush().unwrap();
 
     // Get the completed file
@@ -267,7 +266,7 @@ fn test_recover_at_end_of_file() {
     let buffer = Cursor::new(Vec::new());
     let mut writer = BlockWriter::with_config(buffer, BlockWriterConfig { block_size }).unwrap();
     writer
-        .write_chunk(Bytes::from(b"Single chunk".to_vec()))
+        .write_chunk(b"Single chunk")
         .unwrap();
     writer.flush().unwrap();
     let mut file_data = writer.into_inner().into_inner();

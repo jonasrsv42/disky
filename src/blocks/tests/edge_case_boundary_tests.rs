@@ -17,7 +17,6 @@
 //! even in unusual or extreme scenarios.
 
 use std::io::Cursor;
-use bytes::Bytes;
 
 use crate::blocks::writer::{BlockWriter, BlockWriterConfig};
 use crate::blocks::utils::BLOCK_HEADER_SIZE;
@@ -84,8 +83,8 @@ fn test_chunk_starting_near_block_boundary() {
     // Position the writer so that the next write is 1 byte before a block boundary
     // First block header is 24 bytes, leaving 40 bytes.
     // We'll write 39 bytes of filler, then start our test chunk.
-    let filler = Bytes::from(vec![b'x'; 39]);
-    writer.write_chunk(filler).unwrap();
+    let filler = vec![b'x'; 39];
+    writer.write_chunk(&filler).unwrap();
     
     // Now write a chunk that will cross the block boundary
     // Our position should be 63 (1 byte before block boundary)
@@ -93,8 +92,8 @@ fn test_chunk_starting_near_block_boundary() {
     assert_eq!(position, 63, "Position should be 1 byte before block boundary");
     
     // Write a chunk that will cross the boundary
-    let test_chunk = Bytes::from(vec![b'y'; 10]);
-    writer.write_chunk(test_chunk).unwrap();
+    let test_chunk = vec![b'y'; 10];
+    writer.write_chunk(&test_chunk).unwrap();
     writer.flush().unwrap();
     
     // Get the written data
@@ -136,9 +135,9 @@ fn test_chunk_ending_at_exact_block_boundary() {
     // First block is: 24-byte header + 40 bytes usable
     // We want this chunk to end at exactly 64 bytes (block boundary)
     let chunk_size = usable_block_size; // 40 bytes
-    let chunk = Bytes::from(vec![b'x'; chunk_size as usize]);
+    let chunk = vec![b'x'; chunk_size as usize];
     
-    writer.write_chunk(chunk).unwrap();
+    writer.write_chunk(&chunk).unwrap();
     writer.flush().unwrap();
     
     // Get the written data
@@ -181,16 +180,16 @@ fn test_multi_block_formula_validation() {
     // Write a complex pattern of chunks designed to exercise all boundary conditions
     
     // First chunk: Exactly fills the first block (40 bytes of data + 24-byte header)
-    let chunk1 = Bytes::from(vec![b'a'; 40]);
-    writer.write_chunk(chunk1).unwrap();
+    let chunk1 = vec![b'a'; 40];
+    writer.write_chunk(&chunk1).unwrap();
     
     // Second chunk: Spans multiple blocks - 100 bytes which crosses 2 block boundaries
-    let chunk2 = Bytes::from(vec![b'b'; 100]);
-    writer.write_chunk(chunk2).unwrap();
+    let chunk2 = vec![b'b'; 100];
+    writer.write_chunk(&chunk2).unwrap();
     
     // Third chunk: Small chunk (10 bytes) that fits in remaining space
-    let chunk3 = Bytes::from(vec![b'c'; 10]);
-    writer.write_chunk(chunk3).unwrap();
+    let chunk3 = vec![b'c'; 10];
+    writer.write_chunk(&chunk3).unwrap();
     
     // Flush and get data
     writer.flush().unwrap();

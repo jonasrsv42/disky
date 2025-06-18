@@ -21,7 +21,7 @@ where
         writer.write_record(record.as_ref()).unwrap();
     }
 
-    writer.serialize_chunk().unwrap()
+    Bytes::copy_from_slice(writer.serialize_chunk().unwrap())
 }
 
 // Helper function to create a signature chunk

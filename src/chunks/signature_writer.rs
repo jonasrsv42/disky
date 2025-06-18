@@ -29,8 +29,6 @@
 //! the complete 64-byte signature to a file, maintaining separation of concerns between
 //! chunk-related and block-related logic.
 
-use bytes::{BufMut, Bytes, BytesMut};
-
 use crate::chunks::ChunkWriter;
 use crate::chunks::signature::FILE_SIGNATURE_HEADER;
 use crate::error::{Result, DiskyError};
@@ -58,6 +56,8 @@ use crate::error::{Result, DiskyError};
 pub struct SignatureWriter {
     // Flag to track if the signature has been written
     signature_written: bool,
+    // Store the signature header for returning as a slice
+    signature_buffer: Vec<u8>,
 }
 
 impl SignatureWriter {
@@ -65,6 +65,7 @@ impl SignatureWriter {
     pub fn new() -> Self {
         Self {
             signature_written: false,
+            signature_buffer: FILE_SIGNATURE_HEADER.to_vec(),
         }
     }
     
@@ -75,9 +76,9 @@ impl SignatureWriter {
     ///
     /// # Returns
     ///
-    /// * `Ok(Bytes)` - A `Bytes` object containing the 40-byte signature header
+    /// * `Ok(&[u8])` - A slice containing the 40-byte signature header
     /// * `Err(DiskyError)` - If the signature has already been written
-    pub fn try_serialize_chunk(&mut self) -> Result<Bytes> {
+    pub fn try_serialize_chunk(&mut self) -> Result<&[u8]> {
         if self.signature_written {
             return Err(DiskyError::Other(
                 "Signature has already been written. The signature chunk should only be written once at the beginning of a file.".to_string()
@@ -87,30 +88,26 @@ impl SignatureWriter {
         // Mark the signature as written
         self.signature_written = true;
         
-        // Create a buffer with the predefined signature header constant
-        let mut buffer = BytesMut::with_capacity(FILE_SIGNATURE_HEADER.len());
-        buffer.put_slice(&FILE_SIGNATURE_HEADER);
-        
-        // Return the signature header as Bytes
-        Ok(buffer.freeze())
+        // Return the signature header as a slice (already filled in constructor)
+        Ok(&self.signature_buffer[..])
     }
 }
 
 impl ChunkWriter for SignatureWriter {
     /// Serializes the Riegeli file signature chunk header.
     ///
-    /// This implementation calls `try_serialize_chunk` and unwraps the result.
+    /// This implementation calls `try_serialize_chunk` and returns the result.
     /// In production code, it's recommended to use `try_serialize_chunk` directly
     /// for proper error handling.
     ///
     /// # Returns
     ///
-    /// A `Bytes` object containing the 40-byte signature header.
+    /// A slice containing the 40-byte signature header.
     ///
     /// # Panics
     ///
     /// This method will panic if the signature has already been written.
-    fn serialize_chunk(&mut self) -> Result<Bytes> {
+    fn serialize_chunk(&mut self) -> Result<&[u8]> {
         self.try_serialize_chunk()
     }
 }

@@ -24,7 +24,6 @@
 //! when writing chunks that cross block boundaries.
 
 use std::io::Cursor;
-use bytes::Bytes;
 
 use crate::blocks::writer::{BlockWriter, BlockWriterConfig};
 use crate::blocks::utils::BLOCK_HEADER_SIZE;
@@ -221,19 +220,19 @@ fn test_exact_multi_block_chunk_validation() {
     // After the initial block header (24 bytes), we have usable_block_size bytes
     // Calculate a chunk size that will exactly hit the next block boundary
     let first_chunk_size = usable_block_size;
-    let first_chunk = Bytes::from(vec![b'x'; first_chunk_size as usize]);
+    let first_chunk = vec![b'x'; first_chunk_size as usize];
     
     // Write the chunk and flush
-    writer.write_chunk(first_chunk).unwrap();
+    writer.write_chunk(&first_chunk).unwrap();
     writer.flush().unwrap();
     
     // Now write a chunk that spans exactly two block boundaries
     // It needs to be: usable_block_size + BLOCK_HEADER_SIZE + usable_block_size
     let multi_block_size = usable_block_size + BLOCK_HEADER_SIZE + usable_block_size;
-    let multi_block_chunk = Bytes::from(vec![b'y'; multi_block_size as usize]);
+    let multi_block_chunk = vec![b'y'; multi_block_size as usize];
     
     // Write the multi-block chunk
-    writer.write_chunk(multi_block_chunk).unwrap();
+    writer.write_chunk(&multi_block_chunk).unwrap();
     writer.flush().unwrap();
     
     // Get the data

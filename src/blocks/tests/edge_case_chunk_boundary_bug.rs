@@ -10,7 +10,6 @@
 use super::super::reader::{BlockReader, BlockReaderConfig};
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::helpers::extract_bytes;
-use bytes::Bytes;
 use std::io::Cursor;
 
 #[test]
@@ -46,8 +45,8 @@ fn test_bug_chunk_ends_at_block_boundary() {
     println!("  Second chunk size: {}", second_chunk.len());
     
     // Write the two chunks
-    writer.write_chunk(Bytes::from(first_chunk.clone())).unwrap();
-    writer.write_chunk(Bytes::from(second_chunk.clone())).unwrap();
+    writer.write_chunk(&first_chunk).unwrap();
+    writer.write_chunk(&second_chunk).unwrap();
     writer.flush().unwrap();
     
     // Get the written data
@@ -114,7 +113,7 @@ fn test_read_starting_within_block_crossing_boundary() {
     // First block: 30 to 100 = 70 bytes
     // Second block: 100 to 150 = 50 bytes
     let pattern_data = (0..120u8).collect::<Vec<_>>();
-    writer.write_chunk(Bytes::from(pattern_data.clone())).unwrap();
+    writer.write_chunk(&pattern_data).unwrap();
     writer.flush().unwrap();
     
     // Get the file data

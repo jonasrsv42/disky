@@ -15,19 +15,21 @@ use crate::chunks::simple_chunk_parser::SimpleChunkPiece;
 #[test]
 fn test_basic_read_write() {
     // Create a chunk with test records
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Record 1").unwrap();
-    writer.write_record(b"Record 2").unwrap();
-    writer.write_record(b"Record 3").unwrap();
+    let (mut reader, mut chunk_data) = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Record 1").unwrap();
+        writer.write_record(b"Record 2").unwrap();
+        writer.write_record(b"Record 3").unwrap();
 
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
-    // Parse the header and get the chunk data
-    let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
-
-    // Create a parser with mutable reference to chunk_data
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+        // Copy to Bytes for parsing
+        let mut chunk_bytes = serialized_chunk.clone();
+        let header = parse_chunk_header(&mut chunk_bytes).unwrap();
+        let chunk_data_copy = chunk_bytes.clone(); // This now has the header consumed
+        let reader = SimpleChunkParser::new(header, chunk_bytes).unwrap();
+        (reader, chunk_data_copy)
+    };
 
     // Check initial state
     assert_eq!(reader.records_read(), 0);
@@ -188,7 +190,7 @@ fn test_multiple_chunks() {
 fn test_empty_chunk() {
     // Create an empty chunk (no records)
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse the header and get the chunk data
     let mut chunk_data = serialized_chunk.clone();
@@ -229,7 +231,7 @@ fn test_large_records() {
     let large_record = vec![0xAA; 1_000_000];
     writer.write_record(&large_record).unwrap();
 
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse and read
     let mut chunk_data = serialized_chunk.clone();
@@ -277,7 +279,7 @@ fn test_mixed_record_sizes() {
     let large_record = vec![0xCC; 100_000];
     writer.write_record(&large_record).unwrap();
 
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse and read
     let mut chunk_data = serialized_chunk.clone();
@@ -333,7 +335,7 @@ fn test_incomplete_chunk_data() {
     // Create a valid writer
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test").unwrap();
-    let full_chunk = writer.serialize_chunk().unwrap();
+    let full_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse header
     let mut chunk_data = full_chunk.clone();
@@ -371,7 +373,7 @@ fn test_iteration_pattern() {
         writer.write_record(record).unwrap();
     }
 
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse the header and data
     let mut chunk_data = serialized_chunk.clone();
@@ -475,7 +477,7 @@ fn test_records_read_counter() {
             .unwrap();
     }
 
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse the header and data
     let mut chunk_data = serialized_chunk.clone();
@@ -517,7 +519,7 @@ fn test_invalid_chunk_type() {
     // Create a valid chunk
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse header and modify it to have an invalid chunk type
     let mut chunk_data = serialized_chunk.clone();
@@ -543,7 +545,7 @@ fn test_valid_data_hash() {
     // Create a valid chunk
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse the header and data
     let mut chunk_data = serialized_chunk.clone();
@@ -562,7 +564,7 @@ fn test_invalid_data_hash() {
     // Create a valid chunk
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
@@ -592,7 +594,7 @@ fn test_modified_data_hash_verification() {
     // Create a valid chunk
     let mut writer = SimpleChunkWriter::new(CompressionType::None);
     writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse header
     let mut chunk_data = serialized_chunk.clone();
@@ -628,13 +630,15 @@ fn test_modified_data_hash_verification() {
 #[test]
 fn test_empty_chunk_data() {
     // Create a valid header but empty data
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    let header = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Test record").unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
-    // Parse header but provide empty data
-    let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
+        // Parse header and copy to Bytes for parsing
+        let mut chunk_bytes = serialized_chunk.clone();
+        parse_chunk_header(&mut chunk_bytes).unwrap()
+    };
 
     // Try to create parser with empty data
     let empty_bytes = Bytes::new();
@@ -655,14 +659,17 @@ fn test_empty_chunk_data() {
 
 #[test]
 fn test_corrupted_sizes_length() {
-    // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    // Create a valid chunk and get header
+    let (header, chunk_data) = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Test record").unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
-    // Parse header
-    let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
+        // Copy to Bytes for parsing
+        let mut chunk_bytes = serialized_chunk.clone();
+        let header = parse_chunk_header(&mut chunk_bytes).unwrap();
+        (header, chunk_bytes)
+    };
 
     // Corrupt the data by modifying the sizes length varint
     // We know the first byte is compression type, skip it
@@ -686,14 +693,17 @@ fn test_corrupted_sizes_length() {
 
 #[test]
 fn test_invalid_sizes_length() {
-    // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    // Create a valid chunk and get header + data
+    let (mut header, chunk_data) = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Test record").unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
-    // Parse header
-    let mut chunk_data = serialized_chunk.clone();
-    let mut header = parse_chunk_header(&mut chunk_data).unwrap();
+        // Copy to Bytes for parsing
+        let mut chunk_bytes = serialized_chunk.clone();
+        let header = parse_chunk_header(&mut chunk_bytes).unwrap();
+        (header, chunk_bytes)
+    };
 
     // Corrupt the data by modifying the sizes length to be larger than available data
     let mut corrupted_data = BytesMut::new();
@@ -731,14 +741,17 @@ fn test_invalid_sizes_length() {
 
 #[test]
 fn test_unsupported_compression_type() {
-    // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Test record").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    // Create a valid chunk and get header + data
+    let (mut header, chunk_data) = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Test record").unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
-    // Parse header
-    let mut chunk_data = serialized_chunk.clone();
-    let mut header = parse_chunk_header(&mut chunk_data).unwrap();
+        // Copy to Bytes for parsing
+        let mut chunk_bytes = serialized_chunk.clone();
+        let header = parse_chunk_header(&mut chunk_bytes).unwrap();
+        (header, chunk_bytes)
+    };
 
     // Modify the compression type byte to an unsupported value
     let mut modified_data = BytesMut::new();
@@ -770,16 +783,18 @@ fn test_unsupported_compression_type() {
 
 #[test]
 fn test_reading_after_error() {
-    // Create a chunk with some records
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Record 1").unwrap();
-    writer.write_record(b"Record 2").unwrap();
-    let serialized_chunk = writer.serialize_chunk().unwrap();
+    // Create a chunk with some records and get reader
+    let mut reader = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Record 1").unwrap();
+        writer.write_record(b"Record 2").unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
-    // Parse header
-    let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
-    let mut reader = SimpleChunkParser::new(header, chunk_data).unwrap();
+        // Copy to Bytes for parsing
+        let mut chunk_bytes = serialized_chunk.clone();
+        let header = parse_chunk_header(&mut chunk_bytes).unwrap();
+        SimpleChunkParser::new(header, chunk_bytes).unwrap()
+    };
 
     // Read one record successfully
     let _ = reader.next().unwrap();
@@ -815,16 +830,20 @@ fn test_reading_after_error() {
 
 #[test]
 fn test_record_size_exceeds_available_data() {
-    // Create a chunk with test records
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
-    writer.write_record(b"Record 1").unwrap();
-    writer.write_record(b"Record 2").unwrap();
+    // Create a chunk with test records and get data
+    let chunk_data = {
+        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        writer.write_record(b"Record 1").unwrap();
+        writer.write_record(b"Record 2").unwrap();
+        let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
+        
+        // Copy to Bytes for parsing
+        serialized_chunk.clone()
+    };
 
-    let serialized_chunk = writer.serialize_chunk().unwrap();
-
-    // Parse the header and get the chunk data
-    let mut chunk_data = serialized_chunk.clone();
-    let header = parse_chunk_header(&mut chunk_data).unwrap();
+    // Parse the header
+    let mut chunk_data_copy = chunk_data.clone();
+    let header = parse_chunk_header(&mut chunk_data_copy).unwrap();
 
     // For this test, we'll modify an existing chunk:
     // 1. Create a valid chunk but modify its data size to be much larger

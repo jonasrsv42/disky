@@ -22,7 +22,6 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 use tempfile::NamedTempFile;
-use bytes::Bytes;
 
 use disky::blocks::reader::{BlockReader, BlocksPiece};
 use disky::chunks::chunks_parser::{ChunksParser, ChunkPiece};
@@ -293,7 +292,7 @@ fn bench_block_write_chunks(c: &mut Criterion) {
     
     // Create 2MB chunk similar to audio dataset benchmark
     let chunk_size = 2_000_000;
-    let chunk_data = Bytes::from(vec![0u8; chunk_size]);
+    let chunk_data = vec![0u8; chunk_size];
     
     // Write 2000 chunks directly through BlockWriter
     group.bench_function(BenchmarkId::new("large_chunks", "2000×2MB"), |b| {
@@ -304,7 +303,7 @@ fn bench_block_write_chunks(c: &mut Criterion) {
             
             // Write 2000 chunks directly to simulate audio dataset workload
             for _ in 0..2000 {
-                writer.write_chunk(chunk_data.clone()).unwrap();
+                writer.write_chunk(&chunk_data).unwrap();
             }
             
             writer.flush().unwrap()
@@ -325,7 +324,7 @@ fn bench_block_read_chunks(c: &mut Criterion) {
     
     // Create 2MB chunk similar to audio dataset benchmark
     let chunk_size = 2_000_000;
-    let chunk_data = Bytes::from(vec![0u8; chunk_size]);
+    let chunk_data = vec![0u8; chunk_size];
     
     // Create a temporary file with 2000 chunks
     let file = NamedTempFile::new().expect("Failed to create temp file");
@@ -334,7 +333,7 @@ fn bench_block_read_chunks(c: &mut Criterion) {
         
         // Write 2000 chunks directly to simulate audio dataset workload
         for _ in 0..2000 {
-            writer.write_chunk(chunk_data.clone()).unwrap();
+            writer.write_chunk(&chunk_data).unwrap();
         }
         
         writer.flush().unwrap();

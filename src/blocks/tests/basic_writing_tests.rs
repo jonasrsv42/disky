@@ -2,7 +2,6 @@
 
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
-use bytes::Bytes;
 use std::io::Cursor;
 
 #[test]
@@ -21,14 +20,14 @@ fn test_write_chunk_smaller_than_block() {
     ).unwrap();
     
     // Create a small chunk of data that won't cross a block boundary
-    let chunk_data = Bytes::from(b"abcdefghijklm".to_vec());
+    let chunk_data = b"abcdefghijklm";
     
     // Verify test assumptions
     assert!(chunk_data.len() as u64 + BLOCK_HEADER_SIZE < block_size, 
             "Test chunk should not cross block boundary");
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(chunk_data).unwrap();
     
     // Get the buffer and check its contents
     let buffer = writer.into_inner();
@@ -45,7 +44,7 @@ fn test_write_chunk_smaller_than_block() {
     // Check chunk data is correctly written after the header
     assert_eq!(
         &vec[BLOCK_HEADER_SIZE as usize..],
-        &chunk_data[..],
+        chunk_data,
         "Chunk data should be written exactly as provided after the header"
     );
 }
@@ -67,10 +66,10 @@ fn test_write_chunk_at_block_boundary() {
     ).unwrap();
     
     // Create a chunk
-    let chunk_data = Bytes::from(vec![1; 100]);
+    let chunk_data = vec![1; 100];
     
     // Write the chunk - should add a block header
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&chunk_data).unwrap();
     
     // Get the buffer and check its contents
     let buffer = writer.into_inner();
@@ -98,10 +97,10 @@ fn test_writing_at_position_zero() {
     let mut writer = BlockWriter::new(buffer).unwrap();
     
     // Create a chunk
-    let chunk_data = Bytes::from(b"This is chunk data written at position 0".to_vec());
+    let chunk_data = b"This is chunk data written at position 0";
     
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(chunk_data).unwrap();
     
     // Get the buffer
     let buffer = writer.into_inner();
@@ -115,7 +114,7 @@ fn test_writing_at_position_zero() {
     
     // The block header should be at the beginning
     // Then the chunk data
-    assert_eq!(&vec[BLOCK_HEADER_SIZE as usize..], &chunk_data[..],
+    assert_eq!(&vec[BLOCK_HEADER_SIZE as usize..], chunk_data,
         "Chunk data should follow the header");
 }
 
@@ -126,7 +125,7 @@ fn test_write_empty_chunk() {
     let mut writer = BlockWriter::new(buffer).unwrap();
     
     // Write an empty chunk
-    let empty_chunk = Bytes::new();
+    let empty_chunk = &[];
     writer.write_chunk(empty_chunk).unwrap();
     
     // Get the buffer and verify it's still empty (no headers needed for empty chunks)
@@ -152,7 +151,7 @@ fn test_write_empty_chunk_at_block_boundary() {
     ).unwrap();
     
     // Write an empty chunk
-    let empty_chunk = Bytes::new();
+    let empty_chunk = &[];
     writer.write_chunk(empty_chunk).unwrap();
     
     // Get the buffer and check
@@ -183,7 +182,7 @@ fn test_position_tracking_after_write() {
     assert_eq!(writer.position(), 0, "Initial position should be 0");
     
     // Create a chunk
-    let chunk_data = Bytes::from(b"This is test data for position tracking".to_vec());
+    let chunk_data = b"This is test data for position tracking";
     let chunk_size = chunk_data.len() as u64;
     
     // Write the chunk
@@ -197,7 +196,7 @@ fn test_position_tracking_after_write() {
         "Position should be updated to include header and chunk data");
     
     // Write another chunk
-    let second_chunk = Bytes::from(b"More test data".to_vec());
+    let second_chunk = b"More test data";
     let second_chunk_size = second_chunk.len() as u64;
     
     // Get the current position before the second write
@@ -249,8 +248,8 @@ fn test_position_tracking_at_block_boundaries() {
     ).unwrap();
     
     // Write data that will bring us exactly to a block boundary
-    let initial_data = Bytes::from(vec![1; (block_size - BLOCK_HEADER_SIZE) as usize]);
-    writer.write_chunk(initial_data).unwrap();
+    let initial_data = vec![1; (block_size - BLOCK_HEADER_SIZE) as usize];
+    writer.write_chunk(&initial_data).unwrap();
     
     // We should now be at a block boundary
     #[cfg(test)]
@@ -258,9 +257,9 @@ fn test_position_tracking_at_block_boundaries() {
         "Position should be at block boundary");
     
     // Write more data - this should trigger a block header at the boundary
-    let more_data = Bytes::from(vec![2; 50]);
+    let more_data = vec![2; 50];
     let more_data_len = more_data.len() as u64;
-    writer.write_chunk(more_data).unwrap();
+    writer.write_chunk(&more_data).unwrap();
     
     // Expected position: block_size + BLOCK_HEADER_SIZE + more_data_len
     let expected_position = block_size + BLOCK_HEADER_SIZE + more_data_len;
@@ -302,7 +301,7 @@ fn test_position_tracking_when_appending() {
         "Initial position should match append position");
     
     // Write some data
-    let chunk_data = Bytes::from(b"Appended data".to_vec());
+    let chunk_data = b"Appended data";
     let chunk_size = chunk_data.len() as u64;
     
     // Get position before write for analysis

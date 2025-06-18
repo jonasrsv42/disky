@@ -24,7 +24,7 @@ use crate::compression::core::CompressionType;
 use crate::error::Result;
 use crate::hash::highway_hash;
 use crate::varint;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 
 /// Writer for Riegeli simple chunks with records.
 ///
@@ -55,9 +55,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 ///    (as happens when written to disk), the buffer becomes exclusively owned
 ///    by our `serialized_chunk` again and can be reused.
 ///
-/// 4. Efficient freezing: The `BytesMut::clone().freeze()` operation does not copy
-///    the underlying data; it only creates a new reference-counted view. This is
-///    memory-efficient in our usage pattern where chunks are processed sequentially.
+/// NOTE: we do clone BytesMut at the end which does incur a clone of underlying data.
+/// this can be improved.
+///
 pub struct SimpleChunkWriter {
     // Compression to use for records and sizes.
     compression_type: CompressionType,
@@ -101,13 +101,11 @@ impl ChunkWriter for SimpleChunkWriter {
     ///
     /// 5. We create the header and overwrite the placeholder space
     ///
-    /// 6. We return a frozen view of the buffer using `clone().freeze()`, which creates
-    ///    a reference-counted view of the same underlying memory without copying data
+    /// 6. We return a reference to the buffer to avoid copying data
     ///
     /// This design minimizes memory allocations and copies while maintaining the format
-    /// requirements of Riegeli files. The buffer is efficiently reused in subsequent calls
-    /// once the returned `Bytes` object is consumed (written to disk and dropped).
-    fn serialize_chunk(&mut self) -> Result<Bytes> {
+    /// requirements of Riegeli files. The buffer is efficiently reused in subsequent calls.
+    fn serialize_chunk(&mut self) -> Result<&[u8]> {
         // Clear our reusable buffer to start fresh
         self.serialized_chunk.clear();
         
@@ -152,9 +150,8 @@ impl ChunkWriter for SimpleChunkWriter {
         self.sizes.clear();
         self.num_records = 0;
         
-        // Clone and freeze the buffer - this creates a reference-counted view
-        // The clone is efficient as it only clones the BytesMut structure, not the underlying data
-        Ok(self.serialized_chunk.clone().freeze())
+        // Return a slice of the serialized data without cloning
+        Ok(&self.serialized_chunk[..])
     }
 }
 
@@ -220,7 +217,7 @@ impl SimpleChunkWriter {
 mod tests {
     use super::*;
     use crate::varint;
-    use bytes::Buf;
+    use bytes::{Buf, Bytes};
     use crate::chunks::header::CHUNK_HEADER_SIZE;
 
     #[test]
@@ -271,37 +268,40 @@ mod tests {
         writer.write_record(b"Record 2").unwrap();
         writer.write_record(b"Record 3").unwrap();
 
-        // Serialize the chunk
-        let serialized = writer.serialize_chunk().unwrap();
+        // Serialize the chunk and perform assertions on the serialized data in scope
+        let (header_copy, data_copy) = {
+            let serialized = writer.serialize_chunk().unwrap();
+            
+            // The serialized chunk should start with a 40-byte header
+            assert!(serialized.len() > CHUNK_HEADER_SIZE);
+            
+            // Extract header and data
+            let (header, data) = serialized.split_at(CHUNK_HEADER_SIZE);
+            (header.to_vec(), data.to_vec())
+        };
 
-        // Verify the writer state is reset
+        // Verify the writer state is reset (now outside the serialized borrow scope)
         assert_eq!(writer.num_records, 0);
         assert_eq!(writer.records.len(), 0);
         assert_eq!(writer.sizes.len(), 0);
-
-        // The serialized chunk should start with a 40-byte header
-        assert!(serialized.len() > CHUNK_HEADER_SIZE);
-        
-        // Extract header and data
-        let (header, data) = serialized.split_at(CHUNK_HEADER_SIZE);
         
         // Verify header
         // Chunk type should be 'r' for simple records
-        assert_eq!(header[24], ChunkType::SimpleRecords as u8);
+        assert_eq!(header_copy[24], ChunkType::SimpleRecords as u8);
         
         // Num records should be 3
         let num_records = 
-            (header[25] as u64) |
-            ((header[26] as u64) << 8) |
-            ((header[27] as u64) << 16) |
-            ((header[28] as u64) << 24) |
-            ((header[29] as u64) << 32) |
-            ((header[30] as u64) << 40) |
-            ((header[31] as u64) << 48);
+            (header_copy[25] as u64) |
+            ((header_copy[26] as u64) << 8) |
+            ((header_copy[27] as u64) << 16) |
+            ((header_copy[28] as u64) << 24) |
+            ((header_copy[29] as u64) << 32) |
+            ((header_copy[30] as u64) << 40) |
+            ((header_copy[31] as u64) << 48);
         assert_eq!(num_records, 3);
         
         // Now verify the chunk data (after the header)
-        let mut data = Bytes::copy_from_slice(data);
+        let mut data = Bytes::copy_from_slice(&data_copy);
 
         // Check compression type
         assert_eq!(data.get_u8(), CompressionType::None.as_byte());
@@ -327,44 +327,47 @@ mod tests {
         
         // Verify data hash in header matches hash of actual data
         let data_hash = u64::from_le_bytes([
-            header[16], header[17], header[18], header[19],
-            header[20], header[21], header[22], header[23]
+            header_copy[16], header_copy[17], header_copy[18], header_copy[19],
+            header_copy[20], header_copy[21], header_copy[22], header_copy[23]
         ]);
         
         // Verify the hash matches
-        assert_eq!(data_hash, highway_hash(&serialized.slice(CHUNK_HEADER_SIZE..)));
+        assert_eq!(data_hash, highway_hash(&data_copy));
     }
 
     #[test]
     fn test_serialize_empty_chunk() {
         let mut writer = SimpleChunkWriter::new(CompressionType::None);
 
-        // Serialize an empty chunk
-        let serialized = writer.serialize_chunk().unwrap();
+        // Serialize an empty chunk and extract needed data in scope
+        let (header_copy, data_copy) = {
+            let serialized = writer.serialize_chunk().unwrap();
 
-        // The serialized chunk should start with a 40-byte header
-        assert!(serialized.len() >= CHUNK_HEADER_SIZE);
-        
-        // Extract header and data
-        let (header, data) = serialized.split_at(CHUNK_HEADER_SIZE);
+            // The serialized chunk should start with a 40-byte header
+            assert!(serialized.len() >= CHUNK_HEADER_SIZE);
+            
+            // Extract header and data
+            let (header, data) = serialized.split_at(CHUNK_HEADER_SIZE);
+            (header.to_vec(), data.to_vec())
+        };
         
         // Verify header
         // Chunk type should be 'r' for simple records
-        assert_eq!(header[24], ChunkType::SimpleRecords as u8);
+        assert_eq!(header_copy[24], ChunkType::SimpleRecords as u8);
         
         // Num records should be 0
         let num_records = 
-            (header[25] as u64) |
-            ((header[26] as u64) << 8) |
-            ((header[27] as u64) << 16) |
-            ((header[28] as u64) << 24) |
-            ((header[29] as u64) << 32) |
-            ((header[30] as u64) << 40) |
-            ((header[31] as u64) << 48);
+            (header_copy[25] as u64) |
+            ((header_copy[26] as u64) << 8) |
+            ((header_copy[27] as u64) << 16) |
+            ((header_copy[28] as u64) << 24) |
+            ((header_copy[29] as u64) << 32) |
+            ((header_copy[30] as u64) << 40) |
+            ((header_copy[31] as u64) << 48);
         assert_eq!(num_records, 0);
         
         // Parse the chunk data (after the header)
-        let mut data = Bytes::copy_from_slice(data);
+        let mut data = Bytes::copy_from_slice(&data_copy);
 
         // Check compression type
         assert_eq!(data.get_u8(), CompressionType::None.as_byte());
@@ -378,12 +381,12 @@ mod tests {
         
         // Verify data hash in header matches hash of actual data
         let data_hash = u64::from_le_bytes([
-            header[16], header[17], header[18], header[19],
-            header[20], header[21], header[22], header[23]
+            header_copy[16], header_copy[17], header_copy[18], header_copy[19],
+            header_copy[20], header_copy[21], header_copy[22], header_copy[23]
         ]);
         
         // Verify the hash matches
-        assert_eq!(data_hash, highway_hash(&serialized.slice(CHUNK_HEADER_SIZE..)));
+        assert_eq!(data_hash, highway_hash(&data_copy));
     }
 
     // Additional tests moved from simple_chunk.rs...
@@ -394,12 +397,20 @@ mod tests {
         // Create and serialize first chunk with records of known length
         let record1_1 = b"First chunk special record 1";
         let record1_2 = b"First chunk record 2";
+        
+        let first_chunk_copy = {
+            writer.write_record(record1_1).unwrap();
+            writer.write_record(record1_2).unwrap();
+            let first_chunk = writer.serialize_chunk().unwrap();
 
-        writer.write_record(record1_1).unwrap();
-        writer.write_record(record1_2).unwrap();
-        let first_chunk = writer.serialize_chunk().unwrap();
-
-        // Verify writer state was reset
+            // Each chunk should start with a 40-byte header
+            assert!(first_chunk.len() > CHUNK_HEADER_SIZE);
+            
+            // Copy the chunk data we need for later assertions
+            first_chunk.to_vec()
+        };
+        
+        // Verify writer state was reset (outside scope)
         assert_eq!(writer.num_records, 0);
         assert_eq!(writer.records.len(), 0);
         assert_eq!(writer.sizes.len(), 0);
@@ -408,24 +419,27 @@ mod tests {
         let record2_1 = b"Second chunk record 1";
         let record2_2 = b"Second chunk record 2";
         let record2_3 = b"Second chunk record 3";
+        
+        let second_chunk_copy = {
+            writer.write_record(record2_1).unwrap();
+            writer.write_record(record2_2).unwrap();
+            writer.write_record(record2_3).unwrap();
+            let second_chunk = writer.serialize_chunk().unwrap();
 
-        writer.write_record(record2_1).unwrap();
-        writer.write_record(record2_2).unwrap();
-        writer.write_record(record2_3).unwrap();
-        let second_chunk = writer.serialize_chunk().unwrap();
-
-        // Verify writer state was reset again
+            assert!(second_chunk.len() > CHUNK_HEADER_SIZE);
+            
+            // Copy the chunk data we need for later assertions
+            second_chunk.to_vec()
+        };
+        
+        // Verify writer state was reset again (outside scope)
         assert_eq!(writer.num_records, 0);
         assert_eq!(writer.records.len(), 0);
         assert_eq!(writer.sizes.len(), 0);
-
-        // Each chunk should start with a 40-byte header
-        assert!(first_chunk.len() > CHUNK_HEADER_SIZE);
-        assert!(second_chunk.len() > CHUNK_HEADER_SIZE);
         
-        // Extract headers and data
-        let (header1, data1_bytes) = first_chunk.split_at(CHUNK_HEADER_SIZE);
-        let (header2, data2_bytes) = second_chunk.split_at(CHUNK_HEADER_SIZE);
+        // Extract headers and data from copied chunks
+        let (header1, data1_bytes) = first_chunk_copy.split_at(CHUNK_HEADER_SIZE);
+        let (header2, data2_bytes) = second_chunk_copy.split_at(CHUNK_HEADER_SIZE);
         
         // Verify headers
         // Chunk type should be 'r' for simple records
@@ -574,16 +588,22 @@ mod tests {
         let mut writer = SimpleChunkWriter::new(CompressionType::None);
 
         // Write and serialize first chunk
-        writer.write_record(b"First chunk record").unwrap();
-        let first_chunk = writer.serialize_chunk().unwrap();
+        let first_chunk_copy = {
+            writer.write_record(b"First chunk record").unwrap();
+            let first_chunk = writer.serialize_chunk().unwrap();
+            first_chunk.to_vec()
+        };
 
         // Write and serialize second chunk with different data
-        writer.write_record(b"Second chunk record").unwrap();
-        let second_chunk = writer.serialize_chunk().unwrap();
+        let second_chunk_copy = {
+            writer.write_record(b"Second chunk record").unwrap();
+            let second_chunk = writer.serialize_chunk().unwrap();
+            second_chunk.to_vec()
+        };
 
-        // Extract headers and data
-        let (header1, data1_bytes) = first_chunk.split_at(CHUNK_HEADER_SIZE);
-        let (header2, data2_bytes) = second_chunk.split_at(CHUNK_HEADER_SIZE);
+        // Extract headers and data from copied chunks
+        let (header1, data1_bytes) = first_chunk_copy.split_at(CHUNK_HEADER_SIZE);
+        let (header2, data2_bytes) = second_chunk_copy.split_at(CHUNK_HEADER_SIZE);
         
         // Verify headers
         assert_eq!(header1[24], ChunkType::SimpleRecords as u8);

@@ -2,7 +2,6 @@
 
 use super::super::writer::{BlockWriter, BlockWriterConfig};
 use super::super::utils::BLOCK_HEADER_SIZE;
-use bytes::Bytes;
 use std::io::{Cursor, Seek, Write};
 
 // A custom writer that simulates I/O errors
@@ -126,10 +125,9 @@ fn test_error_propagation() {
 
     // Create a chunk larger than the failure threshold
     let data = vec![1u8; 100];
-    let chunk_data = Bytes::from(data);
 
     // This should fail with an I/O error
-    let result = writer.write_chunk(chunk_data);
+    let result = writer.write_chunk(&data);
     assert!(result.is_err(), "Expected an error but got success");
 
     match result {
@@ -164,10 +162,9 @@ fn test_failure_during_header_write() {
 
     // Create a chunk large enough to trigger a block header write
     let data = vec![42u8; 100];
-    let chunk_data = Bytes::from(data);
 
     // This should fail with an I/O error during header writing
-    let result = writer.write_chunk(chunk_data);
+    let result = writer.write_chunk(&data);
     assert!(result.is_err(), "Expected an error but got success");
 
     match result {
@@ -197,8 +194,7 @@ fn test_flush_error_handling() {
 
     // Write a chunk successfully
     let data = vec![42u8; 30];
-    let chunk_data = Bytes::from(data);
-    writer.write_chunk(chunk_data).unwrap();
+    writer.write_chunk(&data).unwrap();
 
     // Now try to flush - should fail
     let result = writer.flush();
@@ -235,10 +231,10 @@ fn test_practical_recovery_approach() {
     let mut writer = BlockWriter::with_config(buffer, BlockWriterConfig { block_size }).unwrap();
 
     // Create a chunk that will cross block boundaries
-    let chunk_data = Bytes::from(vec![0xAA; 150]);
+    let chunk_data = vec![0xAA; 150];
 
     // This will fail partway through writing
-    let result = writer.write_chunk(chunk_data.clone());
+    let result = writer.write_chunk(&chunk_data);
     assert!(result.is_err(), "Expected an error");
 
     // Capture the current state
@@ -267,7 +263,7 @@ fn test_practical_recovery_approach() {
     // and we're going to retry it completely.
 
     // Write the full chunk again - the BlockWriter handles block headers automatically
-    let result = recovery_writer.write_chunk(chunk_data);
+    let result = recovery_writer.write_chunk(&chunk_data);
     assert!(result.is_ok(), "Recovery write should succeed");
 
     // This approach requires the application to track logical chunks
@@ -308,8 +304,7 @@ fn test_incremental_writing() {
     while bytes_written < CHUNK_SIZE {
         // Calculate the next increment to write
         let next_size = std::cmp::min(INCREMENT_SIZE, CHUNK_SIZE - bytes_written);
-        let increment =
-            Bytes::from(complete_data[bytes_written..bytes_written + next_size].to_vec());
+        let increment = &complete_data[bytes_written..bytes_written + next_size];
 
         // Try to write this increment
         let result = writer.write_chunk(increment);
@@ -356,8 +351,7 @@ fn test_incremental_writing() {
     // Continue writing the remaining data
     while bytes_written < CHUNK_SIZE {
         let next_size = std::cmp::min(INCREMENT_SIZE, CHUNK_SIZE - bytes_written);
-        let increment =
-            Bytes::from(complete_data[bytes_written..bytes_written + next_size].to_vec());
+        let increment = &complete_data[bytes_written..bytes_written + next_size];
 
         recovery_writer.write_chunk(increment).unwrap();
         bytes_written += next_size;
@@ -390,10 +384,8 @@ fn test_writing_with_minimum_block_size() {
     let usable_block_size = (min_block_size - BLOCK_HEADER_SIZE) as usize;
     let data = vec![42u8; usable_block_size]; // Fill with a constant value
 
-    let chunk_data = Bytes::from(data.clone());
-
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&data).unwrap();
 
     // Get the buffer
     let buffer = writer.into_inner();
@@ -424,10 +416,9 @@ fn test_writing_with_minimum_block_size() {
 
     // Create data slightly larger than one block's worth
     let crossing_data = vec![42u8; usable_block_size + 10]; // 10 bytes more than one block
-    let chunk_data = Bytes::from(crossing_data.clone());
 
     // Write the chunk
-    writer.write_chunk(chunk_data.clone()).unwrap();
+    writer.write_chunk(&crossing_data).unwrap();
 
     // Get the buffer
     let buffer = writer.into_inner();

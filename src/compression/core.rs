@@ -23,7 +23,7 @@ impl CompressionType {
 ///
 /// Compressors maintain internal buffers and return references to compressed data.
 /// This allows for efficient buffer reuse and zero-copy operation for NoCompression.
-pub trait Compressor: Send {
+pub trait Compressor: Send + Sync {
     /// Compress the input data and return a reference to compressed bytes.
     /// The returned slice is valid as long as both the compressor and input data live.
     /// For NoCompression, this returns the input data directly (zero-copy).

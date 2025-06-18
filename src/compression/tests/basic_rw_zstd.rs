@@ -17,7 +17,7 @@ fn test_zstd_roundtrip_small_data() {
     let original_data = b"Hello, world! This is a test string for zstd compression.";
     
     // Create compressor and decompressor
-    let mut compressor = ZstdCompressor::new().expect("Failed to create ZstdCompressor");
+    let mut compressor = ZstdCompressor::with_level(6).expect("Failed to create ZstdCompressor");
     let mut decompressor = ZstdDecompressor::new();
     
     // Compress the data
@@ -42,7 +42,7 @@ fn test_zstd_roundtrip_small_data() {
 fn test_zstd_roundtrip_empty_data() {
     let original_data = b"";
     
-    let mut compressor = ZstdCompressor::new().expect("Failed to create ZstdCompressor");
+    let mut compressor = ZstdCompressor::with_level(6).expect("Failed to create ZstdCompressor");
     let mut decompressor = ZstdDecompressor::new();
     
     let compressed = compressor.compress(original_data).expect("Compression failed");
@@ -58,7 +58,7 @@ fn test_zstd_roundtrip_large_data() {
     let original_data = "ABCD".repeat(1000); // 4KB of repeated data
     let original_bytes = original_data.as_bytes();
     
-    let mut compressor = ZstdCompressor::new().expect("Failed to create ZstdCompressor");
+    let mut compressor = ZstdCompressor::with_level(6).expect("Failed to create ZstdCompressor");
     let mut decompressor = ZstdDecompressor::new();
     
     let compressed = compressor.compress(original_bytes).expect("Compression failed");
@@ -79,7 +79,7 @@ fn test_zstd_roundtrip_binary_data() {
     // Test with binary data including null bytes
     let original_data: Vec<u8> = (0..=255).cycle().take(512).collect();
     
-    let mut compressor = ZstdCompressor::new().expect("Failed to create ZstdCompressor");
+    let mut compressor = ZstdCompressor::with_level(6).expect("Failed to create ZstdCompressor");
     let mut decompressor = ZstdDecompressor::new();
     
     let compressed = compressor.compress(&original_data).expect("Compression failed");
@@ -96,7 +96,7 @@ fn test_zstd_multiple_compressions() {
     let data2 = b"Second piece of data to compress";
     let data3 = b"Third piece of data to compress";
     
-    let mut compressor = ZstdCompressor::new().expect("Failed to create ZstdCompressor");
+    let mut compressor = ZstdCompressor::with_level(6).expect("Failed to create ZstdCompressor");
     let mut decompressor = ZstdDecompressor::new();
     
     // Compress and test each piece independently (due to lifetime constraints)
@@ -172,7 +172,7 @@ fn test_zstd_e2e_writer_reader_roundtrip() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd);
+        let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd(6));
         let mut writer = RecordWriter::with_config(cursor, config)
             .expect("Failed to create RecordWriter with Zstd compression");
 
@@ -234,7 +234,7 @@ fn test_zstd_e2e_mixed_record_sizes() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd);
+        let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd(6));
         let mut writer = RecordWriter::with_config(cursor, config)
             .expect("Failed to create RecordWriter with Zstd compression");
 

@@ -4,3 +4,4 @@ example.riegeli
 basic_example.riegeli
 
 **/.claude/settings.local.json
+tests/integration/logmel.disky

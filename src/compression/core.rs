@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 pub enum CompressionType {
     None,
     #[cfg(feature = "zstd")]
-    Zstd,
+    Zstd(i32), // compression level 1-22
 }
 
 impl CompressionType {
@@ -14,7 +14,7 @@ impl CompressionType {
         match self {
             CompressionType::None => 0,
             #[cfg(feature = "zstd")]
-            CompressionType::Zstd => b'z',
+            CompressionType::Zstd(_) => b'z',
         }
     }
 }
@@ -37,11 +37,11 @@ pub trait Compressor: Send + Sync {
 /// while still supporting owned data for real compression algorithms.
 pub trait Decompressor: Send + Sync {
     /// Decompress the input data and return decompressed bytes.
-    /// 
+    ///
     /// # Arguments
     /// * `compressed_data` - The compressed data to decompress
     /// * `expected_output_size` - Known size of decompressed output for efficiency and validation
-    /// 
+    ///
     /// For NoCompression, this is zero-copy (returns the input unchanged).
     /// For real compression, this uses the size hint for efficient buffer allocation.
     fn decompress(&mut self, compressed_data: Bytes, expected_output_size: usize) -> Result<Bytes>;
@@ -62,7 +62,11 @@ impl Compressor for NoCompression {
 }
 
 impl Decompressor for NoCompression {
-    fn decompress(&mut self, compressed_data: Bytes, _expected_output_size: usize) -> Result<Bytes> {
+    fn decompress(
+        &mut self,
+        compressed_data: Bytes,
+        _expected_output_size: usize,
+    ) -> Result<Bytes> {
         Ok(compressed_data) // Zero copy - just return input Bytes unchanged
     }
 }
@@ -72,7 +76,9 @@ pub fn create_compressor(compression_type: CompressionType) -> Result<Box<dyn Co
     match compression_type {
         CompressionType::None => Ok(Box::new(NoCompression)),
         #[cfg(feature = "zstd")]
-        CompressionType::Zstd => Ok(Box::new(crate::compression::zstd::ZstdCompressor::new()?)),
+        CompressionType::Zstd(level) => Ok(Box::new(
+            crate::compression::zstd::ZstdCompressor::with_level(level)?,
+        )),
     }
 }
 
@@ -93,7 +99,8 @@ pub fn create_decompressors_map() -> BTreeMap<u8, Box<dyn Decompressor>> {
 
     #[cfg(feature = "zstd")]
     map.insert(
-        CompressionType::Zstd.as_byte(),
+        CompressionType::Zstd(6).as_byte(), // Level does not matter as we just use it to convert
+        // to byte.
         Box::new(crate::compression::zstd::ZstdDecompressor::new()) as Box<dyn Decompressor>,
     );
 
@@ -137,7 +144,7 @@ mod tests {
     #[test]
     #[cfg(feature = "zstd")]
     fn test_create_compressor_zstd() {
-        let compressor = create_compressor(CompressionType::Zstd);
+        let compressor = create_compressor(CompressionType::Zstd(6));
         assert!(compressor.is_ok());
     }
 }

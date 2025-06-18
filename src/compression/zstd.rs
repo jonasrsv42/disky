@@ -20,11 +20,6 @@ pub struct ZstdCompressor {
 }
 
 impl ZstdCompressor {
-    /// Create a new ZstdCompressor with default compression level (6)
-    pub fn new() -> Result<Self> {
-        Self::with_level(6)
-    }
-
     /// Create a new ZstdCompressor with specified compression level
     ///
     /// # Arguments
@@ -123,7 +118,7 @@ mod tests {
 
     #[test]
     fn test_zstd_compressor_creation() {
-        let compressor = ZstdCompressor::new();
+        let compressor = ZstdCompressor::with_level(6);
         assert!(compressor.is_ok());
         
         let compressor = compressor.unwrap();

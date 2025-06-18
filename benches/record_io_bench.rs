@@ -1,17 +1,3 @@
-// Copyright 2024
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! Benchmark for Disky record writing and reading using Criterion.
 //!
 //! This benchmark measures the performance of:
@@ -19,14 +5,18 @@
 //! - Reading records of different sizes
 //! - Stream processing records
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
 use disky::blocks::reader::{BlockReader, BlocksPiece};
-use disky::chunks::chunks_parser::{ChunksParser, ChunkPiece};
+use disky::chunks::chunks_parser::{ChunkPiece, ChunksParser};
+use disky::compression::create_decompressors_map;
 use disky::reader::{DiskyPiece, RecordReader};
-use disky::writer::RecordWriter;
+use disky::writer::{RecordWriter, RecordWriterConfig};
+
+#[cfg(feature = "zstd")]
+use disky::compression::CompressionType;
 
 /// Generate test records of a specific size
 fn generate_test_records(num_records: usize, record_size: usize) -> Vec<Vec<u8>> {
@@ -67,10 +57,10 @@ fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
 fn read_all_records(file: &NamedTempFile) -> (usize, usize) {
     let reader_file = file.reopen().unwrap();
     let mut reader = RecordReader::new(reader_file).unwrap();
-    
+
     let mut record_count = 0;
     let mut total_size = 0;
-    
+
     loop {
         match reader.next_record().unwrap() {
             DiskyPiece::Record(bytes) => {
@@ -80,7 +70,7 @@ fn read_all_records(file: &NamedTempFile) -> (usize, usize) {
             DiskyPiece::EOF => break,
         }
     }
-    
+
     (record_count, total_size)
 }
 
@@ -88,16 +78,16 @@ fn read_all_records(file: &NamedTempFile) -> (usize, usize) {
 fn read_all_records_iterator(file: &NamedTempFile) -> (usize, usize) {
     let reader_file = file.reopen().unwrap();
     let reader = RecordReader::new(reader_file).unwrap();
-    
+
     let mut record_count = 0;
     let mut total_size = 0;
-    
+
     for result in reader {
         let bytes = result.unwrap();
         record_count += 1;
         total_size += bytes.len();
     }
-    
+
     (record_count, total_size)
 }
 
@@ -285,31 +275,31 @@ fn bench_stream_processing(c: &mut Criterion) {
 /// rather than the higher-level record writing logic.
 fn bench_block_write_chunks(c: &mut Criterion) {
     use disky::blocks::writer::BlockWriter;
-    
+
     let mut group = c.benchmark_group("block_write_chunks");
     group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
     group.sample_size(10);
-    
+
     // Create 2MB chunk similar to audio dataset benchmark
     let chunk_size = 2_000_000;
     let chunk_data = vec![0u8; chunk_size];
-    
+
     // Write 2000 chunks directly through BlockWriter
     group.bench_function(BenchmarkId::new("large_chunks", "2000×2MB"), |b| {
         b.iter(|| {
             // Use a temporary file to match other benchmarks
             let file = NamedTempFile::new().expect("Failed to create temp file");
             let mut writer = BlockWriter::new(file.reopen().unwrap()).unwrap();
-            
+
             // Write 2000 chunks directly to simulate audio dataset workload
             for _ in 0..2000 {
                 writer.write_chunk(&chunk_data).unwrap();
             }
-            
+
             writer.flush().unwrap()
         })
     });
-    
+
     group.finish();
 }
 
@@ -317,38 +307,38 @@ fn bench_block_write_chunks(c: &mut Criterion) {
 /// This helps identify if the bottleneck is in the low-level block reading process.
 fn bench_block_read_chunks(c: &mut Criterion) {
     use disky::blocks::writer::BlockWriter;
-    
+
     let mut group = c.benchmark_group("block_read_chunks");
     group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
     group.sample_size(10);
-    
+
     // Create 2MB chunk similar to audio dataset benchmark
     let chunk_size = 2_000_000;
     let chunk_data = vec![0u8; chunk_size];
-    
+
     // Create a temporary file with 2000 chunks
     let file = NamedTempFile::new().expect("Failed to create temp file");
     {
         let mut writer = BlockWriter::new(file.reopen().unwrap()).unwrap();
-        
+
         // Write 2000 chunks directly to simulate audio dataset workload
         for _ in 0..2000 {
             writer.write_chunk(&chunk_data).unwrap();
         }
-        
+
         writer.flush().unwrap();
     }
-    
+
     // Read chunks directly through BlockReader
     group.bench_function(BenchmarkId::new("large_chunks", "2000×2MB"), |b| {
         b.iter(|| {
             // Open a fresh reader for each iteration
             let mut reader = BlockReader::new(file.reopen().unwrap()).unwrap();
-            
+
             // Read all chunks
             let mut chunk_count = 0;
             let mut total_size = 0;
-            
+
             loop {
                 match reader.read_chunks().unwrap() {
                     BlocksPiece::Chunks(data) => {
@@ -358,11 +348,11 @@ fn bench_block_read_chunks(c: &mut Criterion) {
                     BlocksPiece::EOF => break,
                 }
             }
-            
+
             (chunk_count, total_size)
         })
     });
-    
+
     group.finish();
 }
 
@@ -372,54 +362,55 @@ fn bench_chunks_parser(c: &mut Criterion) {
     let mut group = c.benchmark_group("chunks_parser");
     group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
     group.sample_size(10);
-    
+
     // Create a temporary file with the audio dataset
     let audio_records = generate_test_records(2000, 2000_000);
     let audio_file = write_records_to_file(&audio_records);
-    
+
     // First, read all chunks with BlockReader to collect them
     let mut chunks_data = Vec::new();
     {
         let mut reader = BlockReader::new(audio_file.reopen().unwrap()).unwrap();
-        
+
         loop {
             match reader.read_chunks().unwrap() {
                 BlocksPiece::Chunks(data) => {
                     chunks_data.push(data);
-                },
+                }
                 BlocksPiece::EOF => break,
             }
         }
     }
-    
+
     // Now benchmark just the ChunksParser on the collected chunks
     group.bench_function(BenchmarkId::new("parse_chunks", "2000×2MB"), |b| {
         b.iter(|| {
             let mut record_count = 0;
             let mut total_size = 0;
-            
+            let mut decompressors = create_decompressors_map();
+
             // Process each chunk with ChunksParser
             for chunk_data in &chunks_data {
                 let mut parser = ChunksParser::new(chunk_data.clone());
-                
+
                 // Parse all pieces in this chunk
                 loop {
-                    match parser.next() {
+                    match parser.next(&mut decompressors) {
                         Ok(ChunkPiece::Record(data)) => {
                             record_count += 1;
                             total_size += data.len();
-                        },
+                        }
                         Ok(ChunkPiece::ChunksEnd) => break,
-                        Ok(_) => {}, // Ignore other piece types
+                        Ok(_) => {}      // Ignore other piece types
                         Err(_) => break, // Stop on error
                     }
                 }
             }
-            
+
             (record_count, total_size)
         })
     });
-    
+
     group.finish();
 }
 
@@ -429,49 +420,109 @@ fn bench_block_reader_and_chunks_parser(c: &mut Criterion) {
     let mut group = c.benchmark_group("block_reader_and_chunks_parser");
     group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
     group.sample_size(10);
-    
+
     // Create a temporary file with the audio dataset
     let audio_records = generate_test_records(2000, 2000_000);
     let audio_file = write_records_to_file(&audio_records);
-    
+
     // Benchmark the combination of BlockReader and ChunksParser directly
     group.bench_function(BenchmarkId::new("combined", "2000×2MB"), |b| {
         b.iter(|| {
             // Fresh reader for each iteration
             let mut reader = BlockReader::new(audio_file.reopen().unwrap()).unwrap();
-            
+
             let mut record_count = 0;
             let mut total_size = 0;
-            
+            let mut decompressors = create_decompressors_map();
+
             // Process all chunks from the file
             loop {
                 match reader.read_chunks().unwrap() {
                     BlocksPiece::Chunks(chunk_data) => {
                         // Parse this chunk with ChunksParser
                         let mut parser = ChunksParser::new(chunk_data);
-                        
+
                         // Process all pieces in this chunk
                         loop {
-                            match parser.next() {
+                            match parser.next(&mut decompressors) {
                                 Ok(ChunkPiece::Record(data)) => {
                                     record_count += 1;
                                     total_size += data.len();
-                                },
+                                }
                                 Ok(ChunkPiece::ChunksEnd) => break,
-                                Ok(_) => {}, // Ignore other piece types
+                                Ok(_) => {}      // Ignore other piece types
                                 Err(_) => break, // Stop on error
                             }
                         }
-                    },
+                    }
                     BlocksPiece::EOF => break,
                 }
             }
-            
+
             (record_count, total_size)
         })
     });
-    
+
     group.finish();
+}
+
+/// Write records to a file with zstd compression and return the temp file
+#[cfg(feature = "zstd")]
+fn write_records_to_file_zstd(records: &[Vec<u8>]) -> NamedTempFile {
+    // Create a temporary file
+    let file = NamedTempFile::new().expect("Failed to create temp file");
+
+    // Create a writer with zstd compression
+    let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd);
+    let mut writer = RecordWriter::with_config(file.reopen().unwrap(), config).unwrap();
+
+    // Write all records
+    for record in records {
+        writer.write_record(record).unwrap();
+    }
+
+    // Close the writer to flush all data
+    writer.close().unwrap();
+
+    file
+}
+
+/// Benchmark writing audio dataset with zstd compression
+fn bench_write_audio_dataset_zstd(c: &mut Criterion) {
+    #[cfg(feature = "zstd")]
+    {
+        let mut group = c.benchmark_group("write_audio_dataset_zstd");
+        group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+        group.sample_size(10);
+
+        // Audio dataset: 2000 records of 2 MB each with zstd compression
+        let audio_records = generate_test_records(2000, 2000_000);
+        group.bench_function(BenchmarkId::new("zstd_compression", "2000×2MB"), |b| {
+            b.iter(|| write_records_to_file_zstd(&audio_records))
+        });
+
+        group.finish();
+    }
+}
+
+/// Benchmark reading audio dataset with zstd compression
+fn bench_read_audio_dataset_zstd(c: &mut Criterion) {
+    #[cfg(feature = "zstd")]
+    {
+        let mut group = c.benchmark_group("read_audio_dataset_zstd");
+        group.measurement_time(Duration::from_secs(30)); // Increase target time to 30 seconds
+        group.sample_size(10);
+
+        // Create a file with zstd compressed audio dataset
+        let audio_records = generate_test_records(2000, 2000_000);
+        let audio_file_zstd = write_records_to_file_zstd(&audio_records);
+
+        group.bench_function(BenchmarkId::new("zstd_decompression", "2000×2MB"), |b| {
+            b.iter(|| read_all_records(&audio_file_zstd))
+        });
+
+        group.finish();
+    }
 }
 
 criterion_group!(
@@ -485,7 +536,8 @@ criterion_group!(
     bench_block_write_chunks,
     bench_block_read_chunks,
     bench_chunks_parser,
-    bench_block_reader_and_chunks_parser
+    bench_block_reader_and_chunks_parser,
+    bench_write_audio_dataset_zstd,
+    bench_read_audio_dataset_zstd,
 );
 criterion_main!(benches);
-

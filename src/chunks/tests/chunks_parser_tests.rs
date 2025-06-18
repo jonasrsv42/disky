@@ -2,11 +2,12 @@
 
 use crate::chunks::chunks_parser::{ChunkPiece, ChunksParser};
 use crate::chunks::header::ChunkType;
-use crate::chunks::header::{ChunkHeader, CHUNK_HEADER_SIZE};
+use crate::chunks::header::{CHUNK_HEADER_SIZE, ChunkHeader};
 use crate::chunks::header_writer::write_chunk_header;
 use crate::chunks::simple_chunk_writer::SimpleChunkWriter;
 use crate::chunks::writer::ChunkWriter;
 use crate::compression::core::CompressionType;
+use crate::compression::create_decompressors_map;
 use crate::error::DiskyError;
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -15,7 +16,7 @@ fn create_simple_chunk<'a, T>(records: &[T]) -> Bytes
 where
     T: AsRef<[u8]> + 'a,
 {
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
 
     for record in records {
         writer.write_record(record.as_ref()).unwrap();
@@ -75,10 +76,11 @@ fn test_empty_buffer() {
     let empty_buffer = Bytes::new();
 
     // Create a parser with the empty buffer
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(empty_buffer);
 
     // Parsing should return ChunksEnd immediately
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd for empty buffer"),
     }
@@ -90,10 +92,11 @@ fn test_signature_chunk() {
     let signature_chunk = create_signature_chunk();
 
     // Create a parser with the signature chunk
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(signature_chunk);
 
     // Should return Signature chunk piece with header
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Signature(header) => {
             assert_eq!(header.chunk_type, ChunkType::Signature);
             assert_eq!(header.data_size, 0);
@@ -104,7 +107,7 @@ fn test_signature_chunk() {
     }
 
     // Next call should return ChunksEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd after signature"),
     }
@@ -117,17 +120,18 @@ fn test_simple_chunk_with_records() {
     let simple_chunk = create_simple_chunk(&records);
 
     // Create a parser with the simple chunk
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(simple_chunk);
 
     // Should return SimpleChunkStart
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart"),
     }
 
     // Read records
     for expected_record in &records {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -136,13 +140,13 @@ fn test_simple_chunk_with_records() {
     }
 
     // Should return SimpleChunkEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd"),
     }
 
     // Next call should return ChunksEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -162,10 +166,11 @@ fn test_multiple_chunks() {
     let combined_chunks = combined.freeze();
 
     // Create a parser with combined chunks
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(combined_chunks);
 
     // First chunk: signature
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Signature(header) => {
             assert_eq!(header.chunk_type, ChunkType::Signature);
         }
@@ -173,14 +178,14 @@ fn test_multiple_chunks() {
     }
 
     // Second chunk: simple records
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart"),
     }
 
     // Read records from simple chunk
     for expected_record in &records {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -189,13 +194,13 @@ fn test_multiple_chunks() {
     }
 
     // End of simple chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd"),
     }
 
     // End of all chunks
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -207,10 +212,11 @@ fn test_padding_chunk_error() {
     let padding_chunk = create_invalid_chunk_header();
 
     // Create a parser with the padding chunk
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(padding_chunk);
 
     // Should return an error for unimplemented chunk type
-    let result = parser.next();
+    let result = parser.next(&mut decompressors);
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
@@ -236,24 +242,27 @@ fn test_skip_chunk_after_error() {
     let combined_chunks = combined.freeze();
 
     // Create a parser with combined chunks
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(combined_chunks);
 
     // First chunk: padding (should error)
-    let result = parser.next();
+    let result = parser.next(&mut decompressors);
     assert!(result.is_err());
 
     // Refresh the parser state - ignore error since the test expects it to succeed
-    let _ = parser.skip_chunk().expect("skip_chunk should succeed for UnsupportedChunkType");
+    let _ = parser
+        .skip_chunk()
+        .expect("skip_chunk should succeed for UnsupportedChunkType");
 
     // Try to parse the next chunk (should succeed with SimpleChunkStart)
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart after refresh"),
     }
 
     // Read records from simple chunk
     for expected_record in &records {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -262,13 +271,13 @@ fn test_skip_chunk_after_error() {
     }
 
     // End of simple chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd"),
     }
 
     // End of all chunks
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -284,52 +293,83 @@ fn test_corrupted_chunk_data() {
     let truncated_chunk = simple_chunk.slice(0..CHUNK_HEADER_SIZE + 5); // Not enough data for the full chunk
 
     // Create a parser with the truncated chunk
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(truncated_chunk);
 
     // Should return an error due to corruption
-    let result = parser.next();
+    let result = parser.next(&mut decompressors);
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
             DiskyError::MissingChunkData(msg) => {
                 // Verify error message contains useful information
-                assert!(msg.contains("expected"), 
-                    "Error message should explain what was expected: {}", msg);
-                assert!(msg.contains("got"), 
-                    "Error message should mention what was actually found: {}", msg);
-                assert!(msg.contains("bytes"), 
-                    "Error message should mention byte counts: {}", msg);
+                assert!(
+                    msg.contains("expected"),
+                    "Error message should explain what was expected: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("got"),
+                    "Error message should mention what was actually found: {}",
+                    msg
+                );
+                assert!(
+                    msg.contains("bytes"),
+                    "Error message should mention byte counts: {}",
+                    msg
+                );
             }
             _ => panic!("Expected MissingChunkData error, got: {:?}", err),
         }
     }
-    
+
     // After a header error, skip_chunk should fail
     let skip_result = parser.skip_chunk();
-    assert!(skip_result.is_err(), "Expected skip_chunk to fail after header parsing error");
-    
+    assert!(
+        skip_result.is_err(),
+        "Expected skip_chunk to fail after header parsing error"
+    );
+
     // Verify skip_chunk error message explains why skipping isn't possible
     if let Err(err) = skip_result {
         let err_str = format!("{}", err);
-        assert!(err_str.contains("Cannot skip chunk"), 
-            "Error message should indicate skipping is not possible: {}", err_str);
-        assert!(err_str.contains("cannot determine next chunk position"), 
-            "Error message should explain why skipping isn't possible: {}", err_str);
-        assert!(err_str.contains("corruption"), 
-            "Error message should mention corruption: {}", err_str);
+        assert!(
+            err_str.contains("Cannot skip chunk"),
+            "Error message should indicate skipping is not possible: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("cannot determine next chunk position"),
+            "Error message should explain why skipping isn't possible: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("corruption"),
+            "Error message should mention corruption: {}",
+            err_str
+        );
     }
-    
+
     // Trying to call next() again should also return a similar error
-    let next_result = parser.next();
-    assert!(next_result.is_err(), "Expected next() to fail in CorruptChunk state");
-    
+    let next_result = parser.next(&mut decompressors);
+    assert!(
+        next_result.is_err(),
+        "Expected next() to fail in CorruptChunk state"
+    );
+
     // Verify the next() error message is consistent
     if let Err(err) = next_result {
         let err_str = format!("{}", err);
-        assert!(err_str.contains("Cannot advance"), 
-            "Error message should indicate we cannot advance: {}", err_str);
-        assert!(err_str.contains("corrupted"), 
-            "Error message should mention corruption: {}", err_str);
+        assert!(
+            err_str.contains("Cannot advance"),
+            "Error message should indicate we cannot advance: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("corrupted"),
+            "Error message should mention corruption: {}",
+            err_str
+        );
     }
 }
 
@@ -337,65 +377,96 @@ fn test_corrupted_chunk_data() {
 fn test_corrupted_header_prevents_infinite_loop() {
     // Create corrupted data where the header itself is invalid
     let mut corrupted_bytes = BytesMut::with_capacity(20);
-    
+
     // Add 20 bytes of junk data that won't parse as a valid header
     for i in 0..20 {
         corrupted_bytes.put_u8(i as u8);
     }
     let corrupted_data = corrupted_bytes.freeze();
-    
+
     // Create a parser with the corrupted data
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(corrupted_data);
-    
+
     // First next() call should fail with header parsing error
-    let result = parser.next();
+    let result = parser.next(&mut decompressors);
     assert!(result.is_err(), "Expected error parsing corrupted header");
-    
+
     // Verify error message contains information about corruption
     if let Err(err) = result {
         let err_str = format!("{}", err);
-        assert!(err_str.contains("Unexpected") || err_str.contains("Unable"), 
-            "Error message should indicate invalid data: {}", err_str);
+        assert!(
+            err_str.contains("Unexpected") || err_str.contains("Unable"),
+            "Error message should indicate invalid data: {}",
+            err_str
+        );
     }
-    
+
     // Second next() call should return the same error but in the CorruptChunk state
-    let second_result = parser.next();
-    assert!(second_result.is_err(), "Expected error on second next() call");
-    
+    let second_result = parser.next(&mut decompressors);
+    assert!(
+        second_result.is_err(),
+        "Expected error on second next() call"
+    );
+
     // Verify second error message indicates we can't advance
     if let Err(err) = second_result {
         let err_str = format!("{}", err);
-        assert!(err_str.contains("Cannot advance"), 
-            "Error message should indicate we cannot advance: {}", err_str);
-        assert!(err_str.contains("corrupted"), 
-            "Error message should mention corruption: {}", err_str);
-        assert!(err_str.contains("position of next chunk cannot be determined"), 
-            "Error message should explain why we can't advance: {}", err_str);
+        assert!(
+            err_str.contains("Cannot advance"),
+            "Error message should indicate we cannot advance: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("corrupted"),
+            "Error message should mention corruption: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("position of next chunk cannot be determined"),
+            "Error message should explain why we can't advance: {}",
+            err_str
+        );
     }
-    
+
     // skip_chunk() should also fail with a clear error
     let skip_result = parser.skip_chunk();
-    assert!(skip_result.is_err(), "Expected skip_chunk to fail after header parsing error");
-    
+    assert!(
+        skip_result.is_err(),
+        "Expected skip_chunk to fail after header parsing error"
+    );
+
     // Verify skip_chunk error message explains why skipping isn't possible
     if let Err(err) = skip_result {
         let err_str = format!("{}", err);
-        assert!(err_str.contains("Cannot skip chunk"), 
-            "Error message should indicate skipping is not possible: {}", err_str);
-        assert!(err_str.contains("cannot determine next chunk position"), 
-            "Error message should explain why skipping isn't possible: {}", err_str);
+        assert!(
+            err_str.contains("Cannot skip chunk"),
+            "Error message should indicate skipping is not possible: {}",
+            err_str
+        );
+        assert!(
+            err_str.contains("cannot determine next chunk position"),
+            "Error message should explain why skipping isn't possible: {}",
+            err_str
+        );
     }
-    
+
     // We should never be able to proceed with parsing
     // This ensures we can't get into an infinite loop
-    let third_result = parser.next();
-    assert!(third_result.is_err(), "Expected error on third next() call even after skip_chunk");
-    
+    let third_result = parser.next(&mut decompressors);
+    assert!(
+        third_result.is_err(),
+        "Expected error on third next() call even after skip_chunk"
+    );
+
     // Verify third error is still consistent
     if let Err(err) = third_result {
         let err_str = format!("{}", err);
-        assert!(err_str.contains("Cannot advance"), 
-            "Error message should indicate we cannot advance: {}", err_str);
+        assert!(
+            err_str.contains("Cannot advance"),
+            "Error message should indicate we cannot advance: {}",
+            err_str
+        );
     }
 }
 
@@ -406,22 +477,23 @@ fn test_simple_chunk_no_records() {
     let simple_chunk = create_simple_chunk(&empty_records);
 
     // Create a parser with the simple chunk
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(simple_chunk);
 
     // Should return SimpleChunkStart
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart"),
     }
 
     // Should return SimpleChunkEnd (no records to read)
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd"),
     }
 
     // Next call should return ChunksEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -431,16 +503,17 @@ fn test_simple_chunk_no_records() {
 fn test_finishing_state() {
     // Create an empty buffer to immediately reach ChunksEnd
     let empty_buffer = Bytes::new();
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(empty_buffer);
 
     // First call returns ChunksEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd for empty buffer"),
     }
 
     // Second call should return an error
-    let result = parser.next();
+    let result = parser.next(&mut decompressors);
     assert!(result.is_err());
     if let Err(err) = result {
         match err {
@@ -460,16 +533,17 @@ fn test_large_records() {
     let simple_chunk = create_simple_chunk(&records);
 
     // Create a parser with the simple chunk
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(simple_chunk);
 
     // Should return SimpleChunkStart
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart"),
     }
 
     // Read the large record
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Record(record) => {
             assert_eq!(record.len(), 100_000);
             assert_eq!(record[0], 0xAA);
@@ -479,13 +553,13 @@ fn test_large_records() {
     }
 
     // Should return SimpleChunkEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd"),
     }
 
     // Next call should return ChunksEnd
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -507,17 +581,18 @@ fn test_multiple_simple_chunks() {
     let combined_chunks = combined.freeze();
 
     // Create a parser with combined chunks
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(combined_chunks);
 
     // First chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart for first chunk"),
     }
 
     // Read records from first chunk
     for expected_record in &records1 {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -526,20 +601,20 @@ fn test_multiple_simple_chunks() {
     }
 
     // End of first chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd for first chunk"),
     }
 
     // Second chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart for second chunk"),
     }
 
     // Read records from second chunk
     for expected_record in &records2 {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -548,13 +623,13 @@ fn test_multiple_simple_chunks() {
     }
 
     // End of second chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd for second chunk"),
     }
 
     // End of all chunks
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -577,10 +652,11 @@ fn test_mixed_chunk_types() {
     let combined_chunks = combined.freeze();
 
     // Create a parser with combined chunks
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(combined_chunks);
 
     // First signature
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Signature(header) => {
             assert_eq!(header.chunk_type, ChunkType::Signature);
         }
@@ -588,14 +664,14 @@ fn test_mixed_chunk_types() {
     }
 
     // Simple chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart"),
     }
 
     // Read records
     for expected_record in &records {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -604,13 +680,13 @@ fn test_mixed_chunk_types() {
     }
 
     // End of simple chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd"),
     }
 
     // Second signature
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Signature(header) => {
             assert_eq!(header.chunk_type, ChunkType::Signature);
         }
@@ -618,7 +694,7 @@ fn test_mixed_chunk_types() {
     }
 
     // End of all chunks
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }
@@ -701,10 +777,11 @@ fn test_recovery_during_simple_chunk_parsing() {
     let combined_chunks = combined.freeze();
 
     // Create a parser with all chunks
+    let mut decompressors = create_decompressors_map();
     let mut parser = ChunksParser::new(combined_chunks);
 
     // First signature
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Signature(header) => {
             assert_eq!(header.chunk_type, ChunkType::Signature);
         }
@@ -712,14 +789,14 @@ fn test_recovery_during_simple_chunk_parsing() {
     }
 
     // Valid simple chunk start
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart for valid chunk"),
     }
 
     // Read records from valid chunk
     for expected_record in &valid_records {
-        match parser.next().unwrap() {
+        match parser.next(&mut decompressors).unwrap() {
             ChunkPiece::Record(record) => {
                 assert_eq!(record, Bytes::copy_from_slice(*expected_record));
             }
@@ -728,19 +805,19 @@ fn test_recovery_during_simple_chunk_parsing() {
     }
 
     // End of valid chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkEnd => {}
         _ => panic!("Expected SimpleChunkEnd for valid chunk"),
     }
 
     // Now start parsing corrupted chunk - should return SimpleChunkStart
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::SimpleChunkStart => {}
         _ => panic!("Expected SimpleChunkStart for corrupted chunk"),
     }
 
     // Trying to read records from corrupted chunk should fail
-    let result = parser.next();
+    let result = parser.next(&mut decompressors);
     assert!(
         result.is_err(),
         "Expected error parsing corrupted chunk data"
@@ -750,7 +827,7 @@ fn test_recovery_during_simple_chunk_parsing() {
     parser.skip_chunk().unwrap();
 
     // Should be able to continue with next (signature) chunk
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::Signature(header) => {
             assert_eq!(header.chunk_type, ChunkType::Signature);
         }
@@ -758,7 +835,7 @@ fn test_recovery_during_simple_chunk_parsing() {
     }
 
     // End of all chunks
-    match parser.next().unwrap() {
+    match parser.next(&mut decompressors).unwrap() {
         ChunkPiece::ChunksEnd => {}
         _ => panic!("Expected ChunksEnd"),
     }

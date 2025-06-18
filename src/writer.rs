@@ -137,7 +137,7 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
         let chunk_writer = SimpleChunkWriter::with_chunk_size(
             config.compression_type,
             config.chunk_size_bytes as usize,
-        );
+        )?;
 
         let mut writer = Self {
             block_writer,
@@ -172,7 +172,7 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
         let chunk_writer = SimpleChunkWriter::with_chunk_size(
             config.compression_type,
             config.chunk_size_bytes as usize,
-        );
+        )?;
 
         Ok(Self {
             block_writer,

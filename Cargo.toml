@@ -11,6 +11,8 @@ license = "Apache-2.0"
 parallel = ["dep:glob", "dep:rand"]
 # Sampling reader implementation for weighted sampling from multiple sources
 sampling = ["dep:rand"]
+# Zstd compression support
+zstd = ["dep:zstd"]
 
 [dependencies]
 thiserror = "1.0.60"
@@ -20,6 +22,7 @@ log = "0.4.20"
 env_logger = "0.10.1"
 glob = { version = "0.3.1", optional = true }
 rand = { version = "0.8.5", optional = true }
+zstd = { version = "0.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10.1"

@@ -1,23 +1,9 @@
-// Copyright 2024
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-//! High-level record reader for Riegeli files.
+//! High-level record reader for Disky files.
 //!
 //! # Overview
 //!
 //! The `reader` module provides a performant, streaming API for extracting records from
-//! Riegeli formatted files. It handles all the complexities of the format including:
+//! Disky formatted files. It handles all the complexities of the format including:
 //!
 //! - Block boundaries and headers
 //! - Chunk parsing and validation
@@ -50,6 +36,7 @@
 //! }
 //! ```
 
+use std::collections::BTreeMap;
 use std::io::{Read, Seek};
 
 use bytes::Bytes;
@@ -58,6 +45,7 @@ use log::{error, info, warn};
 use crate::blocks::reader::{BlockReader, BlockReaderConfig, BlocksPiece};
 use crate::chunks::chunks_parser::{ChunkPiece, ChunksParser};
 use crate::chunks::signature_parser::validate_signature;
+use crate::compression::{Decompressor, create_decompressors_map};
 use crate::error::{DiskyError, Result};
 
 /// Strategy for handling data corruption during file reading.
@@ -214,6 +202,9 @@ pub struct RecordReader<Source: Read + Seek> {
 
     /// Reader configuration parameters
     config: RecordReaderConfig,
+
+    /// Map of decompressors by compression type byte
+    decompressors: BTreeMap<u8, Box<dyn Decompressor>>,
 }
 
 impl<Source: Read + Seek> RecordReader<Source> {
@@ -257,6 +248,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
             block_reader: BlockReader::with_config(source, config.block_config.clone())?,
             state: ReaderState::Ready,
             config,
+            decompressors: create_decompressors_map(),
         })
     }
 
@@ -373,7 +365,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
 
                 ReaderState::ExpectingSignature(mut parser) => {
                     // We expect the first chunk to be a signature
-                    match parser.next() {
+                    match parser.next(&mut self.decompressors) {
                         Ok(ChunkPiece::Signature(header)) => {
                             // Verify the signature
                             if let Err(e) = validate_signature(&header) {
@@ -402,7 +394,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                 }
 
                 ReaderState::ParsingChunks(mut parser) => {
-                    match parser.next() {
+                    match parser.next(&mut self.decompressors) {
                         Ok(ChunkPiece::Signature(_))
                         | Ok(ChunkPiece::SimpleChunkStart)
                         | Ok(ChunkPiece::SimpleChunkEnd)
@@ -572,7 +564,3 @@ impl<Source: Read + Seek> Iterator for RecordReader<Source> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    // Tests will go here - we'll implement them separately
-}

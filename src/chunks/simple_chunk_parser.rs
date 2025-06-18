@@ -18,11 +18,12 @@
 //! according to the Riegeli file format specification.
 
 use crate::chunks::header::{ChunkHeader, ChunkType};
-use crate::compression::core::CompressionType;
+use crate::compression::Decompressor;
 use crate::error::{DiskyError, Result};
 use crate::hash::highway_hash;
 use crate::varint;
 use bytes::{Buf, Bytes};
+use std::collections::BTreeMap;
 
 /// The possible states of record iteration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,9 +59,6 @@ pub struct SimpleChunkParser {
     /// The chunk header that was provided at creation
     header: ChunkHeader,
 
-    /// The compression type used in this chunk
-    compression_type: CompressionType,
-
     /// The raw serialized record sizes (decompressed if necessary)
     /// Uses Buf trait to maintain position as we read sizes
     sizes_data: Bytes,
@@ -85,7 +83,11 @@ impl SimpleChunkParser {
     ///
     /// A Result containing the parser or an error if the data could not be parsed.
     /// When the parser is done reading records, it will have advanced the buffer past this chunk.
-    pub fn new(header: ChunkHeader, chunk_data: Bytes) -> Result<Self> {
+    pub fn new(
+        header: ChunkHeader,
+        chunk_data: Bytes,
+        decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>,
+    ) -> Result<Self> {
         // Verify this is a simple records chunk
         if header.chunk_type != ChunkType::SimpleRecords {
             return Err(DiskyError::Other(format!(
@@ -124,17 +126,8 @@ impl SimpleChunkParser {
             return Err(DiskyError::Other("Chunk data is empty".to_string()));
         };
 
-        // Read compression type
+        // Read compression type byte
         let compression_type_byte = data.get_u8();
-        let compression_type = match compression_type_byte {
-            0 => CompressionType::None,
-            b'z' => CompressionType::Zstd,
-            _ => {
-                return Err(DiskyError::UnsupportedCompressionType(
-                    compression_type_byte,
-                ));
-            }
-        };
 
         // Read size of record sizes (will be a varint)
         let sizes_len = varint::read_vu64(&mut data)? as usize;
@@ -149,7 +142,7 @@ impl SimpleChunkParser {
         }
 
         // Split the data into sizes and records portions (creating new Bytes objects)
-        let compressed_sizes_data = data.slice(0..sizes_len);
+        let sizes_data = data.slice(0..sizes_len);
 
         // Advance the data buffer past the sizes data
         data.advance(sizes_len);
@@ -157,24 +150,18 @@ impl SimpleChunkParser {
         // The remaining data is the records data
         let compressed_records_data = data;
 
-        // Decompress the data if needed
-        let (sizes_data, records_data) = match compression_type {
-            CompressionType::None => {
-                // No decompression needed
-                (compressed_sizes_data, compressed_records_data)
-            }
-            CompressionType::Zstd => {
-                // Zstd decompression not yet implemented
-                return Err(DiskyError::Other(
-                    "Zstd decompression not yet implemented".to_string(),
-                ));
-            }
-        };
+        // Get the appropriate decompressor for this compression type byte
+        let decompressor = decompressors
+            .get_mut(&compression_type_byte)
+            .ok_or_else(|| DiskyError::UnsupportedCompressionType(compression_type_byte))?;
+
+        // For records data, use the decoded_data_size from the header
+        let records_data =
+            decompressor.decompress(compressed_records_data, header.decoded_data_size as usize)?;
 
         Ok(SimpleChunkParser {
             state: ReaderState::Ready,
             header,
-            compression_type,
             sizes_data,
             records_data,
             records_read: 0,
@@ -280,11 +267,6 @@ impl SimpleChunkParser {
     /// Returns the total number of records in this chunk.
     pub fn total_records(&self) -> u64 {
         self.header.num_records
-    }
-
-    /// Returns the compression type used in this chunk.
-    pub fn compression_type(&self) -> CompressionType {
-        self.compression_type
     }
 
     /// Returns the chunk header.

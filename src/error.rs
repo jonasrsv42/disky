@@ -72,7 +72,7 @@ pub enum DiskyError {
     UnrecoverableCorruption(String),
 
     /// Unsupported compression type.
-    #[error("Unsupported compression type: {0}")]
+    #[error("Disky has not been compiled with support for compression type: {0}")]
     UnsupportedCompressionType(u8),
 
     /// Unsupported compression type.

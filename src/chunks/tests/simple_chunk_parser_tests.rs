@@ -5,6 +5,7 @@ use crate::chunks::writer::ChunkWriter;
 use crate::chunks::SimpleChunkParser;
 use crate::chunks::SimpleChunkWriter;
 use crate::compression::core::CompressionType;
+use crate::compression::create_decompressors_map;
 use crate::error::DiskyError;
 use crate::hash::highway_hash;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -16,7 +17,7 @@ use crate::chunks::simple_chunk_parser::SimpleChunkPiece;
 fn test_basic_read_write() {
     // Create a chunk with test records
     let (mut reader, mut chunk_data) = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Record 1").unwrap();
         writer.write_record(b"Record 2").unwrap();
         writer.write_record(b"Record 3").unwrap();
@@ -27,14 +28,14 @@ fn test_basic_read_write() {
         let mut chunk_bytes = serialized_chunk.clone();
         let header = parse_chunk_header(&mut chunk_bytes).unwrap();
         let chunk_data_copy = chunk_bytes.clone(); // This now has the header consumed
-        let reader = SimpleChunkParser::new(header, chunk_bytes).unwrap();
+        let mut decompressors = create_decompressors_map();
+        let reader = SimpleChunkParser::new(header, chunk_bytes, &mut decompressors).unwrap();
         (reader, chunk_data_copy)
     };
 
     // Check initial state
     assert_eq!(reader.records_read(), 0);
     assert_eq!(reader.total_records(), 3);
-    assert_eq!(reader.compression_type(), CompressionType::None);
 
     // Read records
     let record1 = match reader.next().unwrap() {
@@ -91,12 +92,12 @@ fn test_basic_read_write() {
 #[test]
 fn test_multiple_chunks() {
     // Create two chunks
-    let mut writer1 = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer1 = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer1.write_record(b"Chunk1 Record1").unwrap();
     writer1.write_record(b"Chunk1 Record2").unwrap();
     let chunk1 = writer1.serialize_chunk().unwrap();
 
-    let mut writer2 = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer2 = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer2.write_record(b"Chunk2 Record1").unwrap();
     writer2.write_record(b"Chunk2 Record2").unwrap();
     writer2.write_record(b"Chunk2 Record3").unwrap();
@@ -115,7 +116,8 @@ fn test_multiple_chunks() {
     let header1 = parse_chunk_header(&mut combined_chunks).unwrap();
 
     // Create parser for the first chunk - it gets a mutable reference to the buffer
-    let mut reader1 = SimpleChunkParser::new(header1, combined_chunks.clone()).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader1 = SimpleChunkParser::new(header1, combined_chunks.clone(), &mut decompressors).unwrap();
 
     // Read records from first chunk
     let record1 = match reader1.next().unwrap() {
@@ -149,7 +151,7 @@ fn test_multiple_chunks() {
     let header2 = parse_chunk_header(&mut combined_chunks).unwrap();
 
     // Create parser for the second chunk
-    let mut reader2 = SimpleChunkParser::new(header2, combined_chunks.clone()).unwrap();
+    let mut reader2 = SimpleChunkParser::new(header2, combined_chunks.clone(), &mut decompressors).unwrap();
 
     // Read records from second chunk
     let record1 = match reader2.next().unwrap() {
@@ -189,7 +191,7 @@ fn test_multiple_chunks() {
 #[test]
 fn test_empty_chunk() {
     // Create an empty chunk (no records)
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
     // Parse the header and get the chunk data
@@ -200,7 +202,8 @@ fn test_empty_chunk() {
     let _initial_length = chunk_data.len();
 
     // Create a parser
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Check initial state
     assert_eq!(reader.records_read(), 0);
@@ -225,7 +228,7 @@ fn test_empty_chunk() {
 #[test]
 fn test_large_records() {
     // Create a chunk with one large record
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
 
     // Create a 1 MB record
     let large_record = vec![0xAA; 1_000_000];
@@ -237,7 +240,8 @@ fn test_large_records() {
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Read the large record
     let record = match reader.next().unwrap() {
@@ -263,7 +267,7 @@ fn test_large_records() {
 #[test]
 fn test_mixed_record_sizes() {
     // Create a chunk with records of various sizes
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
 
     // Empty record
     writer.write_record(b"").unwrap();
@@ -285,7 +289,8 @@ fn test_mixed_record_sizes() {
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Read and verify each record
     // Empty record
@@ -333,7 +338,7 @@ fn test_mixed_record_sizes() {
 #[test]
 fn test_incomplete_chunk_data() {
     // Create a valid writer
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer.write_record(b"Test").unwrap();
     let full_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -345,7 +350,8 @@ fn test_incomplete_chunk_data() {
     let truncated_data = chunk_data.slice(0..5); // Not enough data
 
     // Try to create a parser with truncated data
-    let result = SimpleChunkParser::new(header, truncated_data);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, truncated_data, &mut decompressors);
 
     // Should fail with appropriate error
     assert!(result.is_err());
@@ -362,7 +368,7 @@ fn test_incomplete_chunk_data() {
 #[test]
 fn test_iteration_pattern() {
     // Create a chunk with a few records
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     let expected_records = vec![
         b"First record".to_vec(),
         b"Second record".to_vec(),
@@ -381,7 +387,8 @@ fn test_iteration_pattern() {
 
     // Use a block scope for the reader
     let actual_records = {
-        let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+        let mut decompressors = create_decompressors_map();
+        let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
         let mut records = Vec::new();
 
         // Iterate over records using a common pattern
@@ -417,7 +424,7 @@ fn test_iteration_pattern() {
 #[test]
 fn test_with_trailing_data() {
     // Create a chunk with a record
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer.write_record(b"Test record").unwrap();
     let chunk = writer.serialize_chunk().unwrap();
 
@@ -434,7 +441,8 @@ fn test_with_trailing_data() {
     let mut data = combined.freeze();
     let header = parse_chunk_header(&mut data).unwrap();
 
-    let mut reader = SimpleChunkParser::new(header, data.clone()).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader = SimpleChunkParser::new(header, data.clone(), &mut decompressors).unwrap();
 
     // Read the record
     let record = match reader.next().unwrap() {
@@ -470,7 +478,7 @@ fn test_with_trailing_data() {
 #[test]
 fn test_records_read_counter() {
     // Create a chunk with several records
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     for i in 0..5 {
         writer
             .write_record(format!("Record {}", i).as_bytes())
@@ -483,7 +491,8 @@ fn test_records_read_counter() {
     let mut chunk_data = serialized_chunk.clone();
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone()).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Initially 0 records read
     assert_eq!(reader.records_read(), 0);
@@ -517,7 +526,7 @@ fn test_records_read_counter() {
 #[test]
 fn test_invalid_chunk_type() {
     // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -527,7 +536,8 @@ fn test_invalid_chunk_type() {
     header.chunk_type = crate::chunks::header::ChunkType::Padding; // Not a SimpleRecords type
 
     // Try to create parser with invalid chunk type
-    let result = SimpleChunkParser::new(header, chunk_data);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, chunk_data, &mut decompressors);
 
     assert!(result.is_err());
     if let Err(err) = result {
@@ -543,7 +553,7 @@ fn test_invalid_chunk_type() {
 #[test]
 fn test_valid_data_hash() {
     // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -552,7 +562,8 @@ fn test_valid_data_hash() {
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
     // This should succeed because the hash in the header matches the data
-    let result = SimpleChunkParser::new(header, chunk_data);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, chunk_data, &mut decompressors);
     assert!(
         result.is_ok(),
         "Parser creation should succeed with valid hash"
@@ -562,7 +573,7 @@ fn test_valid_data_hash() {
 #[test]
 fn test_invalid_data_hash() {
     // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -574,7 +585,8 @@ fn test_invalid_data_hash() {
     header.data_hash = header.data_hash ^ 0xDEADBEEF; // XOR to change the hash
 
     // Try to create parser with invalid hash
-    let result = SimpleChunkParser::new(header, chunk_data);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, chunk_data, &mut decompressors);
 
     // Should fail due to hash mismatch
     assert!(
@@ -592,7 +604,7 @@ fn test_invalid_data_hash() {
 #[test]
 fn test_modified_data_hash_verification() {
     // Create a valid chunk
-    let mut writer = SimpleChunkWriter::new(CompressionType::None);
+    let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
     writer.write_record(b"Test record").unwrap();
     let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -612,7 +624,8 @@ fn test_modified_data_hash_verification() {
     }
 
     // Try to create parser with modified data (should fail hash verification)
-    let result = SimpleChunkParser::new(header, modified_data);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, modified_data, &mut decompressors);
 
     // Should fail due to hash mismatch
     assert!(
@@ -631,7 +644,7 @@ fn test_modified_data_hash_verification() {
 fn test_empty_chunk_data() {
     // Create a valid header but empty data
     let header = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Test record").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -642,7 +655,8 @@ fn test_empty_chunk_data() {
 
     // Try to create parser with empty data
     let empty_bytes = Bytes::new();
-    let result = SimpleChunkParser::new(header, empty_bytes);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, empty_bytes, &mut decompressors);
 
     assert!(result.is_err());
     if let Err(err) = result {
@@ -661,7 +675,7 @@ fn test_empty_chunk_data() {
 fn test_corrupted_sizes_length() {
     // Create a valid chunk and get header
     let (header, chunk_data) = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Test record").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -686,7 +700,8 @@ fn test_corrupted_sizes_length() {
     let corrupted_bytes = corrupted_data.freeze();
 
     // Try to create a parser with corrupted data
-    let result = SimpleChunkParser::new(header, corrupted_bytes);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, corrupted_bytes, &mut decompressors);
 
     assert!(result.is_err());
 }
@@ -695,7 +710,7 @@ fn test_corrupted_sizes_length() {
 fn test_invalid_sizes_length() {
     // Create a valid chunk and get header + data
     let (mut header, chunk_data) = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Test record").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -726,7 +741,8 @@ fn test_invalid_sizes_length() {
     header.data_hash = data_hash;
 
     // Try to create a parser with corrupted data
-    let result = SimpleChunkParser::new(header, corrupted_bytes);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, corrupted_bytes, &mut decompressors);
 
     assert!(result.is_err());
     if let Err(err) = result {
@@ -743,7 +759,7 @@ fn test_invalid_sizes_length() {
 fn test_unsupported_compression_type() {
     // Create a valid chunk and get header + data
     let (mut header, chunk_data) = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Test record").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
 
@@ -768,7 +784,8 @@ fn test_unsupported_compression_type() {
     header.data_hash = data_hash;
 
     // Try to create a parser with invalid compression type
-    let result = SimpleChunkParser::new(header, modified_bytes);
+    let mut decompressors = create_decompressors_map();
+    let result = SimpleChunkParser::new(header, modified_bytes, &mut decompressors);
 
     assert!(result.is_err());
     if let Err(err) = result {
@@ -785,7 +802,7 @@ fn test_unsupported_compression_type() {
 fn test_reading_after_error() {
     // Create a chunk with some records and get reader
     let mut reader = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Record 1").unwrap();
         writer.write_record(b"Record 2").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
@@ -793,7 +810,8 @@ fn test_reading_after_error() {
         // Copy to Bytes for parsing
         let mut chunk_bytes = serialized_chunk.clone();
         let header = parse_chunk_header(&mut chunk_bytes).unwrap();
-        SimpleChunkParser::new(header, chunk_bytes).unwrap()
+        let mut decompressors = create_decompressors_map();
+        SimpleChunkParser::new(header, chunk_bytes, &mut decompressors).unwrap()
     };
 
     // Read one record successfully
@@ -832,7 +850,7 @@ fn test_reading_after_error() {
 fn test_record_size_exceeds_available_data() {
     // Create a chunk with test records and get data
     let chunk_data = {
-        let mut writer = SimpleChunkWriter::new(CompressionType::None);
+        let mut writer = SimpleChunkWriter::new(CompressionType::None).unwrap();
         writer.write_record(b"Record 1").unwrap();
         writer.write_record(b"Record 2").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
@@ -875,7 +893,8 @@ fn test_record_size_exceeds_available_data() {
     custom_header.data_hash = data_hash;
 
     // Create parser with custom data
-    let mut reader = SimpleChunkParser::new(custom_header, chunk_bytes).unwrap();
+    let mut decompressors = create_decompressors_map();
+    let mut reader = SimpleChunkParser::new(custom_header, chunk_bytes, &mut decompressors).unwrap();
 
     // First read should fail because record size is too large
     let result = reader.next();

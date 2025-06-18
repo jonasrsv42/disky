@@ -24,16 +24,18 @@
 //! use disky::chunks::chunks_parser::{ChunksParser, ChunkPiece};
 //! use disky::chunks::signature_parser::validate_signature;
 //! use disky::blocks::reader::BlockReader;
+//! use disky::compression::create_decompressors_map;
 //! # use bytes::Bytes;
 //!
 //! # fn example() -> disky::error::Result<()> {
 //! # let chunk_data = Bytes::new(); // In a real example, this would come from BlockReader::read_chunks
-//! // Create a parser
+//! // Create a parser and decompressors map
 //! let mut parser = ChunksParser::new(chunk_data);
+//! let mut decompressors = create_decompressors_map();
 //!
 //! // Parse chunks and process each piece
 //! loop {
-//!     match parser.next()? {
+//!     match parser.next(&mut decompressors)? {
 //!         ChunkPiece::Signature(header) => {
 //!             // Found a file signature chunk with header
 //!             validate_signature(&header)?;
@@ -62,7 +64,7 @@
 //! }
 //!
 //! // In case of errors during parsing, you can recover and continue with the next chunk
-//! # let result = parser.next();
+//! # let result = parser.next(&mut decompressors);
 //! # if result.is_err() {
 //!     // Error occurred, reset parser state to continue with next chunk
 //!     parser.skip_chunk();
@@ -72,11 +74,13 @@
 //! # }
 //! ```
 
+use std::collections::BTreeMap;
 use bytes::{Buf, Bytes};
 
 use crate::chunks::header::{ChunkHeader, ChunkType};
 use crate::chunks::header_parser::parse_chunk_header;
 use crate::chunks::simple_chunk_parser::{SimpleChunkParser, SimpleChunkPiece};
+use crate::compression::Decompressor;
 use crate::error::{DiskyError, Result};
 
 /// Represents a parsed piece from a Riegeli chunk.
@@ -186,14 +190,16 @@ impl ChunksParser {
     ///
     /// ```
     /// use disky::chunks::chunks_parser::ChunksParser;
+    /// use disky::compression::create_decompressors_map;
     /// # use bytes::Bytes;
     ///
     /// # fn example() {
     /// # let chunk_data = Bytes::new();
     /// let mut parser = ChunksParser::new(chunk_data);
+    /// let mut decompressors = create_decompressors_map();
     ///
     /// // If an error occurs during parsing
-    /// if let Err(err) = parser.next() {
+    /// if let Err(err) = parser.next(&mut decompressors) {
     ///     // Refresh state to skip the problematic chunk
     ///     if let Err(skip_err) = parser.skip_chunk() {
     ///         // Cannot skip chunk, handle this case
@@ -238,7 +244,7 @@ impl ChunksParser {
     /// - The chunk header cannot be parsed
     /// - The chunk data is incomplete
     /// - The chunk type is unsupported
-    fn next_chunk(&mut self) -> Result<ChunkPiece> {
+    fn next_chunk(&mut self, decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>) -> Result<ChunkPiece> {
         if self.buffer.is_empty() {
             self.state = State::Finish;
             return Ok(ChunkPiece::ChunksEnd);
@@ -283,7 +289,7 @@ impl ChunksParser {
             }
             ChunkType::SimpleRecords => {
                 // For simple records, return a chunk that can be iterated
-                let parser = SimpleChunkParser::new(header, buffer_view)?;
+                let parser = SimpleChunkParser::new(header, buffer_view, decompressors)?;
                 self.state = State::SimpleChunk(parser);
                 Ok(ChunkPiece::SimpleChunkStart)
             }
@@ -320,16 +326,18 @@ impl ChunksParser {
     ///
     /// ```
     /// use disky::chunks::chunks_parser::{ChunksParser, ChunkPiece};
+    /// use disky::compression::create_decompressors_map;
     /// # use bytes::Bytes;
     /// # use disky::error::Result;
     ///
     /// # fn example() -> Result<()> {
     /// # let chunk_data = Bytes::new();
     /// let mut parser = ChunksParser::new(chunk_data);
+    /// let mut decompressors = create_decompressors_map();
     ///
     /// // Parse and process chunks
     /// loop {
-    ///     match parser.next() {
+    ///     match parser.next(&mut decompressors) {
     ///         Ok(ChunkPiece::ChunksEnd) => break, // No more chunks
     ///         Ok(piece) => {
     ///             // Process the chunk piece
@@ -344,9 +352,9 @@ impl ChunksParser {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn next(&mut self) -> Result<ChunkPiece> {
+    pub fn next(&mut self, decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>) -> Result<ChunkPiece> {
         match &mut self.state {
-            State::Fresh => self.next_chunk(),
+            State::Fresh => self.next_chunk(decompressors),
             State::SimpleChunk(simple_chunk_parser) => match simple_chunk_parser.next()? {
                 SimpleChunkPiece::Record(bytes) => Ok(ChunkPiece::Record(bytes)),
                 SimpleChunkPiece::EndOfChunk => {

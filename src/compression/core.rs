@@ -35,7 +35,7 @@ pub trait Compressor: Send + Sync {
 ///
 /// Decompressors work with Bytes objects to enable zero-copy operation for NoCompression
 /// while still supporting owned data for real compression algorithms.
-pub trait Decompressor: Send {
+pub trait Decompressor: Send + Sync {
     /// Decompress the input data and return decompressed bytes.
     /// 
     /// # Arguments

@@ -17,7 +17,7 @@
 //! This module provides functionality for parsing Riegeli chunk headers
 //! according to the file format specification.
 
-use crate::chunks::header::{ChunkHeader, ChunkType, CHUNK_HEADER_SIZE};
+use crate::chunks::header::{CHUNK_HEADER_SIZE, ChunkHeader, ChunkType};
 use crate::error::{DiskyError, Result};
 use crate::hash::highway_hash;
 use bytes::{Buf, Bytes};
@@ -265,4 +265,3 @@ mod tests {
         assert_eq!(header_bytes_clone.len(), 0);
     }
 }
-

@@ -7,8 +7,8 @@ use disky::parallel::reader::{
 };
 use disky::parallel::sharding::{FileShardLocator, FileSharder};
 use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig as WriterShardingConfig};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tempfile::tempdir;
 

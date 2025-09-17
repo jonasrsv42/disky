@@ -1,12 +1,14 @@
+use crate::error::DiskyError;
 use crate::error::Result;
 use crate::parallel::byte_queue::ByteQueue;
-use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, DiskyParallelPiece, ShardingConfig};
+use crate::parallel::reader::{
+    DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
+};
 use crate::parallel::sharding::MemoryShardLocator;
 use crate::writer::RecordWriter;
-use crate::error::DiskyError;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
 fn test_drain_resource_basic() -> Result<()> {
@@ -319,7 +321,7 @@ fn test_drain_resource_mixed_records() -> Result<()> {
             Ok(_) => (),
             Err(err) => match err {
                 DiskyError::PoolExhausted => (),
-                _ => panic!("Unexpected error {}", err)
+                _ => panic!("Unexpected error {}", err),
             },
         };
 
@@ -357,4 +359,3 @@ fn test_drain_resource_mixed_records() -> Result<()> {
 
     Ok(())
 }
-

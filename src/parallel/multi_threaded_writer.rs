@@ -6,8 +6,8 @@
 use std::io::{Seek, Write};
 use std::mem::ManuallyDrop;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 
@@ -264,7 +264,7 @@ impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
     ///
     /// This method shuts down all worker threads and closes the underlying resources.
     /// It blocks until the close operation is complete.
-    /// 
+    ///
     /// Only the first thread to call this method will proceed with closing;
     /// subsequent calls will return a WritingClosedFile error.
     ///

@@ -10,19 +10,19 @@ pub(crate) fn find_shard_paths(output_dir: &PathBuf, file_prefix: &str) -> Resul
     let glob_pattern = format!("{}_*", file_prefix);
     let pattern = output_dir.join(glob_pattern);
     let pattern_str = pattern.to_string_lossy();
-    
+
     // Get a list of all matching files
     let mut shard_paths: Vec<PathBuf> = Vec::new();
-    
-    for entry in glob(&pattern_str)
-        .map_err(|e| DiskyError::Other(format!("Invalid glob pattern: {}", e)))?
+
+    for entry in
+        glob(&pattern_str).map_err(|e| DiskyError::Other(format!("Invalid glob pattern: {}", e)))?
     {
         match entry {
             Ok(path) => shard_paths.push(path),
             Err(e) => warn!("Error with glob entry: {}", e),
         }
     }
-    
+
     // Check if we found any shards
     if shard_paths.is_empty() {
         return Err(DiskyError::Other(format!(
@@ -30,6 +30,6 @@ pub(crate) fn find_shard_paths(output_dir: &PathBuf, file_prefix: &str) -> Resul
             file_prefix, output_dir
         )));
     }
-    
+
     Ok(shard_paths)
 }

@@ -46,7 +46,7 @@ impl<T> TaskQueue<T> {
             signal: Condvar::new(),
         }
     }
-    
+
     /// Create a new empty task queue with a maximum capacity
     ///
     /// When the queue reaches this capacity, push_back will block until
@@ -57,7 +57,7 @@ impl<T> TaskQueue<T> {
     pub fn with_capacity(max_capacity: usize) -> Self {
         // Ensure capacity is at least 1
         let max_capacity = max_capacity.max(1);
-        
+
         Self {
             inner: Mutex::new(TaskQueueInner {
                 queue: VecDeque::new(),
@@ -86,7 +86,7 @@ impl<T> TaskQueue<T> {
                     "Cannot add to a closed queue".to_string(),
                 ));
             }
-            
+
             // Check if we're at capacity
             if let Some(max_capacity) = inner.max_capacity {
                 if inner.queue.len() >= max_capacity {
@@ -96,13 +96,13 @@ impl<T> TaskQueue<T> {
                     continue;
                 }
             }
-            
+
             // Either no capacity limit or we have space, add the task
             inner.queue.push_back(t);
-            
+
             // Notify waiting threads (especially those waiting in read_front or read_all)
             self.signal.notify_one();
-            
+
             return Ok(());
         }
     }
@@ -153,7 +153,7 @@ impl<T> TaskQueue<T> {
             while let Some(task) = inner.queue.pop_front() {
                 all.push(task);
             }
-            
+
             // If we got any items, notify any threads waiting due to capacity limits and return
             if !all.is_empty() {
                 self.signal.notify_all(); // Notify all waiters since we freed up multiple slots
@@ -458,4 +458,3 @@ mod tests {
         assert_eq!(queue.is_empty().unwrap(), true);
     }
 }
-

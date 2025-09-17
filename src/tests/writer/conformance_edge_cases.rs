@@ -19,8 +19,8 @@
 use std::io::Cursor;
 
 use crate::compression::CompressionType;
-use crate::writer::{RecordWriter, RecordWriterConfig};
 use crate::tests::utils::format_bytes_for_assert;
+use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Test 2: Empty records at specific positions
 /// Creates a file with empty records at beginning, middle, and end
@@ -28,28 +28,28 @@ use crate::tests::utils::format_bytes_for_assert;
 fn test_empty_records_at_specific_positions() {
     // Create a cursor as our sink
     let cursor = Cursor::new(Vec::new());
-    
+
     // Create a writer with default config
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-    
+
     // Write records with empty ones at specific positions
-    writer.write_record(b"").unwrap();      // Empty record at beginning
+    writer.write_record(b"").unwrap(); // Empty record at beginning
     writer.write_record(b"middle").unwrap();
-    writer.write_record(b"").unwrap();      // Empty record in the middle
+    writer.write_record(b"").unwrap(); // Empty record in the middle
     writer.write_record(b"end").unwrap();
-    writer.write_record(b"").unwrap();      // Empty record at the end
-    
+    writer.write_record(b"").unwrap(); // Empty record at the end
+
     // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the written data
     let data = writer.get_data().unwrap();
-    
+
     // The expected bytes for a file with strategically placed empty records
     #[rustfmt::skip]
     const EXPECTED_FILE: &[u8] = &[
@@ -84,12 +84,12 @@ fn test_empty_records_at_specific_positions() {
         0x65, 0x6e, 0x64                                // "end"
         // Empty record (0 bytes)
     ];
-    
+
     // Verify the file content
     if data != EXPECTED_FILE {
         panic!("Actual bytes:\n{}", format_bytes_for_assert(&data));
     }
-    
+
     assert_eq!(data.len(), EXPECTED_FILE.len(), "File sizes don't match");
     assert_eq!(data, EXPECTED_FILE, "File content doesn't match expected");
 }
@@ -100,19 +100,20 @@ fn test_empty_records_at_specific_positions() {
 fn test_chunk_ending_near_block_boundary() {
     // Create a cursor as our sink
     let cursor = Cursor::new(Vec::new());
-    
+
     // We need a small block size to test boundary conditions
     let block_size = 128;
-    
+
     // Create a writer with custom config
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
-        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size).unwrap(),
+        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
+            .unwrap(),
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-    
+
     // Calculate size to make chunk end exactly at block_size - 1 (right before next boundary)
     // File starts with 64 bytes (24 block header + 40 signature)
     // We want to add a simple chunk that ends at position 127
@@ -120,13 +121,13 @@ fn test_chunk_ending_near_block_boundary() {
     // From the actual output, we need a record of size 20 bytes
     let record = vec![b'x'; 20];
     writer.write_record(&record).unwrap();
-    
-    // Close to ensure all data is written 
+
+    // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the written data
     let data = writer.get_data().unwrap();
-    
+
     // The exact expected bytes for a file with a chunk ending near block boundary
     // Actual file is 127 bytes in size, one byte short of the block size
     #[rustfmt::skip]
@@ -164,20 +165,30 @@ fn test_chunk_ending_near_block_boundary() {
         0x78, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78, 0x78, // 8 'x's
         0x78, 0x78, 0x78, 0x78                          // 4 'x's
     ];
-    
+
     // Check the length to make sure it ends exactly at the block boundary minus 1
     // Actual implementation produces 127 bytes, not 128 bytes as initially expected
     if data.len() != block_size as usize - 1 {
-        panic!("Expected data length {} bytes (block size - 1), got {} bytes", 
-              block_size - 1, data.len());
+        panic!(
+            "Expected data length {} bytes (block size - 1), got {} bytes",
+            block_size - 1,
+            data.len()
+        );
     }
-    
+
     // Verify the file content
     if data != EXPECTED_BOUNDARY_FILE {
-        panic!("Actual bytes (len:{}):\n{}", data.len(), format_bytes_for_assert(&data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            data.len(),
+            format_bytes_for_assert(&data)
+        );
     }
-    
-    assert_eq!(data, EXPECTED_BOUNDARY_FILE, "File content doesn't match expected");
+
+    assert_eq!(
+        data, EXPECTED_BOUNDARY_FILE,
+        "File content doesn't match expected"
+    );
 }
 
 /// Test 4: Forced chunking patterns
@@ -190,35 +201,35 @@ fn test_chunk_ending_near_block_boundary() {
 fn test_forced_chunking_pattern() {
     // Create a cursor as our sink
     let cursor = Cursor::new(Vec::new());
-    
+
     // Create a writer with small chunk size to force specific chunking
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
         chunk_size_bytes: 30, // Force chunking after about 30 bytes of records
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-    
+
     // Write specific record sizes to force chunk boundaries
-    writer.write_record(b"record-1").unwrap();  // 8 bytes
-    writer.write_record(b"record-2").unwrap();  // 8 bytes
-    writer.write_record(b"record-3").unwrap();  // 8 bytes  
+    writer.write_record(b"record-1").unwrap(); // 8 bytes
+    writer.write_record(b"record-2").unwrap(); // 8 bytes
+    writer.write_record(b"record-3").unwrap(); // 8 bytes  
     // Total: 24 bytes, just under our 30-byte limit
-    
+
     // This record will bring us to the chunking limit, but the chunk won't
     // actually split until the next record is added
-    writer.write_record(b"forces-new-chunk").unwrap();  // 16 bytes
-    
+    writer.write_record(b"forces-new-chunk").unwrap(); // 16 bytes
+
     // This record should now be in a new chunk
-    writer.write_record(b"new-chunk-record").unwrap();  // 16 bytes
-    
+    writer.write_record(b"new-chunk-record").unwrap(); // 16 bytes
+
     // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the written data
     let data = writer.get_data().unwrap();
-    
+
     // Expected bytes for a file with forced chunk boundaries
     // First chunk contains the first 4 records up to forces-new-chunk
     // Second chunk contains the new-chunk-record which has been forced into a new chunk
@@ -271,14 +282,25 @@ fn test_forced_chunking_pattern() {
         0x6e, 0x65, 0x77, 0x2d, 0x63, 0x68, 0x75, 0x6e, // "new-chun"
         0x6b, 0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64  // "k-record"
     ];
-    
+
     // Verify the file content
     if data != EXPECTED_CHUNKING_FILE {
-        panic!("Actual bytes (len:{}):\n{}", data.len(), format_bytes_for_assert(&data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            data.len(),
+            format_bytes_for_assert(&data)
+        );
     }
-    
-    assert_eq!(data.len(), EXPECTED_CHUNKING_FILE.len(), "File sizes don't match");
-    assert_eq!(data, EXPECTED_CHUNKING_FILE, "File content doesn't match expected");
+
+    assert_eq!(
+        data.len(),
+        EXPECTED_CHUNKING_FILE.len(),
+        "File sizes don't match"
+    );
+    assert_eq!(
+        data, EXPECTED_CHUNKING_FILE,
+        "File content doesn't match expected"
+    );
 }
 
 /// Test 5: Append to existing file
@@ -294,28 +316,25 @@ fn test_append_to_existing_file() {
     let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
     writer.write_record(b"initial-record").unwrap();
     writer.close().unwrap();
-    
+
     // Get the data from the first writer
     let initial_data = writer.get_data().unwrap();
     let initial_size = initial_data.len();
-    
+
     // Now create a new writer that simulates appending
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer = RecordWriter::for_append_with_config(
-        cursor, 
-        initial_size as u64, 
-        config
-    ).unwrap();
-    
+    let mut appending_writer =
+        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+
     // Append a new record
     appending_writer.write_record(b"appended-record").unwrap();
-    
+
     // Close to ensure all data is written
     appending_writer.close().unwrap();
-    
+
     // Get the data from the appended writer
     let appended_data = appending_writer.get_data().unwrap();
-    
+
     // The expected bytes for the appended file
     #[rustfmt::skip]
     const EXPECTED_APPENDED_FILE: &[u8] = &[
@@ -363,14 +382,25 @@ fn test_append_to_existing_file() {
         0x61, 0x70, 0x70, 0x65, 0x6e, 0x64, 0x65, 0x64, // "appended"
         0x2d, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64        // "-record"
     ];
-    
+
     // Verify the file content
     if appended_data != EXPECTED_APPENDED_FILE {
-        panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            appended_data.len(),
+            format_bytes_for_assert(&appended_data)
+        );
     }
-    
-    assert_eq!(appended_data.len(), EXPECTED_APPENDED_FILE.len(), "File sizes don't match");
-    assert_eq!(appended_data, EXPECTED_APPENDED_FILE, "File content doesn't match expected");
+
+    assert_eq!(
+        appended_data.len(),
+        EXPECTED_APPENDED_FILE.len(),
+        "File sizes don't match"
+    );
+    assert_eq!(
+        appended_data, EXPECTED_APPENDED_FILE,
+        "File content doesn't match expected"
+    );
 }
 
 /// Test 8: File with exact block size
@@ -379,19 +409,20 @@ fn test_append_to_existing_file() {
 fn test_file_with_exact_block_size() {
     // Create a cursor as our sink
     let cursor = Cursor::new(Vec::new());
-    
+
     // Define a small block size for testing
     let block_size = 128;
-    
+
     // Create a writer with custom config
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
-        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size).unwrap(),
+        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
+            .unwrap(),
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-    
+
     // Calculate required record size to hit exact block size
     // We need total file size to be exactly block_size (128 bytes)
     // File starts with 64 bytes (24 block header + 40 signature)
@@ -399,13 +430,13 @@ fn test_file_with_exact_block_size() {
     // So record needs to be 128 - 64 - 40 - 3 = 21 bytes
     let record = vec![b'y'; 21];
     writer.write_record(&record).unwrap();
-    
+
     // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the written data
     let data = writer.get_data().unwrap();
-    
+
     // The expected bytes for a file with exact block size
     #[rustfmt::skip]
     const EXPECTED_EXACT_BLOCK_SIZE_FILE: &[u8] = &[
@@ -438,17 +469,27 @@ fn test_file_with_exact_block_size() {
         0x79, 0x79, 0x79, 0x79, 0x79, 0x79, 0x79, 0x79, // 8 'y's
         0x79, 0x79, 0x79, 0x79, 0x79                    // 5 'y's
     ];
-    
+
     // Check the length to make sure it's exactly the block size
     if data.len() != block_size as usize {
-        panic!("Expected data length {} bytes (block size), got {} bytes", 
-              block_size, data.len());
+        panic!(
+            "Expected data length {} bytes (block size), got {} bytes",
+            block_size,
+            data.len()
+        );
     }
-    
+
     // Verify the file content
     if data != EXPECTED_EXACT_BLOCK_SIZE_FILE {
-        panic!("Actual bytes (len:{}):\n{}", data.len(), format_bytes_for_assert(&data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            data.len(),
+            format_bytes_for_assert(&data)
+        );
     }
-    
-    assert_eq!(data, EXPECTED_EXACT_BLOCK_SIZE_FILE, "File content doesn't match expected");
+
+    assert_eq!(
+        data, EXPECTED_EXACT_BLOCK_SIZE_FILE,
+        "File content doesn't match expected"
+    );
 }

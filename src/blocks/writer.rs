@@ -501,4 +501,3 @@ impl<Sink: Write + Seek> BlockWriter<Sink> {
         self.position()
     }
 }
-

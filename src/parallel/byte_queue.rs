@@ -48,7 +48,7 @@ fn queue_closed_err(msg: &str) -> DiskyError {
 impl ByteQueue {
     /// Acquires the inner lock and maps mutex errors to DiskyError
     #[inline]
-    fn acquire_lock(&self) -> Result<MutexGuard<ByteQueueInner>> {
+    fn acquire_lock(&self) -> Result<MutexGuard<'_, ByteQueueInner>> {
         self.inner
             .lock()
             .map_err(|e| DiskyError::Other(e.to_string()))
@@ -540,7 +540,7 @@ mod tests {
 
     /// Test that verifies the queue properly handles wake ordering
     ///
-    /// Rather than try to test that notify_all wakes multiple waiters, which is 
+    /// Rather than try to test that notify_all wakes multiple waiters, which is
     /// very hard to test deterministically, this test checks the behavior of the queue
     /// when multiple threads are pushing data in a specific pattern that confirms
     /// proper ordering and waking without relying on timing.
@@ -548,93 +548,92 @@ mod tests {
     fn test_multiple_waiters_and_wakeups() {
         // Create a queue with a capacity big enough for 2 items
         let item_size = 50;
-        let queue_capacity = item_size * 2; 
+        let queue_capacity = item_size * 2;
         let queue = Arc::new(ByteQueue::new(queue_capacity));
-        
+
         // Fill the queue completely to force readers to block
         queue.push_back(create_record(item_size)).unwrap();
         queue.push_back(create_record(item_size)).unwrap();
-        
+
         // Create channels for synchronization
         let (push_tx, push_rx) = std::sync::mpsc::channel();
         let (pop_tx, pop_rx) = std::sync::mpsc::channel();
-        
+
         // First, start a thread that will be blocked trying to push
         let q1 = Arc::clone(&queue);
         let push_thread = thread::spawn(move || {
             // Signal we're about to push
             push_tx.send(1).unwrap();
-            
+
             // This will block until there's space
             q1.push_back(create_record(item_size)).unwrap();
-            
+
             // Signal we've completed the push
             push_tx.send(2).unwrap();
         });
-        
+
         // Wait for the push thread to start
         assert_eq!(push_rx.recv().unwrap(), 1);
-        
+
         // Start a thread that will read from the queue
         let q2 = Arc::clone(&queue);
         let pop_thread = thread::spawn(move || {
             // Signal we're about to start popping
             pop_tx.send(1).unwrap();
-            
+
             // Pop two items to make room
             let item1 = q2.read_front().unwrap();
             pop_tx.send(2).unwrap();
-            
+
             let item2 = q2.read_front().unwrap();
             pop_tx.send(3).unwrap();
-            
+
             // Wait for the pusher to have pushed an item
             assert_eq!(push_rx.recv().unwrap(), 2);
-            
+
             // Read the item that was pushed
             let item3 = q2.read_front().unwrap();
             pop_tx.send(4).unwrap();
-            
+
             (item1, item2, item3)
         });
-        
+
         // Wait for pop thread to signal it's starting
         assert_eq!(pop_rx.recv().unwrap(), 1);
-        
+
         // Wait for pop thread to signal it popped the first item
         assert_eq!(pop_rx.recv().unwrap(), 2);
-        
+
         // Wait for pop thread to signal it popped the second item
         assert_eq!(pop_rx.recv().unwrap(), 3);
-        
+
         // By this point, the push thread should have been unblocked
-        
+
         // Wait for pop thread to signal it read the pushed item
         assert_eq!(pop_rx.recv().unwrap(), 4);
-        
+
         // Wait for threads to complete
         push_thread.join().unwrap();
         let (item1, item2, item3) = pop_thread.join().unwrap();
-        
+
         // Verify items were records with correct size
         match item1 {
             DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), item_size),
             _ => panic!("Expected Record"),
         }
-        
+
         match item2 {
             DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), item_size),
             _ => panic!("Expected Record"),
         }
-        
+
         match item3 {
             DiskyParallelPiece::Record(bytes) => assert_eq!(bytes.len(), item_size),
             _ => panic!("Expected Record"),
         }
-        
+
         // Queue should now be empty
         assert_eq!(queue.len().unwrap(), 0);
         assert_eq!(queue.bytes_used().unwrap(), 0);
     }
 }
-

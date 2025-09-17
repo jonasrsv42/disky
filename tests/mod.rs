@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! Integration tests for the Disky library.
-//! 
+//!
 //! These tests verify the functionality of the library from an external perspective,
 //! treating it as a black box.
 

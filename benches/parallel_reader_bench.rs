@@ -22,9 +22,9 @@
 
 #![cfg_attr(not(feature = "parallel"), allow(dead_code, unused_imports))]
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::time::Duration;
-use tempfile::{tempdir, NamedTempFile, TempDir};
+use tempfile::{NamedTempFile, TempDir, tempdir};
 
 use disky::error::Result;
 use disky::reader::{DiskyPiece, RecordReader};

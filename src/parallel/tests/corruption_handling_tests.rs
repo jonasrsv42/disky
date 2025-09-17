@@ -19,12 +19,12 @@ use crate::reader::CorruptionStrategy;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// A simple test shard locator that provides in-memory Cursors from a predefined list.
-/// 
+///
 /// This locator is useful for testing, especially with corrupted data.
 pub struct TestShardLocator {
     /// List of sources to provide
     sources: Vec<Vec<u8>>,
-    
+
     /// Index of the next source to provide
     next_index: AtomicUsize,
 }
@@ -43,19 +43,19 @@ impl ShardLocator<Cursor<Vec<u8>>> for TestShardLocator {
     fn next_shard(&self) -> Result<Cursor<Vec<u8>>> {
         // Get the current index and increment atomically
         let index = self.next_index.fetch_add(1, Ordering::SeqCst);
-        
+
         // Check if we've exhausted all sources
         if index >= self.sources.len() {
             return Err(DiskyError::NoMoreShards);
         }
-        
+
         // Clone the underlying Vec<u8> to create a new Cursor
         let data = self.sources[index].clone();
         let cursor = Cursor::new(data);
-        
+
         Ok(cursor)
     }
-    
+
     fn estimated_shard_count(&self) -> Option<usize> {
         Some(self.sources.len())
     }
@@ -114,7 +114,7 @@ fn test_multithreaded_reader_corruption_recovery() {
         .try_init();
 
     let buffer = create_test_file();
-    
+
     debug!("Created test file with size: {} bytes", buffer.len());
 
     // Choose positions that will likely hit different blocks
@@ -133,21 +133,21 @@ fn test_multithreaded_reader_corruption_recovery() {
         {
             // Create a shard locator with our corrupted buffer
             let locator = TestShardLocator::new(vec![corrupted.clone()]);
-            
+
             // Use same small block size as the writer (128 bytes)
             let reader_config = ParallelReaderConfig::new(
-                crate::reader::RecordReaderConfig::with_block_size(128).unwrap()
+                crate::reader::RecordReaderConfig::with_block_size(128).unwrap(),
             );
-            
+
             // Configure a minimal multi-threaded reader (1-2 threads)
             let config = MultiThreadedReaderConfig::new(
                 reader_config,
-                1,  // Use minimal threads for test
+                1,    // Use minimal threads for test
                 1024, // Small queue size
             );
-            
+
             let sharding_config = ShardingConfig::new(Box::new(locator), 1);
-            
+
             // Create reader with default (Error) corruption strategy
             let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
 
@@ -164,7 +164,7 @@ fn test_multithreaded_reader_corruption_recovery() {
                         records_read += 1;
                     }
                     Ok(DiskyParallelPiece::EOF) => {
-                        // In multithreaded context, corruption usually leads to 
+                        // In multithreaded context, corruption usually leads to
                         // worker thread exit and queue closure, resulting in EOF
                         debug!("Received EOF after reading {} records", records_read);
                         break;
@@ -190,7 +190,7 @@ fn test_multithreaded_reader_corruption_recovery() {
                 offset,
                 records_read
             );
-            
+
             // Close the reader
             reader.close().unwrap();
         }
@@ -199,22 +199,23 @@ fn test_multithreaded_reader_corruption_recovery() {
         {
             // Create a shard locator with our corrupted buffer
             let locator = TestShardLocator::new(vec![corrupted.clone()]);
-            
+
             // Use same small block size as the writer (128 bytes) but with recovery enabled
-            let mut reader_config = crate::reader::RecordReaderConfig::with_block_size(128).unwrap();
+            let mut reader_config =
+                crate::reader::RecordReaderConfig::with_block_size(128).unwrap();
             reader_config = reader_config.with_corruption_strategy(CorruptionStrategy::Recover);
-            
+
             let parallel_config = ParallelReaderConfig::new(reader_config);
-            
+
             // Configure a minimal multi-threaded reader (1-2 threads)
             let config = MultiThreadedReaderConfig::new(
                 parallel_config,
-                1,  // Use minimal threads for test
+                1,    // Use minimal threads for test
                 1024, // Small queue size
             );
-            
+
             let sharding_config = ShardingConfig::new(Box::new(locator), 1);
-            
+
             // Create reader with recovery corruption strategy
             let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
 
@@ -252,7 +253,7 @@ fn test_multithreaded_reader_corruption_recovery() {
             // 2. Get an explicit error
             // 3. Get EOF due to worker thread exit (which is also acceptable)
             // So no additional assertion is needed here
-            
+
             // Close the reader
             reader.close().unwrap();
         }
@@ -270,7 +271,7 @@ fn test_multithreaded_reader_multiple_corruptions() {
 
     // Create a larger file with more data
     let mut buffer = Vec::new();
-    
+
     // IMPORTANT: The reader and writer MUST use the same block size!
     let block_size = 1024u64;
 
@@ -309,22 +310,23 @@ fn test_multithreaded_reader_multiple_corruptions() {
     {
         // Create a shard locator with our corrupted buffer
         let locator = TestShardLocator::new(vec![corrupted]);
-        
+
         // Use same block size as the writer but with recovery enabled
-        let mut reader_config = crate::reader::RecordReaderConfig::with_block_size(block_size).unwrap();
+        let mut reader_config =
+            crate::reader::RecordReaderConfig::with_block_size(block_size).unwrap();
         reader_config = reader_config.with_corruption_strategy(CorruptionStrategy::Recover);
-        
+
         let parallel_config = ParallelReaderConfig::new(reader_config);
-        
+
         // Configure a minimal multi-threaded reader (1-2 threads)
         let config = MultiThreadedReaderConfig::new(
             parallel_config,
-            1,  // Use minimal threads for test
+            1,    // Use minimal threads for test
             1024, // Small queue size
         );
-        
+
         let sharding_config = ShardingConfig::new(Box::new(locator), 1);
-        
+
         // Create reader with recovery corruption strategy
         let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
 
@@ -369,7 +371,7 @@ fn test_multithreaded_reader_multiple_corruptions() {
             records.len(),
             errors_encountered
         );
-        
+
         // Close the reader
         reader.close().unwrap();
     }

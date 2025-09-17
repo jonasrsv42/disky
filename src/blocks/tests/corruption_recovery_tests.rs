@@ -265,9 +265,7 @@ fn test_recover_at_end_of_file() {
     // Create a simple file with one chunk
     let buffer = Cursor::new(Vec::new());
     let mut writer = BlockWriter::with_config(buffer, BlockWriterConfig { block_size }).unwrap();
-    writer
-        .write_chunk(b"Single chunk")
-        .unwrap();
+    writer.write_chunk(b"Single chunk").unwrap();
     writer.flush().unwrap();
     let mut file_data = writer.into_inner().into_inner();
 

@@ -189,4 +189,3 @@ fn test_empty_records_chunk_boundaries() {
     assert_eq!(read_records[4], b"");
     assert_eq!(read_records[5], b"final");
 }
-

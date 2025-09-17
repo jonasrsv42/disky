@@ -169,7 +169,7 @@ impl<T> ResourcePool<T> {
     ///
     /// This is a helper function to reduce code duplication for lock acquisition.
     #[inline]
-    fn acquire_lock(&self) -> Result<MutexGuard<ResourcePoolInner<T>>> {
+    fn acquire_lock(&self) -> Result<MutexGuard<'_, ResourcePoolInner<T>>> {
         self.inner
             .lock()
             .map_err(|e| DiskyError::Other(e.to_string()))
@@ -265,7 +265,7 @@ impl<T> ResourcePool<T> {
     /// This method will block the current thread if:
     /// * The pool is empty (until a resource is returned)
     /// * The pool is suspended (until it returns to Active state)
-    pub fn get_resource(&self) -> Result<Resource<T>> {
+    pub fn get_resource(&self) -> Result<Resource<'_, T>> {
         let mut inner = self.acquire_lock()?;
 
         loop {
@@ -671,7 +671,7 @@ impl<T> ResourcePool<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{mpsc, Arc};
+    use std::sync::{Arc, mpsc};
     use std::thread;
 
     #[test]

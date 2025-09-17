@@ -25,18 +25,18 @@ use crate::writer::{RecordWriter, RecordWriterConfig};
 fn test_custom_block_size() {
     // Create a file with some records
     let mut buffer = Vec::new();
-    
+
     // IMPORTANT: The reader and writer MUST use the same block size!
     let block_size = 8192u64;
-    
+
     {
         let cursor = Cursor::new(&mut buffer);
         // Use a specific block size for the writer
         let mut config = RecordWriterConfig::default();
         config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        
+
         let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-        
+
         // Write some records
         for i in 0..10 {
             let record_data = Bytes::from(vec![i as u8; 100]);
@@ -44,15 +44,15 @@ fn test_custom_block_size() {
         }
         writer.close().unwrap();
     }
-    
+
     // Create a reader with the same block size as the writer
     let cursor = Cursor::new(&buffer);
     let config = RecordReaderConfig::with_block_size(block_size).unwrap();
     let reader = RecordReader::with_config(cursor, config).unwrap();
-    
+
     // Read all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
-    
+
     // Verify we got all records correctly
     assert_eq!(records.len(), 10);
     for (i, record) in records.iter().enumerate() {
@@ -66,19 +66,19 @@ fn test_custom_block_size() {
 fn test_minimum_block_size() {
     // Create a file with a few small records
     let mut buffer = Vec::new();
-    
+
     // IMPORTANT: The reader and writer MUST use the same block size!
     // Use the minimum allowable block size
     let block_size = 128u64;
-    
+
     {
         let cursor = Cursor::new(&mut buffer);
         // Use a small block size
         let mut config = RecordWriterConfig::default();
         config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        
+
         let mut writer = RecordWriter::with_config(cursor, config).unwrap();
-        
+
         // Write small records
         for i in 0..5 {
             let record_data = Bytes::from(vec![i as u8; 10]);
@@ -86,15 +86,15 @@ fn test_minimum_block_size() {
         }
         writer.close().unwrap();
     }
-    
+
     // Create a reader with the same block size as the writer
     let cursor = Cursor::new(&buffer);
     let config = RecordReaderConfig::with_block_size(block_size).unwrap();
     let reader = RecordReader::with_config(cursor, config).unwrap();
-    
+
     // Read all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
-    
+
     // Verify we got all records correctly
     assert_eq!(records.len(), 5);
 }
@@ -107,7 +107,7 @@ fn test_corruption_strategy_config() {
     {
         let cursor = Cursor::new(&mut buffer);
         let mut writer = RecordWriter::new(cursor).unwrap();
-        
+
         // Write some records
         for i in 0..5 {
             let record_data = Bytes::from(vec![i as u8; 20]);
@@ -115,14 +115,14 @@ fn test_corruption_strategy_config() {
         }
         writer.close().unwrap();
     }
-    
+
     // Create a reader with corruption recovery enabled
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::default()
-        .with_corruption_strategy(CorruptionStrategy::Recover);
-    
+    let config =
+        RecordReaderConfig::default().with_corruption_strategy(CorruptionStrategy::Recover);
+
     let reader = RecordReader::with_config(cursor, config).unwrap();
-    
+
     // Just verify we can read all records (no corruption to recover from)
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(records.len(), 5);
@@ -133,7 +133,7 @@ fn test_corruption_strategy_config() {
 fn test_too_small_block_size() {
     // Try to create a config with a block size that's too small
     let config = RecordReaderConfig::with_block_size(10);
-    
+
     // This should fail
     assert!(config.is_err());
 }
@@ -142,12 +142,12 @@ fn test_too_small_block_size() {
 #[test]
 fn test_config_chaining() {
     // Test that method chaining works for configuration
-    let config = RecordReaderConfig::default()
-        .with_corruption_strategy(CorruptionStrategy::Recover);
-    
+    let config =
+        RecordReaderConfig::default().with_corruption_strategy(CorruptionStrategy::Recover);
+
     // Verify the corruption strategy was set
     assert_eq!(config.corruption_strategy, CorruptionStrategy::Recover);
-    
+
     // Create a file with some records
     let mut buffer = Vec::new();
     {
@@ -156,11 +156,11 @@ fn test_config_chaining() {
         writer.write_record(&Bytes::from(vec![1, 2, 3])).unwrap();
         writer.close().unwrap();
     }
-    
+
     // Create a reader with the chained config
     let cursor = Cursor::new(&buffer);
     let reader = RecordReader::with_config(cursor, config).unwrap();
-    
+
     // Verify we can read the record
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(records.len(), 1);

@@ -43,15 +43,19 @@ impl Compressor for ZstdCompressor {
     fn compress<'a>(&'a mut self, data: &'a [u8]) -> Result<&'a [u8]> {
         // Clear buffer and ensure it has adequate size
         self.compressed_buffer.clear();
-        
+
         // Estimate maximum compressed size using zstd's compress_bound
         let max_compressed_size = zstd::zstd_safe::compress_bound(data.len());
-        
+
         // Pre-allocate buffer to avoid reallocation during compression
         self.compressed_buffer.resize(max_compressed_size, 0);
-        
+
         // Compress data using zstd
-        match zstd::bulk::compress_to_buffer(data, &mut self.compressed_buffer, self.compression_level) {
+        match zstd::bulk::compress_to_buffer(
+            data,
+            &mut self.compressed_buffer,
+            self.compression_level,
+        ) {
             Ok(compressed_size) => {
                 // compress_to_buffer resizes the vector to the exact compressed size
                 // But let's be explicit about the slice size
@@ -74,9 +78,7 @@ pub struct ZstdDecompressor {
 impl ZstdDecompressor {
     /// Create a new ZstdDecompressor
     pub fn new() -> Self {
-        Self {
-            buffer: Vec::new(),
-        }
+        Self { buffer: Vec::new() }
     }
 }
 
@@ -84,7 +86,7 @@ impl Decompressor for ZstdDecompressor {
     fn decompress(&mut self, compressed_data: Bytes, expected_output_size: usize) -> Result<Bytes> {
         // Resize buffer to expected size (reusing existing capacity when possible)
         self.buffer.resize(expected_output_size, 0);
-        
+
         // Decompress directly into our reusable buffer
         match zstd::bulk::decompress_to_buffer(&compressed_data[..], &mut self.buffer) {
             Ok(actual_size) => {
@@ -95,13 +97,16 @@ impl Decompressor for ZstdDecompressor {
                         expected_output_size, actual_size
                     )));
                 }
-                
+
                 // Move data out of buffer and return as Bytes
                 // mem::take replaces buffer with empty Vec, ready for next use
                 let decompressed_data = std::mem::take(&mut self.buffer);
                 Ok(Bytes::from(decompressed_data))
             }
-            Err(e) => Err(DiskyError::Other(format!("Zstd decompression failed: {}", e))),
+            Err(e) => Err(DiskyError::Other(format!(
+                "Zstd decompression failed: {}",
+                e
+            ))),
         }
     }
 }
@@ -120,7 +125,7 @@ mod tests {
     fn test_zstd_compressor_creation() {
         let compressor = ZstdCompressor::with_level(6);
         assert!(compressor.is_ok());
-        
+
         let compressor = compressor.unwrap();
         assert_eq!(compressor.compression_level, 6);
     }

@@ -77,7 +77,7 @@
 use std::io::{Seek, Write};
 use std::sync::Arc;
 
-use crate::error::{Result, DiskyError};
+use crate::error::{DiskyError, Result};
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::sharding::Sharder;

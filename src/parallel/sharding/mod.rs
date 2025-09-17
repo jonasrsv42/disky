@@ -4,18 +4,18 @@
 //! which are individual storage units (files or memory) that can be written to or read from.
 //! Sharding is particularly useful for parallel processing and handling large datasets.
 
+mod auto_sharder;
+mod file_locator;
+mod file_sharder;
+mod memory_locator;
+mod random_locator;
 mod traits;
 mod utils;
-mod auto_sharder;
-mod file_sharder;
-mod file_locator;
-mod random_locator;
-mod memory_locator;
 
 // Re-export the main types for easier access
-pub use traits::{Sharder, ShardLocator};
 pub use auto_sharder::Autosharder;
-pub use file_sharder::{FileSharder, FileSharderConfig};
 pub use file_locator::{FileShardLocator, MultiPathShardLocator};
-pub use random_locator::{RandomRepeatingFileShardLocator, RandomMultiPathShardLocator};
+pub use file_sharder::{FileSharder, FileSharderConfig};
 pub use memory_locator::MemoryShardLocator;
+pub use random_locator::{RandomMultiPathShardLocator, RandomRepeatingFileShardLocator};
+pub use traits::{ShardLocator, Sharder};

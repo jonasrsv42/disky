@@ -18,8 +18,8 @@
 //!
 //! # Block Header Behaviors
 //! One particular edge case is the behavior of block headers at block boundaries during append operations.
-//! According to the Riegeli spec, when a block header lies exactly between chunks (as in an append case), 
-//! it's considered to interrupt the next chunk. Since there is no "previous" portion of the chunk before 
+//! According to the Riegeli spec, when a block header lies exactly between chunks (as in an append case),
+//! it's considered to interrupt the next chunk. Since there is no "previous" portion of the chunk before
 //! the boundary, the previous_chunk field is correctly set to 0.
 //!
 //! # File Structure
@@ -32,8 +32,8 @@
 use std::io::Cursor;
 
 use crate::compression::CompressionType;
-use crate::writer::{RecordWriter, RecordWriterConfig};
 use crate::tests::utils::format_bytes_for_assert;
+use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Test 1: Append to a file ending exactly at a block boundary
 /// Tests appending to a file that ends precisely at a block boundary
@@ -42,57 +42,58 @@ fn test_append_at_block_boundary() {
     // Create a test file that ends exactly at a block boundary
     // First, we need a small block size for testing
     let block_size = 128;
-    
+
     // Create the initial file
     let cursor = Cursor::new(Vec::new());
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
-        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size).unwrap(),
+        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
+            .unwrap(),
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
-    
+
     // Calculate required record size to hit exact block size
     // File starts with 64 bytes (24 block header + 40 signature)
     // Chunk header is 40 bytes, and 3 bytes for overhead
     // So record needs to be 128 - 64 - 40 - 3 = 21 bytes
     let initial_record = vec![b'y'; 21];
     writer.write_record(&initial_record).unwrap();
-    
+
     // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the initial data
     let initial_data = writer.get_data().unwrap();
     let initial_size = initial_data.len();
-    
+
     // Verify we've created a file that's exactly at the block boundary
-    assert_eq!(initial_size, block_size as usize, "Initial file size should be exactly one block");
-    
+    assert_eq!(
+        initial_size, block_size as usize,
+        "Initial file size should be exactly one block"
+    );
+
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer = RecordWriter::for_append_with_config(
-        cursor, 
-        initial_size as u64, 
-        config
-    ).unwrap();
-    
+    let mut appending_writer =
+        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+
     // Append a new record
     let append_record = vec![b'z'; 10];
     appending_writer.write_record(&append_record).unwrap();
-    
+
     // Close to ensure all data is written
     appending_writer.close().unwrap();
-    
+
     // Get the appended data
     let appended_data = appending_writer.get_data().unwrap();
-    
+
     // For debugging, uncomment to see the actual output bytes
     // if true {
     //     panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
     // }
-    
+
     // The expected bytes for the appended file - copied from actual output
     #[rustfmt::skip]
     const EXPECTED_APPENDED_FILE: &[u8] = &[
@@ -150,15 +151,26 @@ fn test_append_at_block_boundary() {
         0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, // 8 'z's
         0x7a, 0x7a                                      // 2 'z's
     ];
-    
+
     // Verify the file content
     if appended_data != EXPECTED_APPENDED_FILE {
-        panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            appended_data.len(),
+            format_bytes_for_assert(&appended_data)
+        );
     }
-    
-    assert_eq!(appended_data.len(), EXPECTED_APPENDED_FILE.len(), "File sizes don't match");
-    assert_eq!(appended_data, EXPECTED_APPENDED_FILE, "File content doesn't match expected");
-    
+
+    assert_eq!(
+        appended_data.len(),
+        EXPECTED_APPENDED_FILE.len(),
+        "File sizes don't match"
+    );
+    assert_eq!(
+        appended_data, EXPECTED_APPENDED_FILE,
+        "File content doesn't match expected"
+    );
+
     // The only assertion we need is to verify the exact bytes match
     // All the specific field checks are implicit in the byte array comparison
 }
@@ -169,52 +181,50 @@ fn test_append_at_block_boundary() {
 fn test_append_mid_block_multi_records() {
     // Create a cursor as our sink for the initial file
     let cursor = Cursor::new(Vec::new());
-    
+
     // Create a writer with default config but a larger block size for testing
     let block_size = 512;
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
-        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size).unwrap(),
+        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
+            .unwrap(),
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
-    
+
     // Write multiple small records
     writer.write_record(b"record-1").unwrap();
     writer.write_record(b"record-2").unwrap();
     writer.write_record(b"record-3").unwrap();
-    
+
     // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the data from the first writer
     let initial_data = writer.get_data().unwrap();
     let initial_size = initial_data.len();
-    
+
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer = RecordWriter::for_append_with_config(
-        cursor, 
-        initial_size as u64, 
-        config
-    ).unwrap();
-    
+    let mut appending_writer =
+        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+
     // Append additional records
     appending_writer.write_record(b"appended-1").unwrap();
     appending_writer.write_record(b"appended-2").unwrap();
-    
+
     // Close to ensure all data is written
     appending_writer.close().unwrap();
-    
+
     // Get the appended data
     let appended_data = appending_writer.get_data().unwrap();
-    
+
     // For debugging, uncomment to see the actual output bytes
     // if true {
     //     panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
     // }
-    
+
     // Define the expected bytes for the appended file - copied directly from actual output
     #[rustfmt::skip]
     const EXPECTED_APPENDED_MULTI_RECORD_FILE: &[u8] = &[
@@ -265,14 +275,25 @@ fn test_append_mid_block_multi_records() {
         0x61, 0x70, 0x70, 0x65, 0x6e, 0x64, 0x65, 0x64, // "appended-"
         0x2d, 0x32                                      // "2"
     ];
-    
+
     // Verify the file content matches exactly
     if appended_data != EXPECTED_APPENDED_MULTI_RECORD_FILE {
-        panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            appended_data.len(),
+            format_bytes_for_assert(&appended_data)
+        );
     }
-    
-    assert_eq!(appended_data.len(), EXPECTED_APPENDED_MULTI_RECORD_FILE.len(), "File sizes don't match");
-    assert_eq!(appended_data, EXPECTED_APPENDED_MULTI_RECORD_FILE, "File content doesn't match expected");
+
+    assert_eq!(
+        appended_data.len(),
+        EXPECTED_APPENDED_MULTI_RECORD_FILE.len(),
+        "File sizes don't match"
+    );
+    assert_eq!(
+        appended_data, EXPECTED_APPENDED_MULTI_RECORD_FILE,
+        "File content doesn't match expected"
+    );
 }
 
 /// Test 3: Empty file append
@@ -281,50 +302,49 @@ fn test_append_mid_block_multi_records() {
 fn test_append_to_empty_file() {
     // Create a cursor as our sink for the initial empty file
     let cursor = Cursor::new(Vec::new());
-    
+
     // Create a writer with default config
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
         ..Default::default()
     };
-    
+
     // Create an empty file (just the signature, no records)
     let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
-    
+
     // Close right away without writing any records
     writer.close().unwrap();
-    
+
     // Get the data from the first writer
     let initial_data = writer.get_data().unwrap();
     let initial_size = initial_data.len();
-    
+
     // For debugging, uncomment to see the initial output bytes
     // if true {
     //     panic!("Initial data bytes (len:{}):\n{}", initial_data.len(), format_bytes_for_assert(&initial_data));
     // }
-    
+
     // Now create a new writer that appends to this empty file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer = RecordWriter::for_append_with_config(
-        cursor, 
-        initial_size as u64, 
-        config
-    ).unwrap();
-    
+    let mut appending_writer =
+        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+
     // Append records to the previously empty file
-    appending_writer.write_record(b"first-appended-record").unwrap();
-    
+    appending_writer
+        .write_record(b"first-appended-record")
+        .unwrap();
+
     // Close to ensure all data is written
     appending_writer.close().unwrap();
-    
+
     // Get the appended data
     let appended_data = appending_writer.get_data().unwrap();
-    
+
     // For debugging, uncomment to see the actual output bytes
     // if true {
     //     panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
     // }
-    
+
     // The expected bytes for an appended empty file - copied from actual output
     #[rustfmt::skip]
     const EXPECTED_EMPTY_APPEND_FILE: &[u8] = &[
@@ -357,15 +377,26 @@ fn test_append_to_empty_file() {
         0x70, 0x65, 0x6e, 0x64, 0x65, 0x64, 0x2d, 0x72, // "pended-r"
         0x65, 0x63, 0x6f, 0x72, 0x64                    // "ecord"
     ];
-    
+
     // Verify the file content matches exactly
     if appended_data != EXPECTED_EMPTY_APPEND_FILE {
-        panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            appended_data.len(),
+            format_bytes_for_assert(&appended_data)
+        );
     }
-    
-    assert_eq!(appended_data.len(), EXPECTED_EMPTY_APPEND_FILE.len(), "File sizes don't match");
-    assert_eq!(appended_data, EXPECTED_EMPTY_APPEND_FILE, "File content doesn't match expected");
-    
+
+    assert_eq!(
+        appended_data.len(),
+        EXPECTED_EMPTY_APPEND_FILE.len(),
+        "File sizes don't match"
+    );
+    assert_eq!(
+        appended_data, EXPECTED_EMPTY_APPEND_FILE,
+        "File content doesn't match expected"
+    );
+
     // No additional byte-specific assertions needed since we're comparing the entire byte array
 }
 
@@ -377,54 +408,55 @@ fn test_append_to_empty_file() {
 fn test_block_boundary_alignment() {
     // Create a test file that ends exactly at a block boundary
     let block_size = 128;
-    
+
     // Create the initial file
     let cursor = Cursor::new(Vec::new());
     let config = RecordWriterConfig {
         compression_type: CompressionType::None,
-        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size).unwrap(),
+        block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
+            .unwrap(),
         ..Default::default()
     };
-    
+
     let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
-    
+
     // Write exactly enough data to reach the block boundary
     let initial_record = vec![b'y'; 21];
     writer.write_record(&initial_record).unwrap();
-    
+
     // Close to ensure all data is written
     writer.close().unwrap();
-    
+
     // Get the initial data
     let initial_data = writer.get_data().unwrap();
     let initial_size = initial_data.len();
-    
+
     // Verify we've created a file that's exactly at the block boundary
-    assert_eq!(initial_size, block_size as usize, "Initial file size should be exactly one block");
-    
+    assert_eq!(
+        initial_size, block_size as usize,
+        "Initial file size should be exactly one block"
+    );
+
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer = RecordWriter::for_append_with_config(
-        cursor, 
-        initial_size as u64, 
-        config
-    ).unwrap();
-    
+    let mut appending_writer =
+        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+
     // Append a large record that will cross another block boundary
     let large_record = vec![b'z'; 100];
     appending_writer.write_record(&large_record).unwrap();
-    
+
     // Close to ensure all data is written
     appending_writer.close().unwrap();
-    
+
     // Get the appended data
     let appended_data = appending_writer.get_data().unwrap();
-    
+
     // For debugging, uncomment to see the actual output bytes
     // if true {
     //     panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
     // }
-    
+
     // The exact expected bytes for an appended file - copied from actual output
     // Note that when appending to a file that ends at a block boundary,
     // the implementation correctly inserts a block header with previous_chunk=0.
@@ -516,29 +548,43 @@ fn test_block_boundary_alignment() {
         0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, /* 8 'z's */
         0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a        /* 7 'z's */
     ];
-    
+
     // For debugging, uncomment to see the actual output bytes
     // if true {
     //     panic!("Actual bytes:\n{}", format_bytes_for_assert(&appended_data));
     // }
-    
+
     // Verify the file content matches exactly
     if appended_data != EXPECTED_APPENDED_BLOCK_BOUNDARY_FILE {
-        panic!("Actual bytes (len:{}):\n{}", appended_data.len(), format_bytes_for_assert(&appended_data));
+        panic!(
+            "Actual bytes (len:{}):\n{}",
+            appended_data.len(),
+            format_bytes_for_assert(&appended_data)
+        );
     }
-    
-    assert_eq!(appended_data.len(), EXPECTED_APPENDED_BLOCK_BOUNDARY_FILE.len(), "File sizes don't match");
-    assert_eq!(appended_data, EXPECTED_APPENDED_BLOCK_BOUNDARY_FILE, "File content doesn't match expected");
-    
+
+    assert_eq!(
+        appended_data.len(),
+        EXPECTED_APPENDED_BLOCK_BOUNDARY_FILE.len(),
+        "File sizes don't match"
+    );
+    assert_eq!(
+        appended_data, EXPECTED_APPENDED_BLOCK_BOUNDARY_FILE,
+        "File content doesn't match expected"
+    );
+
     // Check that the file has grown beyond the first block
-    assert!(appended_data.len() > block_size as usize, "File should be larger than one block");
-    
+    assert!(
+        appended_data.len() > block_size as usize,
+        "File should be larger than one block"
+    );
+
     // Examine the previous_chunk field in the appended chunk header
     // According to the Riegeli spec, when a block header lies exactly between chunks,
     // it's considered to interrupt the next chunk. Since we're appending at a block boundary,
     // the new chunk starts exactly at this boundary, so the previous_chunk value is correctly 0
     // (there is no "previous" portion of the chunk before the boundary).
-    let previous_chunk_bytes = &appended_data[128+8..128+16];
+    let previous_chunk_bytes = &appended_data[128 + 8..128 + 16];
     let previous_chunk_value = u64::from_le_bytes([
         previous_chunk_bytes[0],
         previous_chunk_bytes[1],
@@ -549,8 +595,10 @@ fn test_block_boundary_alignment() {
         previous_chunk_bytes[6],
         previous_chunk_bytes[7],
     ]);
-    
-    // Verify the previous_chunk field is correctly set to 0
-    assert_eq!(previous_chunk_value, 0, "The previous_chunk field should be 0 when appending at a block boundary");
-}
 
+    // Verify the previous_chunk field is correctly set to 0
+    assert_eq!(
+        previous_chunk_value, 0,
+        "The previous_chunk field should be 0 when appending at a block boundary"
+    );
+}

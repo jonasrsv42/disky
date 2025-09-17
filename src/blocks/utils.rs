@@ -24,10 +24,10 @@ pub const DEFAULT_BLOCK_SIZE: u64 = 1 << 16;
 /// * `Result<()>` - Ok if valid, or an error explaining why it's invalid
 pub fn validate_block_size(block_size: u64) -> Result<()> {
     if block_size < BLOCK_HEADER_SIZE * 2 {
-        return Err(DiskyError::Other(
-            format!("Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
-                    block_size, BLOCK_HEADER_SIZE)
-        ));
+        return Err(DiskyError::Other(format!(
+            "Block size ({}) must be at least twice the header size ({}) to prevent cascading headers",
+            block_size, BLOCK_HEADER_SIZE
+        )));
     }
     Ok(())
 }
@@ -114,4 +114,3 @@ pub fn validate_header_values(previous_chunk: u64, next_chunk: u64, block_size: 
 
     Ok(())
 }
-

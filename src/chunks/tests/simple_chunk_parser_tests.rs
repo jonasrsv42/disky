@@ -1,9 +1,9 @@
 // Tests for SimpleChunkParser
 
-use crate::chunks::header_parser::parse_chunk_header;
-use crate::chunks::writer::ChunkWriter;
 use crate::chunks::SimpleChunkParser;
 use crate::chunks::SimpleChunkWriter;
+use crate::chunks::header_parser::parse_chunk_header;
+use crate::chunks::writer::ChunkWriter;
 use crate::compression::core::CompressionType;
 use crate::compression::create_decompressors_map;
 use crate::error::DiskyError;
@@ -117,7 +117,8 @@ fn test_multiple_chunks() {
 
     // Create parser for the first chunk - it gets a mutable reference to the buffer
     let mut decompressors = create_decompressors_map();
-    let mut reader1 = SimpleChunkParser::new(header1, combined_chunks.clone(), &mut decompressors).unwrap();
+    let mut reader1 =
+        SimpleChunkParser::new(header1, combined_chunks.clone(), &mut decompressors).unwrap();
 
     // Read records from first chunk
     let record1 = match reader1.next().unwrap() {
@@ -151,7 +152,8 @@ fn test_multiple_chunks() {
     let header2 = parse_chunk_header(&mut combined_chunks).unwrap();
 
     // Create parser for the second chunk
-    let mut reader2 = SimpleChunkParser::new(header2, combined_chunks.clone(), &mut decompressors).unwrap();
+    let mut reader2 =
+        SimpleChunkParser::new(header2, combined_chunks.clone(), &mut decompressors).unwrap();
 
     // Read records from second chunk
     let record1 = match reader2.next().unwrap() {
@@ -203,7 +205,8 @@ fn test_empty_chunk() {
 
     // Create a parser
     let mut decompressors = create_decompressors_map();
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
+    let mut reader =
+        SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Check initial state
     assert_eq!(reader.records_read(), 0);
@@ -241,7 +244,8 @@ fn test_large_records() {
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
     let mut decompressors = create_decompressors_map();
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
+    let mut reader =
+        SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Read the large record
     let record = match reader.next().unwrap() {
@@ -290,7 +294,8 @@ fn test_mixed_record_sizes() {
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
     let mut decompressors = create_decompressors_map();
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
+    let mut reader =
+        SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Read and verify each record
     // Empty record
@@ -388,7 +393,8 @@ fn test_iteration_pattern() {
     // Use a block scope for the reader
     let actual_records = {
         let mut decompressors = create_decompressors_map();
-        let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
+        let mut reader =
+            SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
         let mut records = Vec::new();
 
         // Iterate over records using a common pattern
@@ -492,7 +498,8 @@ fn test_records_read_counter() {
     let header = parse_chunk_header(&mut chunk_data).unwrap();
 
     let mut decompressors = create_decompressors_map();
-    let mut reader = SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
+    let mut reader =
+        SimpleChunkParser::new(header, chunk_data.clone(), &mut decompressors).unwrap();
 
     // Initially 0 records read
     assert_eq!(reader.records_read(), 0);
@@ -691,7 +698,7 @@ fn test_corrupted_sizes_length() {
     corrupted_data.extend_from_slice(&chunk_data[0..1]); // Keep compression type
     corrupted_data.put_u8(0xFF); // Invalid varint (will keep reading)
     corrupted_data.put_u8(0xFF); // Invalid varint continuation
-                                 // Add rest of data
+    // Add rest of data
     if chunk_data.len() > 3 {
         corrupted_data.extend_from_slice(&chunk_data[3..]);
     }
@@ -723,7 +730,7 @@ fn test_invalid_sizes_length() {
     // Corrupt the data by modifying the sizes length to be larger than available data
     let mut corrupted_data = BytesMut::new();
     corrupted_data.extend_from_slice(&chunk_data[0..1]); // Keep compression type
-                                                         // Insert a varint that's too large (larger than remaining data)
+    // Insert a varint that's too large (larger than remaining data)
     corrupted_data.put_u8(0x80); // Start of varint
     corrupted_data.put_u8(0x80); // Continuation
     corrupted_data.put_u8(0x04); // End of varint, value too large
@@ -854,7 +861,7 @@ fn test_record_size_exceeds_available_data() {
         writer.write_record(b"Record 1").unwrap();
         writer.write_record(b"Record 2").unwrap();
         let serialized_chunk = Bytes::copy_from_slice(writer.serialize_chunk().unwrap());
-        
+
         // Copy to Bytes for parsing
         serialized_chunk.clone()
     };
@@ -894,7 +901,8 @@ fn test_record_size_exceeds_available_data() {
 
     // Create parser with custom data
     let mut decompressors = create_decompressors_map();
-    let mut reader = SimpleChunkParser::new(custom_header, chunk_bytes, &mut decompressors).unwrap();
+    let mut reader =
+        SimpleChunkParser::new(custom_header, chunk_bytes, &mut decompressors).unwrap();
 
     // First read should fail because record size is too large
     let result = reader.next();

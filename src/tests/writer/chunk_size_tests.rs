@@ -163,4 +163,3 @@ fn test_chunk_size_with_block_boundaries() {
         minimum_size
     );
 }
-

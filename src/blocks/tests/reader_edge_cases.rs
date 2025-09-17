@@ -21,20 +21,14 @@ fn test_empty_and_tiny_chunks() {
 
     // Write an empty chunk - this should be ignored by the writer
     let empty_chunk = b"";
-    writer
-        .write_chunk(empty_chunk)
-        .unwrap();
+    writer.write_chunk(empty_chunk).unwrap();
 
     // Write a tiny chunk (1 byte)
     let tiny_chunk = b"X";
-    writer
-        .write_chunk(tiny_chunk)
-        .unwrap();
+    writer.write_chunk(tiny_chunk).unwrap();
 
     // Write another empty chunk - this should also be ignored
-    writer
-        .write_chunk(empty_chunk)
-        .unwrap();
+    writer.write_chunk(empty_chunk).unwrap();
 
     // Write final regular chunk
     let chunk3 = b"Final regular chunk";
@@ -101,9 +95,7 @@ fn test_file_boundary_edge_cases() {
 
     // Write a chunk that's exactly one usable block size
     let one_block_chunk = vec![b'Y'; usable_block_size as usize];
-    writer
-        .write_chunk(&one_block_chunk)
-        .unwrap();
+    writer.write_chunk(&one_block_chunk).unwrap();
 
     // Verify we're at a block boundary again
     let pos = writer.current_position();
@@ -117,9 +109,7 @@ fn test_file_boundary_edge_cases() {
 
     // Write a tiny chunk
     let tiny_chunk = b"Z";
-    writer
-        .write_chunk(tiny_chunk)
-        .unwrap();
+    writer.write_chunk(tiny_chunk).unwrap();
 
     writer.flush().unwrap();
     let file_data = writer.into_inner().into_inner();
@@ -146,9 +136,5 @@ fn test_file_boundary_edge_cases() {
     // Verify we've reached EOF
     let result = reader.read_chunks();
     assert!(result.is_ok());
-    assert!(matches!(
-        result.unwrap(),
-        BlocksPiece::EOF
-    ));
+    assert!(matches!(result.unwrap(), BlocksPiece::EOF));
 }
-

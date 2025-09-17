@@ -20,10 +20,10 @@
 
 use bytes::Bytes;
 use log::debug;
+use rand::SeedableRng;
 use rand::distributions::WeightedIndex;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
 
 use crate::error::{DiskyError, Result};
 use crate::reader::DiskyPiece;
@@ -267,4 +267,3 @@ where
 mod tests {
     // Tests will be added in a future PR
 }
-

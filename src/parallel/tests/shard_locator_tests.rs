@@ -1,11 +1,11 @@
 use std::io::{Cursor, Read, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
 use crate::error::{DiskyError, Result};
 use crate::parallel::sharding::{
-    FileShardLocator, FileSharder, MemoryShardLocator, RandomRepeatingFileShardLocator, 
+    FileShardLocator, FileSharder, MemoryShardLocator, RandomRepeatingFileShardLocator,
     ShardLocator, Sharder,
 };
 
@@ -74,7 +74,11 @@ fn test_file_shard_locator_empty() -> Result<()> {
     match result {
         Err(DiskyError::Other(msg)) => {
             // Verify the error message contains "No shards found"
-            assert!(msg.contains("No shards found"), "Expected 'No shards found' error, got: {}", msg);
+            assert!(
+                msg.contains("No shards found"),
+                "Expected 'No shards found' error, got: {}",
+                msg
+            );
         }
         Ok(_) => panic!("Expected an error, but got success"),
         Err(e) => panic!("Unexpected error type: {}", e),
@@ -179,7 +183,11 @@ fn test_random_repeating_file_shard_locator_empty() -> Result<()> {
     match result {
         Err(DiskyError::Other(msg)) => {
             // Verify the error message contains "No shards found"
-            assert!(msg.contains("No shards found"), "Expected 'No shards found' error, got: {}", msg);
+            assert!(
+                msg.contains("No shards found"),
+                "Expected 'No shards found' error, got: {}",
+                msg
+            );
         }
         Ok(_) => panic!("Expected an error, but got success"),
         Err(e) => panic!("Unexpected error type: {}", e),
@@ -187,4 +195,3 @@ fn test_random_repeating_file_shard_locator_empty() -> Result<()> {
 
     Ok(())
 }
-

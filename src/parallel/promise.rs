@@ -152,8 +152,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
     use std::sync::Arc;
+    use std::sync::mpsc;
     use std::thread;
 
     #[test]
@@ -237,15 +237,15 @@ mod tests {
     fn test_multiple_waiters_one_gets_value() {
         // Create a shared promise
         let promise = Arc::new(Promise::new());
-        
+
         // Channel for threads to signal they're ready
         let (threads_ready_tx, threads_ready_rx) = mpsc::channel();
-        
+
         // Use separate channels for each thread to avoid Receiver cloning
         let (start_tx1, start_rx1) = mpsc::channel();
         let (start_tx2, start_rx2) = mpsc::channel();
         let (start_tx3, start_rx3) = mpsc::channel();
-        
+
         // Thread coordination counter
         let thread_count = 3;
         let mut ready_count = 0;
@@ -258,7 +258,7 @@ mod tests {
             threads_ready_tx1.send(()).unwrap();
             // Wait for the start signal
             start_rx1.recv().unwrap();
-            
+
             // Try to consume the promise directly
             // If another thread has already consumed it, this will fail
             match promise1.wait() {
@@ -274,7 +274,7 @@ mod tests {
             threads_ready_tx2.send(()).unwrap();
             // Wait for the start signal
             start_rx2.recv().unwrap();
-            
+
             match promise2.wait() {
                 Ok(v) => Some(v),
                 Err(_) => None,
@@ -288,7 +288,7 @@ mod tests {
             threads_ready_tx3.send(()).unwrap();
             // Wait for the start signal
             start_rx3.recv().unwrap();
-            
+
             match promise3.wait() {
                 Ok(v) => Some(v),
                 Err(_) => None,

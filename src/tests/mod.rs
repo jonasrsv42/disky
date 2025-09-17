@@ -15,8 +15,6 @@
 //! Tests for the Riegeli implementation.
 
 // Import test modules
+pub mod reader;
 pub mod utils;
 pub mod writer;
-pub mod reader;
-
-

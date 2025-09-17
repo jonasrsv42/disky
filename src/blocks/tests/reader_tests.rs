@@ -155,15 +155,9 @@ fn test_multiple_chunks_in_single_block() {
     );
 
     // Write all three chunks individually
-    writer
-        .write_chunk(small_chunk1)
-        .unwrap();
-    writer
-        .write_chunk(small_chunk2)
-        .unwrap();
-    writer
-        .write_chunk(small_chunk3)
-        .unwrap();
+    writer.write_chunk(small_chunk1).unwrap();
+    writer.write_chunk(small_chunk2).unwrap();
+    writer.write_chunk(small_chunk3).unwrap();
     writer.flush().unwrap();
 
     // Get the file data

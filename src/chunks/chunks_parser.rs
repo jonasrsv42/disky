@@ -74,8 +74,8 @@
 //! # }
 //! ```
 
-use std::collections::BTreeMap;
 use bytes::{Buf, Bytes};
+use std::collections::BTreeMap;
 
 use crate::chunks::header::{ChunkHeader, ChunkType};
 use crate::chunks::header_parser::parse_chunk_header;
@@ -114,7 +114,7 @@ pub enum ChunkPiece {
 enum State {
     /// Ready to parse a new chunk - initial state or after completing a chunk
     Fresh,
-    
+
     /// Failed while reading a chunk's header or validating chunk data - contains the error message
     /// In this state, we cannot determine where the next chunk begins, making skipping impossible
     CorruptChunk(String),
@@ -214,17 +214,14 @@ impl ChunksParser {
             State::Fresh | State::SimpleChunk(_) => {
                 self.state = State::Fresh;
                 Ok(())
-            },
-            State::CorruptChunk(err_msg) => {
-                Err(DiskyError::Other(
-                    format!("Cannot skip chunk: cannot determine next chunk position due to corruption: {}", err_msg)
-                ))
-            },
-            State::Finish => {
-                Err(DiskyError::Other(
-                    "Cannot skip chunk: parser has finished".to_string()
-                ))
             }
+            State::CorruptChunk(err_msg) => Err(DiskyError::Other(format!(
+                "Cannot skip chunk: cannot determine next chunk position due to corruption: {}",
+                err_msg
+            ))),
+            State::Finish => Err(DiskyError::Other(
+                "Cannot skip chunk: parser has finished".to_string(),
+            )),
         }
     }
 
@@ -244,7 +241,10 @@ impl ChunksParser {
     /// - The chunk header cannot be parsed
     /// - The chunk data is incomplete
     /// - The chunk type is unsupported
-    fn next_chunk(&mut self, decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>) -> Result<ChunkPiece> {
+    fn next_chunk(
+        &mut self,
+        decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>,
+    ) -> Result<ChunkPiece> {
         if self.buffer.is_empty() {
             self.state = State::Finish;
             return Ok(ChunkPiece::ChunksEnd);
@@ -276,7 +276,7 @@ impl ChunksParser {
 
         // Split out the current chunk and advance buffer to the next chunk.
         let buffer_view = self.buffer.split_to(header.data_size as usize);
-        
+
         // After split_to, we've advanced the buffer, so we can set state to Fresh
         // This ensures we can skip to the next chunk if there's an error later
         self.state = State::Fresh;
@@ -352,7 +352,10 @@ impl ChunksParser {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn next(&mut self, decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>) -> Result<ChunkPiece> {
+    pub fn next(
+        &mut self,
+        decompressors: &mut BTreeMap<u8, Box<dyn Decompressor>>,
+    ) -> Result<ChunkPiece> {
         match &mut self.state {
             State::Fresh => self.next_chunk(decompressors),
             State::SimpleChunk(simple_chunk_parser) => match simple_chunk_parser.next()? {
@@ -368,7 +371,7 @@ impl ChunksParser {
                     "Cannot advance: chunk is corrupted and position of next chunk cannot be determined: {}",
                     err_msg
                 )))
-            },
+            }
             State::Finish => Err(DiskyError::Other(
                 "Cannot advance on a finished ChunksParser.".to_string(),
             )),

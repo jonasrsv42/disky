@@ -115,10 +115,7 @@ fn test_close_and_reopen() {
     // Writing after close should fail with WritingClosedFile error
     let result = writer.write_record(b"Record 3");
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        DiskyError::WritingClosedFile
-    ));
+    assert!(matches!(result.unwrap_err(), DiskyError::WritingClosedFile));
 
     // Get the written data directly
     let data = writer.get_data().unwrap();
@@ -170,4 +167,3 @@ fn test_no_extra_empty_chunk() {
     // State should still be Flushed
     assert_eq!(writer.get_state(), &WriterState::Flushed);
 }
-

@@ -1,13 +1,13 @@
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
-use std::collections::{HashSet, HashMap};
 
 use tempfile::tempdir;
 
 use crate::error::Result;
 use crate::parallel::sharding::{
-    RandomRepeatingFileShardLocator, RandomMultiPathShardLocator, ShardLocator
+    RandomMultiPathShardLocator, RandomRepeatingFileShardLocator, ShardLocator,
 };
 
 // Helper function to create test shards
@@ -34,7 +34,7 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     let temp_dir = tempdir()?;
     let dir_path = temp_dir.path().to_path_buf();
 
-    // Create several shard files (enough to make it statistically unlikely 
+    // Create several shard files (enough to make it statistically unlikely
     // that we'd get the same order by chance)
     let shard_count = 10;
     create_test_shards(&dir_path, shard_count)?;
@@ -81,15 +81,15 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
 
     // Check that all three cycles have different orders
     assert!(
-        first_cycle_order != second_cycle_order, 
+        first_cycle_order != second_cycle_order,
         "First and second cycles had identical shard orders, which suggests the RNG seed isn't changing between reshuffles"
     );
-    
+
     assert!(
         second_cycle_order != third_cycle_order,
         "Second and third cycles had identical shard orders, which suggests the RNG seed isn't changing between reshuffles"
     );
-    
+
     assert!(
         first_cycle_order != third_cycle_order,
         "First and third cycles had identical shard orders, which suggests the RNG seed isn't changing between reshuffles"
@@ -100,12 +100,21 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     let mut position_changes = HashMap::new();
 
     for (shard_content, _) in expected_shards.iter().map(|s| (s, ())) {
-        let pos1 = first_cycle_order.iter().position(|s| s == shard_content).unwrap();
-        let pos2 = second_cycle_order.iter().position(|s| s == shard_content).unwrap();
-        let pos3 = third_cycle_order.iter().position(|s| s == shard_content).unwrap();
+        let pos1 = first_cycle_order
+            .iter()
+            .position(|s| s == shard_content)
+            .unwrap();
+        let pos2 = second_cycle_order
+            .iter()
+            .position(|s| s == shard_content)
+            .unwrap();
+        let pos3 = third_cycle_order
+            .iter()
+            .position(|s| s == shard_content)
+            .unwrap();
 
         // Count position changes
-        if pos1 != pos2 { 
+        if pos1 != pos2 {
             *position_changes.entry(shard_content).or_insert(0) += 1;
         }
         if pos2 != pos3 {
@@ -117,11 +126,14 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     }
 
     // Check that at least half of the shards changed position at least once
-    let shards_that_moved = position_changes.values().filter(|&&count| count > 0).count();
+    let shards_that_moved = position_changes
+        .values()
+        .filter(|&&count| count > 0)
+        .count();
     assert!(
         shards_that_moved >= shard_count / 2,
-        "Only {} out of {} shards changed position across cycles", 
-        shards_that_moved, 
+        "Only {} out of {} shards changed position across cycles",
+        shards_that_moved,
         shard_count
     );
 
@@ -185,15 +197,15 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
 
     // Check that all three cycles have different orders
     assert!(
-        first_cycle_order != second_cycle_order, 
+        first_cycle_order != second_cycle_order,
         "First and second cycles had identical shard orders, which suggests the RNG seed isn't changing between reshuffles"
     );
-    
+
     assert!(
         second_cycle_order != third_cycle_order,
         "Second and third cycles had identical shard orders, which suggests the RNG seed isn't changing between reshuffles"
     );
-    
+
     assert!(
         first_cycle_order != third_cycle_order,
         "First and third cycles had identical shard orders, which suggests the RNG seed isn't changing between reshuffles"
@@ -204,12 +216,21 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
     let mut position_changes = HashMap::new();
 
     for (shard_content, _) in expected_shards.iter().map(|s| (s, ())) {
-        let pos1 = first_cycle_order.iter().position(|s| s == shard_content).unwrap();
-        let pos2 = second_cycle_order.iter().position(|s| s == shard_content).unwrap();
-        let pos3 = third_cycle_order.iter().position(|s| s == shard_content).unwrap();
+        let pos1 = first_cycle_order
+            .iter()
+            .position(|s| s == shard_content)
+            .unwrap();
+        let pos2 = second_cycle_order
+            .iter()
+            .position(|s| s == shard_content)
+            .unwrap();
+        let pos3 = third_cycle_order
+            .iter()
+            .position(|s| s == shard_content)
+            .unwrap();
 
         // Count position changes
-        if pos1 != pos2 { 
+        if pos1 != pos2 {
             *position_changes.entry(shard_content).or_insert(0) += 1;
         }
         if pos2 != pos3 {
@@ -221,11 +242,14 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
     }
 
     // Check that at least half of the shards changed position at least once
-    let shards_that_moved = position_changes.values().filter(|&&count| count > 0).count();
+    let shards_that_moved = position_changes
+        .values()
+        .filter(|&&count| count > 0)
+        .count();
     assert!(
         shards_that_moved >= shard_count / 2,
-        "Only {} out of {} shards changed position across cycles", 
-        shards_that_moved, 
+        "Only {} out of {} shards changed position across cycles",
+        shards_that_moved,
         shard_count
     );
 

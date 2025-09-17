@@ -178,4 +178,3 @@ fn test_auto_sharding_with_failing_sharder() {
     // Attempting to write another record should fail since there are no available writers
     assert!(parallel_writer.write_record(b"third").is_err());
 }
-

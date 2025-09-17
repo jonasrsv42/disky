@@ -330,23 +330,23 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         // Get the current length before reading
         let old_len = self.buffer.len();
-        
+
         // Check if we need more capacity
         let remaining = self.buffer.capacity() - old_len;
         if remaining < to_read {
             // Only reserve additional space if needed
             self.buffer.reserve(to_read - remaining);
         }
-        
+
         // Resize the buffer to have enough initialized space
         self.buffer.resize(old_len + to_read, 0);
-        
+
         // Create a mutable slice of the newly allocated portion
         let mut_slice = &mut self.buffer.as_mut()[old_len..old_len + to_read];
-        
+
         // Read directly into the allocated slice of BytesMut
         let bytes_read = self.source.read(mut_slice)?;
-        
+
         if bytes_read < to_read {
             // If we read less than expected, truncate the buffer back to actual size
             self.buffer.truncate(old_len + bytes_read);
@@ -354,7 +354,6 @@ impl<Source: Read + Seek> BlockReader<Source> {
 
         Ok(bytes_read)
     }
-
 
     /// Reads chunks data, handling block headers.
     ///
@@ -583,8 +582,11 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 "Attempted to recover from `ReadHeader` state".to_string(),
             )),
             BlockReaderState::ReadCorruptedHeader(block_header) => {
-                warn!("Attempting to recover from corrupted block header: {:?}", block_header);
-                
+                warn!(
+                    "Attempting to recover from corrupted block header: {:?}",
+                    block_header
+                );
+
                 // Find the next valid chunk by seeking to the next block boundary
                 // and reading its header
                 info!("Trying to find next valid chunk...");
@@ -597,15 +599,21 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 Ok(())
             }
             BlockReaderState::BlockHeaderInconsistency(block_header) => {
-                warn!("Attempting to recover from block header inconsistency: {:?}", block_header);
-                
+                warn!(
+                    "Attempting to recover from block header inconsistency: {:?}",
+                    block_header
+                );
+
                 // We must seek back to the start of previous chunk.
                 let previous_chunk = block_header.previous_chunk + BLOCK_HEADER_SIZE;
-                
+
                 // Seek back to start of previous chunk assuming the current one
                 // was corrupted and that the new block is valid.
-                info!("Seeking back by {} bytes to beginning of previous chunk", previous_chunk);
-                
+                info!(
+                    "Seeking back by {} bytes to beginning of previous chunk",
+                    previous_chunk
+                );
+
                 let seek_offset: i64 = previous_chunk.try_into().map_err(
                     |e| {
                         error!("Seek offset conversion failed: {:?}", e);
@@ -619,7 +627,10 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 )?;
 
                 self.source.seek(SeekFrom::Current(-seek_offset))?;
-                info!("Successfully sought back to position: {}", self.source.position());
+                info!(
+                    "Successfully sought back to position: {}",
+                    self.source.position()
+                );
 
                 // Reset state to Fresh to start reading from the next valid chunk
                 info!("Recovery successful, resetting to Fresh state");
@@ -672,20 +683,29 @@ impl<Source: Read + Seek> BlockReader<Source> {
     /// If the header at the next block boundary is also corrupted, continues
     /// looking at subsequent block boundaries until a valid header is found.
     fn find_next_valid_chunk(&mut self) -> Result<()> {
-        info!("Trying to find next valid chunk at position: {}", self.source.position());
-        
+        info!(
+            "Trying to find next valid chunk at position: {}",
+            self.source.position()
+        );
+
         // Calculate offset to next block boundary
         let offset_to_next_boundary =
             utils::remaining_in_block(self.source.position(), self.config.block_size);
-            
-        debug!("Seeking {} bytes to next block boundary", offset_to_next_boundary);
+
+        debug!(
+            "Seeking {} bytes to next block boundary",
+            offset_to_next_boundary
+        );
 
         // Seek to the next block boundary
         self.source
             .seek(SeekFrom::Current(offset_to_next_boundary as i64))?;
         // Position is automatically tracked by ReadPositionTracker
-        
-        info!("Reached next block boundary at position: {}", self.source.position());
+
+        info!(
+            "Reached next block boundary at position: {}",
+            self.source.position()
+        );
 
         // Try reading headers at block boundaries until we find a valid one or reach EOF
         loop {
@@ -697,13 +717,19 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 Ok(header) => {
                     // We found a valid header! Seek to the end of this chunk
                     // using the next_chunk offset from header
-                    info!("Found valid header at position {}: {:?}", header_start_pos, header);
+                    info!(
+                        "Found valid header at position {}: {:?}",
+                        header_start_pos, header
+                    );
                     let start_of_next_chunk = header_start_pos + header.next_chunk;
-                    
-                    debug!("Seeking to end of chunk at position: {}", start_of_next_chunk);
+
+                    debug!(
+                        "Seeking to end of chunk at position: {}",
+                        start_of_next_chunk
+                    );
                     self.source.seek(SeekFrom::Start(start_of_next_chunk))?;
                     // Position is automatically updated by the seek operation
-                    
+
                     info!("Successfully found valid chunk, recovery complete");
                     return Ok(());
                 }
@@ -714,17 +740,23 @@ impl<Source: Read + Seek> BlockReader<Source> {
                 }
                 Err(e) => {
                     // This header was also corrupted
-                    warn!("Found another corrupted header at position {}: {}", header_start_pos, e);
-                    
+                    warn!(
+                        "Found another corrupted header at position {}: {}",
+                        header_start_pos, e
+                    );
+
                     // Since read_block_header already updated file_position, just need to seek to next block
                     let to_next_boundary =
                         utils::remaining_in_block(self.source.position(), self.config.block_size);
-                        
-                    debug!("Trying next block boundary, seeking {} bytes", to_next_boundary);
+
+                    debug!(
+                        "Trying next block boundary, seeking {} bytes",
+                        to_next_boundary
+                    );
                     self.source
                         .seek(SeekFrom::Current(to_next_boundary as i64))?;
                     // Position is automatically tracked by ReadPositionTracker
-                    
+
                     info!("Now at position: {}", self.source.position());
                 }
             }

@@ -105,7 +105,7 @@ fn test_async_operations() -> Result<()> {
 
     let _ = flush_promise.wait()?;
 
-    // Close. 
+    // Close.
     let _ = writer.close()?;
 
     Ok(())

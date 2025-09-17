@@ -388,7 +388,10 @@ impl<Source: Read + Seek> RecordReader<Source> {
                         Err(e) => {
                             // Error parsing the signature, we don't try to recover from this.
                             self.state = ReaderState::Corrupted;
-                            return Err(DiskyError::Other(format!("Error parsing signature: {:?}", e)));
+                            return Err(DiskyError::Other(format!(
+                                "Error parsing signature: {:?}",
+                                e
+                            )));
                         }
                     }
                 }
@@ -456,7 +459,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
                     // Error during parsing
                     if self.config.corruption_strategy == CorruptionStrategy::Recover {
                         warn!("Attempting to recover from chunk corruption: {}", error);
-                        
+
                         // Try to recover by skipping the chunk
                         match parser.skip_chunk() {
                             Ok(_) => {
@@ -534,20 +537,20 @@ impl<Source: Read + Seek> Iterator for RecordReader<Source> {
         // Check if we're in a terminal state that can't produce more records
         let should_stop = match &self.state {
             // Terminal states that should stop iteration
-            ReaderState::Corrupted | 
-            ReaderState::InvalidState(_) | 
-            ReaderState::EOF | 
-            ReaderState::BlockCorruption(_) | 
-            ReaderState::ChunkCorruption(_, _) => true,
-            
+            ReaderState::Corrupted
+            | ReaderState::InvalidState(_)
+            | ReaderState::EOF
+            | ReaderState::BlockCorruption(_)
+            | ReaderState::ChunkCorruption(_, _) => true,
+
             // States that can still produce records
-            ReaderState::Ready | 
-            ReaderState::ReadingInitialBlocks |
-            ReaderState::ReadingSubsequentBlocks |
-            ReaderState::ExpectingSignature(_) |
-            ReaderState::ParsingChunks(_) => false,
+            ReaderState::Ready
+            | ReaderState::ReadingInitialBlocks
+            | ReaderState::ReadingSubsequentBlocks
+            | ReaderState::ExpectingSignature(_)
+            | ReaderState::ParsingChunks(_) => false,
         };
-        
+
         if should_stop {
             return None;
         }
@@ -563,4 +566,3 @@ impl<Source: Read + Seek> Iterator for RecordReader<Source> {
         }
     }
 }
-

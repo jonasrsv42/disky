@@ -102,19 +102,19 @@ pub enum DiskyError {
     /// Occurs when attempting to interact with a closed queue.
     #[error("Queue is closed: {0}")]
     QueueClosed(String),
-    
+
     /// Indicates that no more shards are available from a ShardLocator.
     #[error("No more shards available")]
     NoMoreShards,
-    
+
     /// Indicates that a resource pool is completely exhausted with no resources.
     #[error("Resource pool is exhausted")]
     PoolExhausted,
-    
+
     /// Indicates that an operation was attempted on a closed reader.
     #[error("Reader is closed")]
     ReaderClosed,
-    
+
     /// A general error occurred.
     #[error("{0}")]
     Other(String),

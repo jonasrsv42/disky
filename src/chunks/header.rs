@@ -37,7 +37,7 @@ impl ChunkType {
     pub fn as_byte(&self) -> u8 {
         *self as u8
     }
-    
+
     /// Convert a byte to ChunkType, if valid.
     pub fn from_byte(byte: u8) -> Option<Self> {
         match byte {
@@ -107,7 +107,7 @@ impl ChunkHeader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_chunk_type_conversion() {
         let types = [
@@ -115,30 +115,24 @@ mod tests {
             ChunkType::Padding,
             ChunkType::SimpleRecords,
         ];
-        
+
         for chunk_type in types {
             let byte = chunk_type.as_byte();
             let converted = ChunkType::from_byte(byte).unwrap();
             assert_eq!(chunk_type, converted);
         }
     }
-    
+
     #[test]
     fn test_chunk_type_invalid_byte() {
         let invalid_byte = 0xFF;
         assert!(ChunkType::from_byte(invalid_byte).is_none());
     }
-    
+
     #[test]
     fn test_chunk_header_creation() {
-        let header = ChunkHeader::new(
-            100,
-            200,
-            ChunkType::SimpleRecords,
-            5,
-            300,
-        );
-        
+        let header = ChunkHeader::new(100, 200, ChunkType::SimpleRecords, 5, 300);
+
         assert_eq!(header.data_size, 100);
         assert_eq!(header.data_hash, 200);
         assert_eq!(header.chunk_type, ChunkType::SimpleRecords);

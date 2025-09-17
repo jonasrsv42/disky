@@ -29,10 +29,10 @@ impl FileShardLocator {
     pub fn new(output_dir: PathBuf, file_prefix: impl Into<String>) -> Result<Self> {
         let file_prefix = file_prefix.into();
         let mut shard_paths = find_shard_paths(&output_dir, &file_prefix)?;
-        
+
         // Sort the paths to ensure consistent order
         shard_paths.sort();
-        
+
         Ok(Self {
             shard_paths,
             next_index: AtomicUsize::new(0),
@@ -89,7 +89,7 @@ impl MultiPathShardLocator {
         if file_paths.is_empty() {
             return Err(DiskyError::Other("No shard paths provided".to_string()));
         }
-        
+
         // Validate that all files exist
         for path in &file_paths {
             if !path.exists() {
@@ -99,7 +99,7 @@ impl MultiPathShardLocator {
                 )));
             }
         }
-        
+
         Ok(Self {
             shard_paths: file_paths,
             next_index: AtomicUsize::new(0),

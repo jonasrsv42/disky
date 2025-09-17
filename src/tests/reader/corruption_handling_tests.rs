@@ -38,8 +38,8 @@ fn create_test_file() -> Vec<u8> {
         config.block_config = BlockWriterConfig::with_block_size(128).unwrap();
 
         // Small chunk size (256 bytes) to ensure records cross chunk boundaries
-        // IMPORTANT chunk size should be small for our small recovery tests 
-        // as otherwise with default chunk size of 1mb all data may just 
+        // IMPORTANT chunk size should be small for our small recovery tests
+        // as otherwise with default chunk size of 1mb all data may just
         // be discarded in-case the chunk data is corrupt.
         config.chunk_size_bytes = 256;
 

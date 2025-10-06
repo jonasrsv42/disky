@@ -1,4 +1,4 @@
-# Disky: High-Performance Streaming File Format for Rust
+# Disky: Streaming File Format
 
 Disky is a Rust reader/writer for a variation of the [Riegeli file format](https://github.com/google/riegeli), designed for high-performance streaming of record-based data. It provides both single-threaded and multi-threaded APIs with features like corruption recovery, and configurable compression.
 

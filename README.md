@@ -1,18 +1,12 @@
 # Disky: High-Performance Streaming File Format for Rust
 
-Disky is a Rust implementation of the [Riegeli file format](https://github.com/google/riegeli), designed for high-performance streaming of record-based data. It provides both single-threaded and multi-threaded APIs for efficient reading and writing of record data with advanced features like parallel processing, corruption recovery, and configurable compression.
+Disky is a Rust variation of the [Riegeli file format](https://github.com/google/riegeli), designed for high-performance streaming of record-based data. It provides both single-threaded and multi-threaded APIs with features like corruption recovery, and configurable compression.
 
 ## Features
 
 - **High-performance streaming** record I/O with minimal memory overhead
-- **Thread-safe parallel APIs** for multi-core scaling
 - **Auto-sharding** for distributing data across multiple files
 - **Corruption detection and recovery** capabilities
-- **Block-based architecture** for efficient data access
-- **Chunked record storage** for optimized I/O operations
-- **Configurable compression** options
-- **Memory efficient** with minimal allocations
-- **Append support** for adding records to existing files
 
 ## Quick Start
 
@@ -154,18 +148,8 @@ for record_result in reader {
 }
 ```
 
-## Example Applications
 
-- **Data processing pipelines** for ETL workflows
-- **Log aggregation** and analysis systems
-- **High-throughput event storage**
-- **Machine learning data preparation**
-- **Archival of structured data**
-- **Inter-service data exchange**
-
-## Performance
-
-Disky is designed for high-performance scenarios. The multi-threaded implementation can achieve significantly higher throughput by parallelizing both I/O and processing operations.
+## Benchmarks
 
 To run the benchmarks:
 
@@ -182,8 +166,6 @@ cargo bench --bench parallel_writer_bench --features parallel
 ```
 
 ## Testing
-
-Disky includes comprehensive test suites to ensure correctness and reliability:
 
 ```bash
 # Run unit tests
@@ -202,14 +184,8 @@ cargo run --example multi_threaded_examples --features parallel
 
 ## Format Overview
 
-Disky implements the Riegeli file format, which has the following structure:
+Disky implements a version of the Riegeli file format, which has the following structure:
 
-1. **File Signature**: Every file begins with a standard signature
-2. **Blocks**: The file is divided into fixed-size blocks (default 64KB)
-3. **Chunks**: Records are grouped into chunks for efficient I/O
-4. **Records**: Individual binary data units stored within chunks
-
-This architecture provides several benefits:
 - Efficient streaming of sequential data
 - Effective compression of multiple records together
 - Corruption detection and optional recovery

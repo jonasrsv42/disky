@@ -9,7 +9,10 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 
 use disky::reader::{DiskyPiece, RecordReader};
-use disky::writer::{RecordWriter, RecordWriterConfig};
+use disky::writer::RecordWriter;
+
+#[cfg(feature = "zstd")]
+use disky::writer::RecordWriterConfig;
 
 #[cfg(feature = "zstd")]
 use disky::compression::CompressionType;
@@ -158,6 +161,7 @@ fn write_records_with_zstd_level(records: &[Vec<u8>], level: i32) -> u64 {
 }
 
 /// Format byte size in a human-readable way
+#[cfg(feature = "zstd")]
 fn format_size(bytes: u64) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)

@@ -5,7 +5,6 @@ Disky is a Rust reader/writer for a variation of the [Riegeli file format](https
 ## Features
 
 - **High-performance streaming** record I/O with minimal memory overhead
-- **Auto-sharding** for distributing data across multiple files
 - **Corruption detection and recovery** capabilities
 
 ## Quick Start

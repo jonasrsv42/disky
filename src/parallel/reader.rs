@@ -550,9 +550,3 @@ impl<Source: Read + Seek + Send + 'static> Drop for ParallelReader<Source> {
     }
 }
 
-// Iterator implementation removed - will be implemented in a future update
-
-#[cfg(test)]
-mod tests {
-    // Tests will be added in a separate PR
-}

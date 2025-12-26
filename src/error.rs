@@ -118,6 +118,14 @@ pub enum DiskyError {
     /// A general error occurred.
     #[error("{0}")]
     Other(String),
+
+    /// An error occurred while reading from a specific shard.
+    #[error("shard '{shard_id}': {source}")]
+    ShardError {
+        shard_id: String,
+        #[source]
+        source: Box<DiskyError>,
+    },
 }
 
 /// A specialized Result type for Disky operations.

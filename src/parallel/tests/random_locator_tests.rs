@@ -46,7 +46,7 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     let mut first_cycle_order = Vec::new();
     for _ in 0..shard_count {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         first_cycle_order.push(content);
     }
 
@@ -54,7 +54,7 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     let mut second_cycle_order = Vec::new();
     for _ in 0..shard_count {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         second_cycle_order.push(content);
     }
 
@@ -62,7 +62,7 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     let mut third_cycle_order = Vec::new();
     for _ in 0..shard_count {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         third_cycle_order.push(content);
     }
 
@@ -162,7 +162,7 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
     let mut first_cycle_order = Vec::new();
     for _ in 0..shard_count {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         first_cycle_order.push(content);
     }
 
@@ -170,7 +170,7 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
     let mut second_cycle_order = Vec::new();
     for _ in 0..shard_count {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         second_cycle_order.push(content);
     }
 
@@ -178,7 +178,7 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
     let mut third_cycle_order = Vec::new();
     for _ in 0..shard_count {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         third_cycle_order.push(content);
     }
 

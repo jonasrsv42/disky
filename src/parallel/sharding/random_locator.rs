@@ -7,7 +7,7 @@ use rand::rngs::StdRng;
 use rand::{SeedableRng, seq::SliceRandom};
 
 use crate::error::{DiskyError, Result};
-use crate::parallel::sharding::traits::ShardLocator;
+use crate::parallel::sharding::traits::{Shard, ShardLocator};
 use crate::parallel::sharding::utils::find_shard_paths;
 
 /// Internal state protected by a single mutex to avoid race conditions
@@ -136,7 +136,7 @@ impl RandomRepeatingFileShardLocator {
 }
 
 impl ShardLocator<File> for RandomRepeatingFileShardLocator {
-    fn next_shard(&self) -> Result<File> {
+    fn next_shard(&self) -> Result<Shard<File>> {
         // Lock all state - position check, increment, and reshuffle are atomic
         let mut state = self
             .state
@@ -163,9 +163,12 @@ impl ShardLocator<File> for RandomRepeatingFileShardLocator {
         // Get the file path for the current position
         let index = indices[current_position];
         let file_path = &self.shard_paths[index];
+        let id = file_path.display().to_string();
 
         // Open the file for reading
-        File::open(file_path).map_err(DiskyError::Io)
+        let source = File::open(file_path).map_err(DiskyError::Io)?;
+
+        Ok(Shard { source, id })
     }
 
     fn estimated_shard_count(&self) -> Option<usize> {
@@ -291,7 +294,7 @@ impl RandomMultiPathShardLocator {
 }
 
 impl ShardLocator<File> for RandomMultiPathShardLocator {
-    fn next_shard(&self) -> Result<File> {
+    fn next_shard(&self) -> Result<Shard<File>> {
         // Lock all state - position check, increment, and reshuffle are atomic
         let mut state = self
             .state
@@ -318,9 +321,12 @@ impl ShardLocator<File> for RandomMultiPathShardLocator {
         // Get the file path for the current position
         let index = indices[current_position];
         let file_path = &self.shard_paths[index];
+        let id = file_path.display().to_string();
 
         // Open the file for reading
-        File::open(file_path).map_err(DiskyError::Io)
+        let source = File::open(file_path).map_err(DiskyError::Io)?;
+
+        Ok(Shard { source, id })
     }
 
     fn estimated_shard_count(&self) -> Option<usize> {

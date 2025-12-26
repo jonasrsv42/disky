@@ -78,6 +78,10 @@ impl Clone for Task {
 pub struct ReaderResource<Source: Read + Seek + Send + 'static> {
     /// The record reader, boxed to signify exclusive ownership
     pub reader: Box<RecordReader<Source>>,
+
+    /// Identifier for the shard (e.g., file path, ordinal index).
+    /// Used in error messages to identify which shard failed.
+    pub shard_id: String,
 }
 
 /// Sharding configuration for the parallel reader
@@ -169,15 +173,16 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// # Returns
     /// A Result indicating success or failure
     fn get_new_shard(&self) -> Result<()> {
-        // Get a new source using the locator
-        let source = self.sharding_config.locator.next_shard()?;
+        // Get a new shard using the locator
+        let shard = self.sharding_config.locator.next_shard()?;
 
         // Create a new RecordReader with the source and configuration
-        let reader = RecordReader::with_config(source, self.config.reader_config.clone())?;
+        let reader = RecordReader::with_config(shard.source, self.config.reader_config.clone())?;
 
         // Add the reader to the resource pool
         self.reader_pool.add_resource(ReaderResource {
             reader: Box::new(reader),
+            shard_id: shard.id,
         })
     }
 
@@ -355,7 +360,10 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                             }
                         }
                     }
-                    Err(e) => Err(e),
+                    Err(e) => Err(DiskyError::ShardError {
+                        shard_id: resource.shard_id.clone(),
+                        source: Box::new(e),
+                    }),
                 }
             }
             Err(DiskyError::PoolExhausted) => {
@@ -500,7 +508,12 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                                 }
                             }
                         }
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            return Err(DiskyError::ShardError {
+                                shard_id: resource.shard_id.clone(),
+                                source: Box::new(e),
+                            });
+                        }
                     }
                 }
             }
@@ -549,4 +562,3 @@ impl<Source: Read + Seek + Send + 'static> Drop for ParallelReader<Source> {
         let _ = self.task_queue.close();
     }
 }
-

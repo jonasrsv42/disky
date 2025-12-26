@@ -48,15 +48,15 @@ fn test_multi_path_shard_locator_basic() -> Result<()> {
 
     // Check that we can read all the shards in the expected order
     let shard1 = locator.next_shard()?;
-    let content1 = read_file_content(shard1)?;
+    let content1 = read_file_content(shard1.source)?;
     assert_eq!(content1, "This is test shard 0");
 
     let shard2 = locator.next_shard()?;
-    let content2 = read_file_content(shard2)?;
+    let content2 = read_file_content(shard2.source)?;
     assert_eq!(content2, "This is test shard 1");
 
     let shard3 = locator.next_shard()?;
-    let content3 = read_file_content(shard3)?;
+    let content3 = read_file_content(shard3.source)?;
     assert_eq!(content3, "This is test shard 2");
 
     // Make sure we get NoMoreShards after reading all shards
@@ -107,7 +107,7 @@ fn test_random_multi_path_shard_locator() -> Result<()> {
 
     for _ in 0..5 {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         seen_contents.insert(content);
     }
 
@@ -116,7 +116,7 @@ fn test_random_multi_path_shard_locator() -> Result<()> {
 
     // Now let's check that the locator repeats after exhausting all shards
     let first_shard = locator.next_shard()?;
-    let first_content = read_file_content(first_shard)?;
+    let first_content = read_file_content(first_shard.source)?;
 
     // Verify that first_content is in our seen_contents set
     assert!(seen_contents.contains(&first_content));
@@ -141,8 +141,8 @@ fn test_random_multi_path_shard_locator_repeatability() -> Result<()> {
         let shard1 = locator1.next_shard()?;
         let shard2 = locator2.next_shard()?;
 
-        let content1 = read_file_content(shard1)?;
-        let content2 = read_file_content(shard2)?;
+        let content1 = read_file_content(shard1.source)?;
+        let content2 = read_file_content(shard2.source)?;
 
         assert_eq!(content1, content2);
     }
@@ -168,11 +168,11 @@ fn test_random_multi_path_shard_locator_different_seeds() -> Result<()> {
 
     for _ in 0..5 {
         let shard1 = locator1.next_shard()?;
-        let content1 = read_file_content(shard1)?;
+        let content1 = read_file_content(shard1.source)?;
         sequence1.push(content1);
 
         let shard2 = locator2.next_shard()?;
-        let content2 = read_file_content(shard2)?;
+        let content2 = read_file_content(shard2.source)?;
         sequence2.push(content2);
     }
 
@@ -205,7 +205,7 @@ fn test_random_multi_path_shard_locator_reshuffle() -> Result<()> {
     let mut first_cycle = Vec::new();
     for _ in 0..3 {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         first_cycle.push(content);
     }
 
@@ -213,7 +213,7 @@ fn test_random_multi_path_shard_locator_reshuffle() -> Result<()> {
     let mut second_cycle = Vec::new();
     for _ in 0..3 {
         let shard = locator.next_shard()?;
-        let content = read_file_content(shard)?;
+        let content = read_file_content(shard.source)?;
         second_cycle.push(content);
     }
 

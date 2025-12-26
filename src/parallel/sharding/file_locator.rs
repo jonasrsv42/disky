@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{DiskyError, Result};
-use crate::parallel::sharding::traits::ShardLocator;
+use crate::parallel::sharding::traits::{Shard, ShardLocator};
 use crate::parallel::sharding::utils::find_shard_paths;
 
 /// A locator for finding and opening sharded files created by a FileSharder.
@@ -41,7 +41,7 @@ impl FileShardLocator {
 }
 
 impl ShardLocator<File> for FileShardLocator {
-    fn next_shard(&self) -> Result<File> {
+    fn next_shard(&self) -> Result<Shard<File>> {
         // Get the current index and increment it atomically
         let index = self.next_index.fetch_add(1, Ordering::SeqCst);
 
@@ -52,9 +52,12 @@ impl ShardLocator<File> for FileShardLocator {
 
         // Get the next shard path
         let file_path = &self.shard_paths[index];
+        let id = file_path.display().to_string();
 
         // Open the file for reading
-        File::open(file_path).map_err(|e| DiskyError::Io(e))
+        let source = File::open(file_path).map_err(DiskyError::Io)?;
+
+        Ok(Shard { source, id })
     }
 
     fn estimated_shard_count(&self) -> Option<usize> {
@@ -108,7 +111,7 @@ impl MultiPathShardLocator {
 }
 
 impl ShardLocator<File> for MultiPathShardLocator {
-    fn next_shard(&self) -> Result<File> {
+    fn next_shard(&self) -> Result<Shard<File>> {
         // Get the current index and increment it atomically
         let index = self.next_index.fetch_add(1, Ordering::SeqCst);
 
@@ -119,9 +122,12 @@ impl ShardLocator<File> for MultiPathShardLocator {
 
         // Get the next shard path
         let file_path = &self.shard_paths[index];
+        let id = file_path.display().to_string();
 
         // Open the file for reading
-        File::open(file_path).map_err(|e| DiskyError::Io(e))
+        let source = File::open(file_path).map_err(DiskyError::Io)?;
+
+        Ok(Shard { source, id })
     }
 
     fn estimated_shard_count(&self) -> Option<usize> {

@@ -1,3 +1,8 @@
+use std::error::Error;
+use std::io::Cursor;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use crate::error::{DiskyError, Result};
 use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{
@@ -5,9 +10,6 @@ use crate::parallel::reader::{
 };
 use crate::parallel::sharding::MemoryShardLocator;
 use crate::writer::RecordWriter;
-use std::io::Cursor;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 /// Creates a valid Disky file with the specified number of records
 fn create_valid_data(records: usize) -> Vec<u8> {
@@ -544,6 +546,180 @@ fn test_reading_after_corruption() -> Result<()> {
     // Close the reader
     reader.close()?;
 
+    Ok(())
+}
+
+/// Test that errors from read() are wrapped with ShardError containing the shard_id
+#[test]
+fn test_read_error_includes_shard_id() -> Result<()> {
+    // Create a factory that produces a corrupted shard with a known identifier
+    let factory = move || {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        match shard_num {
+            0 => Ok(Cursor::new(create_corrupted_data(3))), // Corrupted shard
+            _ => Err(DiskyError::NoMoreShards),
+        }
+    };
+
+    // Create a shard locator with 1 shard
+    let shard_count = 1;
+    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+
+    // Create a sharding config
+    let sharding_config = ShardingConfig::new(locator, shard_count);
+
+    // Create a parallel reader with default config
+    let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
+
+    // Try to read - should fail with ShardError
+    let result = reader.read();
+    assert!(result.is_err(), "Expected error from corrupted shard");
+
+    let err = result.unwrap_err();
+
+    // Verify it's a ShardError with the expected shard_id
+    match &err {
+        DiskyError::ShardError { shard_id, source } => {
+            // The MemoryShardLocator generates IDs like "memory_shard_0"
+            assert_eq!(
+                shard_id, "memory_shard_0",
+                "Expected shard_id 'memory_shard_0', got '{}'",
+                shard_id
+            );
+            // Verify the source error is preserved
+            assert!(
+                !source.to_string().is_empty(),
+                "Source error should not be empty"
+            );
+        }
+        other => {
+            panic!("Expected ShardError, got {:?}", other);
+        }
+    }
+
+    // Verify the error message contains the shard_id
+    let error_string = err.to_string();
+    assert!(
+        error_string.contains("memory_shard_0"),
+        "Error message should contain shard_id, got: {}",
+        error_string
+    );
+
+    reader.close()?;
+    Ok(())
+}
+
+/// Test that errors from drain_resource() are wrapped with ShardError containing the shard_id
+#[test]
+fn test_drain_resource_error_includes_shard_id() -> Result<()> {
+    // Create a factory that produces a corrupted shard
+    let factory = move || {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        match shard_num {
+            0 => Ok(Cursor::new(create_corrupted_data(3))), // Corrupted shard
+            _ => Err(DiskyError::NoMoreShards),
+        }
+    };
+
+    // Create a shard locator with 1 shard
+    let shard_count = 1;
+    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+
+    // Create a sharding config
+    let sharding_config = ShardingConfig::new(locator, shard_count);
+
+    // Create a parallel reader with default config
+    let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
+
+    // Create a byte queue
+    let byte_queue = Arc::new(ByteQueue::new(16384));
+
+    // Try to drain - should fail with ShardError
+    let result = reader.drain_resource(byte_queue);
+    assert!(result.is_err(), "Expected error from corrupted shard");
+
+    let err = result.unwrap_err();
+
+    // Verify it's a ShardError with the expected shard_id
+    match &err {
+        DiskyError::ShardError { shard_id, source } => {
+            assert_eq!(
+                shard_id, "memory_shard_0",
+                "Expected shard_id 'memory_shard_0', got '{}'",
+                shard_id
+            );
+            // Verify the source error is preserved
+            assert!(
+                !source.to_string().is_empty(),
+                "Source error should not be empty"
+            );
+        }
+        other => {
+            panic!("Expected ShardError, got {:?}", other);
+        }
+    }
+
+    // Verify the error message contains the shard_id
+    let error_string = err.to_string();
+    assert!(
+        error_string.contains("memory_shard_0"),
+        "Error message should contain shard_id, got: {}",
+        error_string
+    );
+
+    reader.close()?;
+    Ok(())
+}
+
+/// Test that ShardError properly chains the source error
+#[test]
+fn test_shard_error_chains_source_error() -> Result<()> {
+    // Create a factory that produces a corrupted shard
+    let factory = move || {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        match shard_num {
+            0 => Ok(Cursor::new(create_corrupted_data(3))), // Corrupted shard
+            _ => Err(DiskyError::NoMoreShards),
+        }
+    };
+
+    let shard_count = 1;
+    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
+
+    let result = reader.read();
+    assert!(result.is_err());
+
+    let err = result.unwrap_err();
+
+    // Check error chain using std::error::Error trait
+    match &err {
+        DiskyError::ShardError { source, .. } => {
+            // The source should be available through the Error trait
+            let err_ref: &dyn Error = &err;
+            assert!(
+                err_ref.source().is_some(),
+                "ShardError should have a source error"
+            );
+
+            // The source in the struct should match
+            let source_string = source.to_string();
+            assert!(
+                !source_string.is_empty(),
+                "Source error string should not be empty"
+            );
+        }
+        _ => panic!("Expected ShardError"),
+    }
+
+    reader.close()?;
     Ok(())
 }
 

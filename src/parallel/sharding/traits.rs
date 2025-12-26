@@ -12,13 +12,26 @@ pub trait Sharder<Sink: Write + Seek + Send + 'static> {
     fn create_sink(&self) -> Result<Sink>;
 }
 
+/// A shard returned by a `ShardLocator`.
+///
+/// Contains the source to read from and an identifier for debugging/error messages.
+#[derive(Debug)]
+pub struct Shard<Source> {
+    /// The source to read from.
+    pub source: Source,
+
+    /// Identifier for this shard (e.g., file path, ordinal index).
+    /// Used in error messages to identify which shard failed.
+    pub id: String,
+}
+
 /// A trait for locating and opening existing shards for reading.
 ///
 /// This trait provides methods to incrementally retrieve shards for reading.
 /// It can be used by parallel readers to locate and open shards created
 /// by compatible sharders.
 pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
-    /// Returns the next available shard source.
+    /// Returns the next available shard.
     ///
     /// This method is called repeatedly to get all available shards.
     /// When no more shards are available, it returns Err(DiskyError::NoMoreShards).
@@ -26,10 +39,10 @@ pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
     /// This method is thread-safe and does not require mutable access to self.
     ///
     /// # Returns
-    /// - Ok(source) if a shard was successfully located and opened
+    /// - Ok(shard) if a shard was successfully located and opened
     /// - Err(DiskyError::NoMoreShards) if no more shards are available
     /// - Err(...) if some other error occurred while trying to locate or open a shard
-    fn next_shard(&self) -> Result<Source>;
+    fn next_shard(&self) -> Result<Shard<Source>>;
 
     /// Returns the estimated total number of shards, if known.
     ///

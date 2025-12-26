@@ -18,4 +18,4 @@ pub use file_locator::{FileShardLocator, MultiPathShardLocator};
 pub use file_sharder::{FileSharder, FileSharderConfig};
 pub use memory_locator::MemoryShardLocator;
 pub use random_locator::{RandomMultiPathShardLocator, RandomRepeatingFileShardLocator};
-pub use traits::{ShardLocator, Sharder};
+pub use traits::{Shard, ShardLocator, Sharder};

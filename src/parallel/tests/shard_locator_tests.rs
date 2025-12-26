@@ -45,7 +45,7 @@ fn test_file_shard_locator_basic() -> Result<()> {
 
         // Read the test data to verify it's the right shard
         let mut buffer = String::new();
-        shard.read_to_string(&mut buffer)?;
+        shard.source.read_to_string(&mut buffer)?;
         assert_eq!(buffer, format!("This is shard {}", i));
     }
 
@@ -113,7 +113,7 @@ fn test_memory_shard_locator() -> Result<()> {
 
         // Read the content to verify it's what we expect
         let mut buffer = Vec::new();
-        shard.read_to_end(&mut buffer)?;
+        shard.source.read_to_end(&mut buffer)?;
 
         let content = String::from_utf8(buffer).unwrap();
         assert_eq!(content, format!("Memory shard {}", i));
@@ -154,7 +154,7 @@ fn test_shard_locator_error_handling() -> Result<()> {
     // First shard should be readable
     let mut shard = locator.next_shard()?;
     let mut buffer = Vec::new();
-    shard.read_to_end(&mut buffer)?;
+    shard.source.read_to_end(&mut buffer)?;
     let content = String::from_utf8(buffer).unwrap();
     assert_eq!(content, "Memory shard 0");
 

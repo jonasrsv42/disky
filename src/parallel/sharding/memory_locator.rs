@@ -3,7 +3,7 @@ use std::io::Cursor;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{DiskyError, Result};
-use crate::parallel::sharding::traits::ShardLocator;
+use crate::parallel::sharding::traits::{Shard, ShardLocator};
 
 /// A memory-based shard locator that can be used for testing.
 ///
@@ -48,7 +48,7 @@ impl<F> ShardLocator<Cursor<Vec<u8>>> for MemoryShardLocator<F>
 where
     F: Fn() -> Result<Cursor<Vec<u8>>> + Send + Sync + 'static,
 {
-    fn next_shard(&self) -> Result<Cursor<Vec<u8>>> {
+    fn next_shard(&self) -> Result<Shard<Cursor<Vec<u8>>>> {
         // Get the current index and increment it atomically
         let index = self.next_index.fetch_add(1, Ordering::SeqCst);
 
@@ -58,7 +58,12 @@ where
         }
 
         // Create a new cursor
-        (self.source_factory)()
+        let source = (self.source_factory)()?;
+
+        Ok(Shard {
+            source,
+            id: format!("memory_shard_{}", index),
+        })
     }
 
     fn estimated_shard_count(&self) -> Option<usize> {

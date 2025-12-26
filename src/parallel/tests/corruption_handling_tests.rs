@@ -14,7 +14,7 @@ use crate::blocks::writer::BlockWriterConfig;
 use crate::error::{DiskyError, Result};
 use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-use crate::parallel::sharding::ShardLocator;
+use crate::parallel::sharding::{Shard, ShardLocator};
 use crate::reader::CorruptionStrategy;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
@@ -40,7 +40,7 @@ impl TestShardLocator {
 }
 
 impl ShardLocator<Cursor<Vec<u8>>> for TestShardLocator {
-    fn next_shard(&self) -> Result<Cursor<Vec<u8>>> {
+    fn next_shard(&self) -> Result<Shard<Cursor<Vec<u8>>>> {
         // Get the current index and increment atomically
         let index = self.next_index.fetch_add(1, Ordering::SeqCst);
 
@@ -51,9 +51,12 @@ impl ShardLocator<Cursor<Vec<u8>>> for TestShardLocator {
 
         // Clone the underlying Vec<u8> to create a new Cursor
         let data = self.sources[index].clone();
-        let cursor = Cursor::new(data);
+        let source = Cursor::new(data);
 
-        Ok(cursor)
+        Ok(Shard {
+            source,
+            id: format!("test_shard_{}", index),
+        })
     }
 
     fn estimated_shard_count(&self) -> Option<usize> {

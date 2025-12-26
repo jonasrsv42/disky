@@ -289,9 +289,9 @@ fn test_random_repeating_file_shard_locator() {
     // Read first round of shards and verify all files are accessed exactly once
     let mut content_set = std::collections::HashSet::new();
     for _ in 0..5 {
-        let mut file = locator.next_shard().unwrap();
+        let mut shard = locator.next_shard().unwrap();
         let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer).unwrap();
+        shard.source.read_to_end(&mut buffer).unwrap();
         let content = String::from_utf8_lossy(&buffer).to_string();
 
         // Verify this is the first time we've seen this content
@@ -304,9 +304,9 @@ fn test_random_repeating_file_shard_locator() {
     // Now read second round - should get all files again in a potentially different order
     let mut second_round_set = std::collections::HashSet::new();
     for _ in 0..5 {
-        let mut file = locator.next_shard().unwrap();
+        let mut shard = locator.next_shard().unwrap();
         let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer).unwrap();
+        shard.source.read_to_end(&mut buffer).unwrap();
         let content = String::from_utf8_lossy(&buffer).to_string();
 
         // Verify this is the first time we've seen this content in the second round
@@ -364,9 +364,9 @@ fn test_random_repeating_file_shard_locator_two_threads() {
     let thread1 = thread::spawn(move || {
         let mut contents = Vec::new();
         for _ in 0..10 {
-            let mut file = locator1.next_shard().unwrap();
+            let mut shard = locator1.next_shard().unwrap();
             let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer).unwrap();
+            shard.source.read_to_end(&mut buffer).unwrap();
             contents.push(String::from_utf8_lossy(&buffer).to_string());
         }
         contents
@@ -379,9 +379,9 @@ fn test_random_repeating_file_shard_locator_two_threads() {
     let thread2 = thread::spawn(move || {
         let mut contents = Vec::new();
         for _ in 0..10 {
-            let mut file = locator2.next_shard().unwrap();
+            let mut shard = locator2.next_shard().unwrap();
             let mut buffer = Vec::new();
-            file.read_to_end(&mut buffer).unwrap();
+            shard.source.read_to_end(&mut buffer).unwrap();
             contents.push(String::from_utf8_lossy(&buffer).to_string());
         }
         contents

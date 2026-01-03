@@ -15,11 +15,13 @@
 //! Sampling module for Disky.
 //!
 //! This module provides sampling capabilities for Disky, allowing weighted
-//! sampling from multiple record sources.
+//! sampling from multiple record sources and streaming shuffle for randomization.
 
+pub mod reservoir_shuffle;
 pub mod sampling_reader;
 
 // Re-export main types for convenience
+pub use reservoir_shuffle::{ReservoirShuffle, ReservoirShuffleConfig};
 pub use sampling_reader::{SamplingReader, SamplingReaderConfig};
 
 #[cfg(test)]

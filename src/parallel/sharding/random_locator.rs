@@ -6,7 +6,7 @@ use rand::rngs::StdRng;
 use rand::{SeedableRng, seq::SliceRandom};
 
 use crate::error::{DiskyError, Result};
-use crate::parallel::sharding::traits::{Shard, ShardLocator};
+use crate::parallel::sharding::traits::{Shard, ShardCount, ShardLocator};
 use crate::parallel::sharding::utils::find_shard_paths;
 
 /// A shard locator that returns shards in a random order, exhausting all shards before repeating.
@@ -137,10 +137,8 @@ impl ShardLocator<File> for RandomRepeatingFileShardLocator {
         Ok(Shard { source, id })
     }
 
-    fn estimated_shard_count(&self) -> Option<usize> {
-        // We know the exact count, but since we repeat indefinitely,
-        // we return the number of unique shards
-        Some(self.shard_paths.len())
+    fn shard_count(&self) -> ShardCount {
+        ShardCount::Repeating(self.shard_paths.len())
     }
 }
 
@@ -273,9 +271,7 @@ impl ShardLocator<File> for RandomMultiPathShardLocator {
         Ok(Shard { source, id })
     }
 
-    fn estimated_shard_count(&self) -> Option<usize> {
-        // We know the exact count, but since we repeat indefinitely,
-        // we return the number of unique shards
-        Some(self.shard_paths.len())
+    fn shard_count(&self) -> ShardCount {
+        ShardCount::Repeating(self.shard_paths.len())
     }
 }

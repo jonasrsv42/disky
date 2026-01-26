@@ -6,7 +6,7 @@ use tempfile::tempdir;
 use crate::error::{DiskyError, Result};
 use crate::parallel::sharding::{
     FileShardLocator, FileSharder, MemoryShardLocator, RandomRepeatingFileShardLocator,
-    ShardLocator, Sharder,
+    ShardCount, ShardLocator, Sharder,
 };
 
 #[test]
@@ -35,8 +35,8 @@ fn test_file_shard_locator_basic() -> Result<()> {
     // Create a locator for the shards
     let mut locator = FileShardLocator::new(dir_path, "test")?;
 
-    // Test estimated_shard_count
-    assert_eq!(locator.estimated_shard_count(), Some(shard_count));
+    // Test shard_count
+    assert_eq!(locator.shard_count(), ShardCount::Finite(shard_count));
 
     // Test next_shard
     for i in 0..shard_count {
@@ -105,7 +105,7 @@ fn test_memory_shard_locator() -> Result<()> {
     let mut locator = MemoryShardLocator::new(factory, shard_count);
 
     // Check estimated shard count
-    assert_eq!(locator.estimated_shard_count(), Some(shard_count));
+    assert_eq!(locator.shard_count(), ShardCount::Finite(shard_count));
 
     // Read all shards
     for i in 0..shard_count {

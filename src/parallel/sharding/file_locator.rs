@@ -3,7 +3,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::error::{DiskyError, Result};
-use crate::parallel::sharding::traits::{Shard, ShardLocator};
+use crate::parallel::sharding::traits::{Shard, ShardCount, ShardLocator};
 use crate::parallel::sharding::utils::find_shard_paths;
 
 /// A locator for finding and opening sharded files created by a FileSharder.
@@ -59,9 +59,8 @@ impl ShardLocator<File> for FileShardLocator {
         Ok(Shard { source, id })
     }
 
-    fn estimated_shard_count(&self) -> Option<usize> {
-        // Return the actual count of shards we found
-        Some(self.shard_paths.len())
+    fn shard_count(&self) -> ShardCount {
+        ShardCount::Finite(self.shard_paths.len())
     }
 }
 
@@ -129,8 +128,7 @@ impl ShardLocator<File> for MultiPathShardLocator {
         Ok(Shard { source, id })
     }
 
-    fn estimated_shard_count(&self) -> Option<usize> {
-        // Return the actual count of shards we have
-        Some(self.shard_paths.len())
+    fn shard_count(&self) -> ShardCount {
+        ShardCount::Finite(self.shard_paths.len())
     }
 }

@@ -13,7 +13,7 @@ use crate::error::{DiskyError, Result};
 use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
-use crate::parallel::sharding::ShardLocator;
+use crate::parallel::sharding::{ShardCount, ShardLocator};
 use crate::parallel::task_queue::TaskQueue;
 use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
 
@@ -111,10 +111,11 @@ impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
         // Ensure shards is at least 1
         let requested_shards = std::cmp::max(shards, 1);
 
-        // Calculate the actual number of shards based on estimated count
-        let actual_shards = match locator.estimated_shard_count() {
-            Some(count) => std::cmp::min(requested_shards, count),
-            None => requested_shards,
+        // Calculate the actual number of shards based on shard count
+        let actual_shards = match locator.shard_count() {
+            ShardCount::Finite(count) | ShardCount::Repeating(count) => {
+                std::cmp::min(requested_shards, count)
+            }
         };
 
         Self {

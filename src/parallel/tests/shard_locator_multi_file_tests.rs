@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 use crate::error::Result;
-use crate::parallel::sharding::{MultiPathShardLocator, RandomMultiPathShardLocator, ShardLocator};
+use crate::parallel::sharding::{MultiPathShardLocator, RandomMultiPathShardLocator, ShardCount, ShardLocator};
 
 /// Helper function to create temporary shard files for testing
 fn create_test_shards(count: usize) -> Result<(tempfile::TempDir, Vec<PathBuf>)> {
@@ -44,7 +44,7 @@ fn test_multi_path_shard_locator_basic() -> Result<()> {
     let mut locator = MultiPathShardLocator::new(file_paths)?;
 
     // Check the estimated shard count
-    assert_eq!(locator.estimated_shard_count(), Some(3));
+    assert_eq!(locator.shard_count(), ShardCount::Finite(3));
 
     // Check that we can read all the shards in the expected order
     let shard1 = locator.next_shard()?;
@@ -100,7 +100,7 @@ fn test_random_multi_path_shard_locator() -> Result<()> {
     let mut locator = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
 
     // Check the estimated shard count
-    assert_eq!(locator.estimated_shard_count(), Some(5));
+    assert_eq!(locator.shard_count(), ShardCount::Repeating(5));
 
     // Read all shards once and verify that we've seen each one exactly once
     let mut seen_contents = HashSet::new();

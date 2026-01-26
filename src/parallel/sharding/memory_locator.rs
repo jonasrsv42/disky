@@ -2,7 +2,7 @@ use std::io::Cursor;
 // The Cursor type implements the required Read+Seek trait bounds
 
 use crate::error::{DiskyError, Result};
-use crate::parallel::sharding::traits::{Shard, ShardLocator};
+use crate::parallel::sharding::traits::{Shard, ShardCount, ShardLocator};
 
 /// A memory-based shard locator that can be used for testing.
 ///
@@ -66,8 +66,7 @@ where
         })
     }
 
-    fn estimated_shard_count(&self) -> Option<usize> {
-        // Return the total count of shards
-        Some(self.shard_count)
+    fn shard_count(&self) -> ShardCount {
+        ShardCount::Finite(self.shard_count)
     }
 }

@@ -2,6 +2,15 @@ use std::io::{Read, Seek, Write};
 
 use crate::error::Result;
 
+/// Describes the shard count and behavior of a shard locator
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShardCount {
+    /// A finite number of shards - will return `NoMoreShards` after exhausting
+    Finite(usize),
+    /// A repeating locator with the given number of unique shards - never exhausts
+    Repeating(usize),
+}
+
 /// A trait defining the common interface for shard creation strategies.
 ///
 /// A Sharder is responsible for providing new sinks (Write + Seek) when requested.
@@ -52,15 +61,6 @@ pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
     /// - Err(...) if some other error occurred while trying to locate or open a shard
     fn next_shard(&mut self) -> Result<Shard<Source>>;
 
-    /// Returns the estimated total number of shards, if known.
-    ///
-    /// This is an optional method that can provide a hint about the total
-    /// number of shards that might be available. The actual number might
-    /// differ if shards are added or removed during reading.
-    ///
-    /// # Returns
-    /// Some(count) if the count is known, None otherwise.
-    fn estimated_shard_count(&self) -> Option<usize> {
-        None
-    }
+    /// Returns the shard count and behavior of this locator.
+    fn shard_count(&self) -> ShardCount;
 }

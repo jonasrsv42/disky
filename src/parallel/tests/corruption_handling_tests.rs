@@ -13,7 +13,7 @@ use crate::blocks::writer::BlockWriterConfig;
 use crate::error::{DiskyError, Result};
 use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-use crate::parallel::sharding::{Shard, ShardLocator};
+use crate::parallel::sharding::{Shard, ShardCount, ShardLocator};
 use crate::reader::CorruptionStrategy;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
@@ -59,8 +59,8 @@ impl ShardLocator<Cursor<Vec<u8>>> for TestShardLocator {
         })
     }
 
-    fn estimated_shard_count(&self) -> Option<usize> {
-        Some(self.sources.len())
+    fn shard_count(&self) -> ShardCount {
+        ShardCount::Finite(self.sources.len())
     }
 }
 

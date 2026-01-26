@@ -1,6 +1,5 @@
 use std::io::Cursor;
 // The Cursor type implements the required Read+Seek trait bounds
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{DiskyError, Result};
 use crate::parallel::sharding::traits::{Shard, ShardLocator};
@@ -20,7 +19,7 @@ where
     shard_count: usize,
 
     /// Index of the next shard to return
-    next_index: AtomicUsize,
+    next_index: usize,
 }
 
 impl<F> MemoryShardLocator<F>
@@ -39,7 +38,7 @@ where
         Self {
             source_factory,
             shard_count,
-            next_index: AtomicUsize::new(0),
+            next_index: 0,
         }
     }
 }
@@ -48,14 +47,15 @@ impl<F> ShardLocator<Cursor<Vec<u8>>> for MemoryShardLocator<F>
 where
     F: Fn() -> Result<Cursor<Vec<u8>>> + Send + Sync + 'static,
 {
-    fn next_shard(&self) -> Result<Shard<Cursor<Vec<u8>>>> {
-        // Get the current index and increment it atomically
-        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
-
+    fn next_shard(&mut self) -> Result<Shard<Cursor<Vec<u8>>>> {
         // Check if we have any more shards
-        if index >= self.shard_count {
+        if self.next_index >= self.shard_count {
             return Err(DiskyError::NoMoreShards);
         }
+
+        // Get the current index and increment
+        let index = self.next_index;
+        self.next_index += 1;
 
         // Create a new cursor
         let source = (self.source_factory)()?;

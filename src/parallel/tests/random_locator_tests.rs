@@ -40,7 +40,7 @@ fn test_random_locator_reshuffle_cycles() -> Result<()> {
     create_test_shards(&dir_path, shard_count)?;
 
     // Create a random locator with a fixed seed for deterministic testing
-    let locator = RandomRepeatingFileShardLocator::with_seed(dir_path, "shard", 42)?;
+    let mut locator = RandomRepeatingFileShardLocator::with_seed(dir_path, "shard", 42)?;
 
     // Read all shards in the first cycle and record their order
     let mut first_cycle_order = Vec::new();
@@ -156,7 +156,7 @@ fn test_random_multi_path_locator_reshuffle_cycles() -> Result<()> {
         .collect();
 
     // Create a random multi-path locator with a fixed seed for deterministic testing
-    let locator = RandomMultiPathShardLocator::with_seed(file_paths, 42)?;
+    let mut locator = RandomMultiPathShardLocator::with_seed(file_paths, 42)?;
 
     // Read all shards in the first cycle and record their order
     let mut first_cycle_order = Vec::new();

@@ -1,7 +1,6 @@
 use std::fs::File;
 // The File type implements the required Read+Seek trait bounds
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{DiskyError, Result};
 use crate::parallel::sharding::traits::{Shard, ShardLocator};
@@ -14,7 +13,7 @@ pub struct FileShardLocator {
     shard_paths: Vec<PathBuf>,
 
     /// Index of the next shard to return
-    next_index: AtomicUsize,
+    next_index: usize,
 }
 
 impl FileShardLocator {
@@ -35,22 +34,22 @@ impl FileShardLocator {
 
         Ok(Self {
             shard_paths,
-            next_index: AtomicUsize::new(0),
+            next_index: 0,
         })
     }
 }
 
 impl ShardLocator<File> for FileShardLocator {
-    fn next_shard(&self) -> Result<Shard<File>> {
-        // Get the current index and increment it atomically
-        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
-
+    fn next_shard(&mut self) -> Result<Shard<File>> {
         // Check if we have any more shards
-        if index >= self.shard_paths.len() {
+        if self.next_index >= self.shard_paths.len() {
             return Err(DiskyError::NoMoreShards);
         }
 
-        // Get the next shard path
+        // Get the next shard path and increment index
+        let index = self.next_index;
+        self.next_index += 1;
+
         let file_path = &self.shard_paths[index];
         let id = file_path.display().to_string();
 
@@ -76,7 +75,7 @@ pub struct MultiPathShardLocator {
     shard_paths: Vec<PathBuf>,
 
     /// Index of the next shard to return
-    next_index: AtomicUsize,
+    next_index: usize,
 }
 
 impl MultiPathShardLocator {
@@ -105,22 +104,22 @@ impl MultiPathShardLocator {
 
         Ok(Self {
             shard_paths: file_paths,
-            next_index: AtomicUsize::new(0),
+            next_index: 0,
         })
     }
 }
 
 impl ShardLocator<File> for MultiPathShardLocator {
-    fn next_shard(&self) -> Result<Shard<File>> {
-        // Get the current index and increment it atomically
-        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
-
+    fn next_shard(&mut self) -> Result<Shard<File>> {
         // Check if we have any more shards
-        if index >= self.shard_paths.len() {
+        if self.next_index >= self.shard_paths.len() {
             return Err(DiskyError::NoMoreShards);
         }
 
-        // Get the next shard path
+        // Get the next shard path and increment index
+        let index = self.next_index;
+        self.next_index += 1;
+
         let file_path = &self.shard_paths[index];
         let id = file_path.display().to_string();
 

@@ -1,7 +1,6 @@
 use std::fs::File;
 // The File type implements the required Read+Seek trait bounds
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use rand::rngs::StdRng;
 use rand::{SeedableRng, seq::SliceRandom};
@@ -10,29 +9,11 @@ use crate::error::{DiskyError, Result};
 use crate::parallel::sharding::traits::{Shard, ShardLocator};
 use crate::parallel::sharding::utils::find_shard_paths;
 
-/// Internal state protected by a single mutex to avoid race conditions
-#[derive(Debug)]
-struct ShardLocatorState {
-    /// Current position in the shuffled indices
-    position: usize,
-    /// Current randomized order of indices - shuffled when exhausted
-    indices: Vec<usize>,
-    /// RNG for shuffling
-    rng: StdRng,
-}
-
 /// A shard locator that returns shards in a random order, exhausting all shards before repeating.
 ///
 /// This locator randomizes the order of shards but ensures all shards are visited
 /// before repeating. It's helpful for scenarios where you want random access but still
 /// need to process all shards, such as training on all data in random order.
-///
-/// # Non-deterministic behavior
-///
-/// IMPORTANT: Even when using a fixed seed with `with_seed()`, the random shard locator
-/// may not provide a deterministic ordering when used with parallel or multi-threaded readers.
-/// This is because thread scheduling and racing conditions can affect the order in which
-/// shards are requested and processed, potentially leading to different results between runs.
 ///
 /// # Example
 /// ```no_run
@@ -40,7 +21,7 @@ struct ShardLocatorState {
 /// use std::path::PathBuf;
 ///
 /// // Create a locator for shards with the given prefix
-/// let locator = RandomRepeatingFileShardLocator::new(
+/// let mut locator = RandomRepeatingFileShardLocator::new(
 ///     PathBuf::from("/tmp/records"),
 ///     "shard"
 /// ).unwrap();
@@ -55,8 +36,14 @@ pub struct RandomRepeatingFileShardLocator {
     /// List of all shard file paths
     shard_paths: Vec<PathBuf>,
 
-    /// All mutable state protected by a single mutex
-    state: Mutex<ShardLocatorState>,
+    /// Current position in the shuffled indices
+    position: usize,
+
+    /// Current randomized order of indices - shuffled when exhausted
+    indices: Vec<usize>,
+
+    /// RNG for shuffling
+    rng: StdRng,
 }
 
 impl RandomRepeatingFileShardLocator {
@@ -81,15 +68,11 @@ impl RandomRepeatingFileShardLocator {
         // Shuffle the indices
         indices.shuffle(&mut rng);
 
-        let state = ShardLocatorState {
+        Ok(Self {
+            shard_paths,
             position: 0,
             indices,
             rng,
-        };
-
-        Ok(Self {
-            shard_paths,
-            state: Mutex::new(state),
         })
     }
 
@@ -122,46 +105,29 @@ impl RandomRepeatingFileShardLocator {
         // Shuffle the indices
         indices.shuffle(&mut rng);
 
-        let state = ShardLocatorState {
+        Ok(Self {
+            shard_paths,
             position: 0,
             indices,
             rng,
-        };
-
-        Ok(Self {
-            shard_paths,
-            state: Mutex::new(state),
         })
     }
 }
 
 impl ShardLocator<File> for RandomRepeatingFileShardLocator {
-    fn next_shard(&self) -> Result<Shard<File>> {
-        // Lock all state - position check, increment, and reshuffle are atomic
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| DiskyError::Other("Failed to lock state".to_string()))?;
-
-        // Destructure to get separate mutable references (satisfies borrow checker)
-        let ShardLocatorState {
-            position,
-            indices,
-            rng,
-        } = &mut *state;
-
+    fn next_shard(&mut self) -> Result<Shard<File>> {
         // If we've gone through all shards, reshuffle before getting next
-        if *position >= indices.len() {
-            *position = 0;
-            indices.shuffle(rng);
+        if self.position >= self.indices.len() {
+            self.position = 0;
+            self.indices.shuffle(&mut self.rng);
         }
 
         // Get the current position and increment it
-        let current_position = *position;
-        *position += 1;
+        let current_position = self.position;
+        self.position += 1;
 
         // Get the file path for the current position
-        let index = indices[current_position];
+        let index = self.indices[current_position];
         let file_path = &self.shard_paths[index];
         let id = file_path.display().to_string();
 
@@ -183,20 +149,19 @@ impl ShardLocator<File> for RandomRepeatingFileShardLocator {
 /// This locator returns shards in a random order, exhausting all shards before repeating.
 /// It's useful for scenarios like training on data in random order while ensuring all
 /// records are processed.
-///
-/// # Non-deterministic behavior
-///
-/// IMPORTANT: Even when using a fixed seed with `with_seed()`, the random shard locator
-/// may not provide a deterministic ordering when used with parallel or multi-threaded readers.
-/// This is because thread scheduling and racing conditions can affect the order in which
-/// shards are requested and processed, potentially leading to different results between runs.
 #[derive(Debug)]
 pub struct RandomMultiPathShardLocator {
     /// List of all shard file paths
     shard_paths: Vec<PathBuf>,
 
-    /// All mutable state protected by a single mutex
-    state: Mutex<ShardLocatorState>,
+    /// Current position in the shuffled indices
+    position: usize,
+
+    /// Current randomized order of indices - shuffled when exhausted
+    indices: Vec<usize>,
+
+    /// RNG for shuffling
+    rng: StdRng,
 }
 
 impl RandomMultiPathShardLocator {
@@ -232,15 +197,11 @@ impl RandomMultiPathShardLocator {
         // Shuffle the indices
         indices.shuffle(&mut rng);
 
-        let state = ShardLocatorState {
+        Ok(Self {
+            shard_paths: file_paths,
             position: 0,
             indices,
             rng,
-        };
-
-        Ok(Self {
-            shard_paths: file_paths,
-            state: Mutex::new(state),
         })
     }
 
@@ -280,46 +241,29 @@ impl RandomMultiPathShardLocator {
         // Shuffle the indices
         indices.shuffle(&mut rng);
 
-        let state = ShardLocatorState {
+        Ok(Self {
+            shard_paths: file_paths,
             position: 0,
             indices,
             rng,
-        };
-
-        Ok(Self {
-            shard_paths: file_paths,
-            state: Mutex::new(state),
         })
     }
 }
 
 impl ShardLocator<File> for RandomMultiPathShardLocator {
-    fn next_shard(&self) -> Result<Shard<File>> {
-        // Lock all state - position check, increment, and reshuffle are atomic
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| DiskyError::Other("Failed to lock state".to_string()))?;
-
-        // Destructure to get separate mutable references (satisfies borrow checker)
-        let ShardLocatorState {
-            position,
-            indices,
-            rng,
-        } = &mut *state;
-
+    fn next_shard(&mut self) -> Result<Shard<File>> {
         // If we've gone through all shards, reshuffle before getting next
-        if *position >= indices.len() {
-            *position = 0;
-            indices.shuffle(rng);
+        if self.position >= self.indices.len() {
+            self.position = 0;
+            self.indices.shuffle(&mut self.rng);
         }
 
         // Get the current position and increment it
-        let current_position = *position;
-        *position += 1;
+        let current_position = self.position;
+        self.position += 1;
 
         // Get the file path for the current position
-        let index = indices[current_position];
+        let index = self.indices[current_position];
         let file_path = &self.shard_paths[index];
         let id = file_path.display().to_string();
 

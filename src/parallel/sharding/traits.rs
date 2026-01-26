@@ -6,10 +6,15 @@ use crate::error::Result;
 ///
 /// A Sharder is responsible for providing new sinks (Write + Seek) when requested.
 /// The consumer is responsible for wrapping these sinks in appropriate writer types.
+///
+/// Note: This trait uses `&mut self` to allow implementations to maintain internal
+/// state without requiring interior mutability. Consumers that need thread-safe
+/// access should wrap the sharder in appropriate synchronization primitives
+/// (e.g., `Mutex<S>` where `S: Sharder`).
 pub trait Sharder<Sink: Write + Seek + Send + 'static> {
     /// Create a new sink.
     /// This is called when a new shard is needed.
-    fn create_sink(&self) -> Result<Sink>;
+    fn create_sink(&mut self) -> Result<Sink>;
 }
 
 /// A shard returned by a `ShardLocator`.
@@ -30,19 +35,22 @@ pub struct Shard<Source> {
 /// This trait provides methods to incrementally retrieve shards for reading.
 /// It can be used by parallel readers to locate and open shards created
 /// by compatible sharders.
+///
+/// Note: This trait uses `&mut self` to allow implementations to maintain internal
+/// state without requiring interior mutability. Consumers that need thread-safe
+/// access should wrap the locator in appropriate synchronization primitives
+/// (e.g., `Mutex<L>` where `L: ShardLocator`).
 pub trait ShardLocator<Source: Read + Seek + Send + 'static> {
     /// Returns the next available shard.
     ///
     /// This method is called repeatedly to get all available shards.
     /// When no more shards are available, it returns Err(DiskyError::NoMoreShards).
     ///
-    /// This method is thread-safe and does not require mutable access to self.
-    ///
     /// # Returns
     /// - Ok(shard) if a shard was successfully located and opened
     /// - Err(DiskyError::NoMoreShards) if no more shards are available
     /// - Err(...) if some other error occurred while trying to locate or open a shard
-    fn next_shard(&self) -> Result<Shard<Source>>;
+    fn next_shard(&mut self) -> Result<Shard<Source>>;
 
     /// Returns the estimated total number of shards, if known.
     ///

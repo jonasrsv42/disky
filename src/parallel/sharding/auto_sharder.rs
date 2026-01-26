@@ -68,7 +68,7 @@ where
     Sink: Write + Seek + Send + 'static,
     F: Fn() -> Result<Sink> + Send + Sync + 'static,
 {
-    fn create_sink(&self) -> Result<Sink> {
+    fn create_sink(&mut self) -> Result<Sink> {
         // Create a new sink using the factory
         (self.sink_factory)()
             .map_err(|e| DiskyError::Other(format!("Failed to create sink: {}", e)))

@@ -1,7 +1,6 @@
 use std::fs::File;
 // The File type implements the required Write+Seek trait bounds
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use log::info;
 
@@ -66,7 +65,7 @@ impl Default for FileSharderConfig {
 /// use std::path::PathBuf;
 ///
 /// let output_dir = PathBuf::from("/tmp/records");
-/// let file_sharder = FileSharder::new(output_dir);
+/// let mut file_sharder = FileSharder::new(output_dir);
 ///
 /// // Create a new file sink
 /// let sink = file_sharder.create_sink().unwrap();
@@ -78,7 +77,7 @@ impl Default for FileSharderConfig {
 /// use std::path::PathBuf;
 ///
 /// let output_dir = PathBuf::from("/tmp/records");
-/// let file_sharder = FileSharder::with_prefix(
+/// let mut file_sharder = FileSharder::with_prefix(
 ///     output_dir,
 ///     "my_shard"
 /// );
@@ -94,7 +93,7 @@ impl Default for FileSharderConfig {
 ///
 /// let output_dir = PathBuf::from("/tmp/records");
 /// let config = FileSharderConfig::default().with_append(true);
-/// let file_sharder = FileSharder::with_config(output_dir, config);
+/// let mut file_sharder = FileSharder::with_config(output_dir, config);
 ///
 /// // Create a new file sink (will skip existing shards)
 /// let sink = file_sharder.create_sink().unwrap();
@@ -107,7 +106,7 @@ pub struct FileSharder {
     config: FileSharderConfig,
 
     /// Counter for generating sequential file names
-    counter: AtomicUsize,
+    counter: usize,
 }
 
 impl FileSharder {
@@ -133,7 +132,7 @@ impl FileSharder {
     pub fn with_config(output_dir: PathBuf, config: FileSharderConfig) -> Self {
         Self {
             output_dir,
-            counter: AtomicUsize::new(config.start_index),
+            counter: config.start_index,
             config,
         }
     }
@@ -170,15 +169,16 @@ impl FileSharder {
     }
 
     /// Get the next file path for a new shard
-    fn next_file_path(&self) -> PathBuf {
-        let file_num = self.counter.fetch_add(1, Ordering::SeqCst);
+    fn next_file_path(&mut self) -> PathBuf {
+        let file_num = self.counter;
+        self.counter += 1;
         self.output_dir
             .join(format!("{}_{}", self.config.file_prefix, file_num))
     }
 }
 
 impl Sharder<File> for FileSharder {
-    fn create_sink(&self) -> Result<File> {
+    fn create_sink(&mut self) -> Result<File> {
         // In append mode, keep trying paths until finding one that doesn't exist,
         // or if all existing files have been checked, create a new one at the next index
         let mut file_path = self.next_file_path();

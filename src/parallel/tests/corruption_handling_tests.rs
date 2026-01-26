@@ -4,7 +4,6 @@
 // corrupted data when configured with the appropriate corruption strategy.
 
 use std::io::Cursor;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::Bytes;
 use env_logger;
@@ -26,7 +25,7 @@ pub struct TestShardLocator {
     sources: Vec<Vec<u8>>,
 
     /// Index of the next source to provide
-    next_index: AtomicUsize,
+    next_index: usize,
 }
 
 impl TestShardLocator {
@@ -34,20 +33,21 @@ impl TestShardLocator {
     pub fn new(data: Vec<Vec<u8>>) -> Self {
         Self {
             sources: data,
-            next_index: AtomicUsize::new(0),
+            next_index: 0,
         }
     }
 }
 
 impl ShardLocator<Cursor<Vec<u8>>> for TestShardLocator {
-    fn next_shard(&self) -> Result<Shard<Cursor<Vec<u8>>>> {
-        // Get the current index and increment atomically
-        let index = self.next_index.fetch_add(1, Ordering::SeqCst);
-
+    fn next_shard(&mut self) -> Result<Shard<Cursor<Vec<u8>>>> {
         // Check if we've exhausted all sources
-        if index >= self.sources.len() {
+        if self.next_index >= self.sources.len() {
             return Err(DiskyError::NoMoreShards);
         }
+
+        // Get the current index and increment
+        let index = self.next_index;
+        self.next_index += 1;
 
         // Clone the underlying Vec<u8> to create a new Cursor
         let data = self.sources[index].clone();

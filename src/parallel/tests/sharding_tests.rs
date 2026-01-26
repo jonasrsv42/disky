@@ -16,7 +16,7 @@ fn create_memory_sharder() -> impl Sharder<Cursor<Vec<u8>>> {
 
 #[test]
 fn test_memory_sharder_basic() {
-    let sharder = create_memory_sharder();
+    let mut sharder = create_memory_sharder();
 
     // Create a sink
     let mut sink = sharder.create_sink().unwrap();
@@ -34,7 +34,7 @@ fn test_memory_sharder_basic() {
 
 #[test]
 fn test_memory_sharder_multiple_sinks() {
-    let sharder = create_memory_sharder();
+    let mut sharder = create_memory_sharder();
 
     // Create multiple sinks
     let mut sinks = Vec::new();
@@ -64,7 +64,7 @@ fn test_file_sharder_basic() {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder
-    let sharder = FileSharder::with_prefix(dir_path.clone(), "test");
+    let mut sharder = FileSharder::with_prefix(dir_path.clone(), "test");
 
     // Create a sink
     let mut sink = sharder.create_sink().unwrap();
@@ -94,7 +94,7 @@ fn test_file_sharder_sequential_numbering() {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder
-    let sharder = FileSharder::with_prefix(dir_path.clone(), "seq");
+    let mut sharder = FileSharder::with_prefix(dir_path.clone(), "seq");
 
     // Create multiple sinks
     let mut sinks = Vec::new();
@@ -118,7 +118,7 @@ fn test_file_sharder_with_nested_directory() {
     let dir_path = temp_dir.path().join("nested").join("folders");
 
     // Create a file sharder with a nested directory path
-    let sharder = FileSharder::with_prefix(dir_path.clone(), "file");
+    let mut sharder = FileSharder::with_prefix(dir_path.clone(), "file");
 
     // Create a sink
     let sink = sharder.create_sink().unwrap();
@@ -138,7 +138,7 @@ fn test_custom_factory_with_state() {
     let counter_clone = counter.clone();
 
     // Create a sharder that uses the counter
-    let sharder = Autosharder::new(move || {
+    let mut sharder = Autosharder::new(move || {
         let count = counter_clone.fetch_add(1, Ordering::SeqCst);
         Ok(Cursor::new(vec![count as u8; count + 1]))
     });
@@ -169,7 +169,7 @@ fn test_error_handling() {
     let counter = Arc::new(Mutex::new(0));
     let counter_clone = counter.clone();
 
-    let sharder = Autosharder::new(move || -> Result<Cursor<Vec<u8>>> {
+    let mut sharder = Autosharder::new(move || -> Result<Cursor<Vec<u8>>> {
         let mut count = counter_clone.lock().unwrap();
         *count += 1;
 
@@ -207,7 +207,7 @@ fn test_file_sharder_with_custom_starting_index() {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with a custom starting index
-    let sharder = FileSharder::with_start_index(dir_path.clone(), "custom", 100);
+    let mut sharder = FileSharder::with_start_index(dir_path.clone(), "custom", 100);
 
     // Create a few sinks
     for i in 0..3 {
@@ -236,7 +236,7 @@ fn test_file_sharder_with_append_mode() {
 
     // Create a file sharder with append mode enabled
     let config = FileSharderConfig::new("append").with_append(true);
-    let sharder = FileSharder::with_config(dir_path.clone(), config);
+    let mut sharder = FileSharder::with_config(dir_path.clone(), config);
 
     // Create a new sink - should skip the existing files
     let mut sink = sharder.create_sink().unwrap();
@@ -279,7 +279,7 @@ fn test_random_repeating_file_shard_locator() {
     }
 
     // Create a random repeating locator with a fixed seed for deterministic testing
-    let locator = RandomRepeatingFileShardLocator::with_seed(
+    let mut locator = RandomRepeatingFileShardLocator::with_seed(
         dir_path.clone(),
         "random",
         42, // fixed seed for deterministic shuffling
@@ -340,7 +340,6 @@ fn test_random_repeating_file_shard_locator_with_empty_directory() {
 
 #[test]
 fn test_random_repeating_file_shard_locator_two_threads() {
-    use std::sync::Arc;
     use std::thread;
 
     // Create a temporary directory
@@ -356,15 +355,18 @@ fn test_random_repeating_file_shard_locator_two_threads() {
             .unwrap();
     }
 
-    // Create a shared locator
-    let locator = Arc::new(RandomRepeatingFileShardLocator::new(dir_path.clone(), "mt").unwrap());
+    // Create a shared locator wrapped in Arc<Mutex<>> for thread-safe access
+    // This demonstrates that synchronization is now controlled by the consumer
+    let locator = Arc::new(Mutex::new(
+        RandomRepeatingFileShardLocator::new(dir_path.clone(), "mt").unwrap(),
+    ));
 
     // Create two threads that each read 10 files (full set)
     let locator1 = Arc::clone(&locator);
     let thread1 = thread::spawn(move || {
         let mut contents = Vec::new();
         for _ in 0..10 {
-            let mut shard = locator1.next_shard().unwrap();
+            let mut shard = locator1.lock().unwrap().next_shard().unwrap();
             let mut buffer = Vec::new();
             shard.source.read_to_end(&mut buffer).unwrap();
             contents.push(String::from_utf8_lossy(&buffer).to_string());
@@ -379,7 +381,7 @@ fn test_random_repeating_file_shard_locator_two_threads() {
     let thread2 = thread::spawn(move || {
         let mut contents = Vec::new();
         for _ in 0..10 {
-            let mut shard = locator2.next_shard().unwrap();
+            let mut shard = locator2.lock().unwrap().next_shard().unwrap();
             let mut buffer = Vec::new();
             shard.source.read_to_end(&mut buffer).unwrap();
             contents.push(String::from_utf8_lossy(&buffer).to_string());

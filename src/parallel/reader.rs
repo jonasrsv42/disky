@@ -4,7 +4,7 @@
 //! performance by reading from multiple sharded files.
 
 use std::io::{Read, Seek};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use log::error;
@@ -88,8 +88,8 @@ pub struct ReaderResource<Source: Read + Seek + Send + 'static> {
 ///
 /// Controls how shards are located and loaded in the parallel reader.
 pub struct ShardingConfig<Source: Read + Seek + Send + 'static> {
-    /// The shard locator for finding and opening shards
-    pub locator: Box<dyn ShardLocator<Source> + Send + Sync>,
+    /// The shard locator for finding and opening shards, wrapped in Mutex for thread-safe access
+    pub locator: Mutex<Box<dyn ShardLocator<Source> + Send>>,
 
     /// Number of shards to keep active at once
     pub shards: usize,
@@ -107,7 +107,7 @@ impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
     ///
     /// # Returns
     /// A new ShardingConfig instance
-    pub fn new(locator: Box<dyn ShardLocator<Source> + Send + Sync>, shards: usize) -> Self {
+    pub fn new(locator: Box<dyn ShardLocator<Source> + Send>, shards: usize) -> Self {
         // Ensure shards is at least 1
         let requested_shards = std::cmp::max(shards, 1);
 
@@ -118,7 +118,7 @@ impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
         };
 
         Self {
-            locator,
+            locator: Mutex::new(locator),
             shards: actual_shards,
         }
     }
@@ -173,8 +173,13 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// # Returns
     /// A Result indicating success or failure
     fn get_new_shard(&self) -> Result<()> {
-        // Get a new shard using the locator
-        let shard = self.sharding_config.locator.next_shard()?;
+        // Get a new shard using the locator (lock the mutex for thread-safe access)
+        let shard = self
+            .sharding_config
+            .locator
+            .lock()
+            .map_err(|_| DiskyError::Other("Failed to lock locator".to_string()))?
+            .next_shard()?;
 
         // Create a new RecordReader with the source and configuration
         let reader = RecordReader::with_config(shard.source, self.config.reader_config.clone())?;

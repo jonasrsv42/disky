@@ -16,7 +16,7 @@ fn test_file_shard_locator_basic() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder to generate some test files
-    let sharder = FileSharder::with_prefix(dir_path.clone(), "test");
+    let mut sharder = FileSharder::with_prefix(dir_path.clone(), "test");
 
     // Create a few shard files
     let shard_count = 3;
@@ -33,7 +33,7 @@ fn test_file_shard_locator_basic() -> Result<()> {
     drop(file_handles);
 
     // Create a locator for the shards
-    let locator = FileShardLocator::new(dir_path, "test")?;
+    let mut locator = FileShardLocator::new(dir_path, "test")?;
 
     // Test estimated_shard_count
     assert_eq!(locator.estimated_shard_count(), Some(shard_count));
@@ -102,7 +102,7 @@ fn test_memory_shard_locator() -> Result<()> {
 
     // Create a memory shard locator with 3 shards
     let shard_count = 3;
-    let locator = MemoryShardLocator::new(factory, shard_count);
+    let mut locator = MemoryShardLocator::new(factory, shard_count);
 
     // Check estimated shard count
     assert_eq!(locator.estimated_shard_count(), Some(shard_count));
@@ -149,7 +149,7 @@ fn test_shard_locator_error_handling() -> Result<()> {
 
     // Create a memory shard locator with 3 shards
     let shard_count = 3;
-    let locator = MemoryShardLocator::new(factory, shard_count);
+    let mut locator = MemoryShardLocator::new(factory, shard_count);
 
     // First shard should be readable
     let mut shard = locator.next_shard()?;

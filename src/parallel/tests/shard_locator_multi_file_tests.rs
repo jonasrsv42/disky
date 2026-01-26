@@ -41,7 +41,7 @@ fn test_multi_path_shard_locator_basic() -> Result<()> {
     let (temp_dir, file_paths) = create_test_shards(3)?;
 
     // Create the locator
-    let locator = MultiPathShardLocator::new(file_paths)?;
+    let mut locator = MultiPathShardLocator::new(file_paths)?;
 
     // Check the estimated shard count
     assert_eq!(locator.estimated_shard_count(), Some(3));
@@ -97,7 +97,7 @@ fn test_random_multi_path_shard_locator() -> Result<()> {
     let (temp_dir, file_paths) = create_test_shards(5)?;
 
     // Create the locator with a fixed seed for deterministic testing
-    let locator = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
+    let mut locator = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
 
     // Check the estimated shard count
     assert_eq!(locator.estimated_shard_count(), Some(5));
@@ -133,8 +133,8 @@ fn test_random_multi_path_shard_locator_repeatability() -> Result<()> {
     let (temp_dir, file_paths) = create_test_shards(3)?;
 
     // Create two locators with the same seed
-    let locator1 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
-    let locator2 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
+    let mut locator1 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
+    let mut locator2 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
 
     // They should produce the same sequence
     for _ in 0..3 {
@@ -159,8 +159,8 @@ fn test_random_multi_path_shard_locator_different_seeds() -> Result<()> {
     let (temp_dir, file_paths) = create_test_shards(5)?;
 
     // Create two locators with different seeds
-    let locator1 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
-    let locator2 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 43)?;
+    let mut locator1 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
+    let mut locator2 = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 43)?;
 
     // Read all shards from both locators
     let mut sequence1 = Vec::new();
@@ -199,7 +199,7 @@ fn test_random_multi_path_shard_locator_reshuffle() -> Result<()> {
     let (temp_dir, file_paths) = create_test_shards(3)?;
 
     // Create the locator with a fixed seed
-    let locator = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
+    let mut locator = RandomMultiPathShardLocator::with_seed(file_paths.clone(), 42)?;
 
     // Read all shards in the first cycle
     let mut first_cycle = Vec::new();

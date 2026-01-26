@@ -75,7 +75,7 @@
 //! ```
 
 use std::io::{Seek, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::error::{DiskyError, Result};
 use crate::parallel::promise::Promise;
@@ -184,8 +184,8 @@ impl ParallelWriterConfig {
 /// Controls how auto-sharding is performed in the parallel writer,
 /// including the sharder implementation and number of shards.
 pub struct ShardingConfig<Sink: Write + Seek + Send + 'static> {
-    /// The sharder implementation for creating new sinks
-    pub sharder: Box<dyn Sharder<Sink> + Send + Sync>,
+    /// The sharder implementation for creating new sinks, wrapped in Mutex for thread-safe access
+    pub sharder: Mutex<Box<dyn Sharder<Sink> + Send>>,
 
     /// Number of shards to create and maintain
     pub shards: usize,
@@ -205,12 +205,12 @@ impl<Sink: Write + Seek + Send + 'static> ShardingConfig<Sink> {
     ///
     /// # Returns
     /// A new ShardingConfig instance
-    pub fn new(sharder: Box<dyn Sharder<Sink> + Send + Sync>, shards: usize) -> Self {
+    pub fn new(sharder: Box<dyn Sharder<Sink> + Send>, shards: usize) -> Self {
         // Ensure shards is at least 1
         let shards = std::cmp::max(shards, 1);
 
         Self {
-            sharder,
+            sharder: Mutex::new(sharder),
             shards,
             // Auto-sharding is disabled by default
             enable_auto_sharding: false,
@@ -225,15 +225,12 @@ impl<Sink: Write + Seek + Send + 'static> ShardingConfig<Sink> {
     ///
     /// # Returns
     /// A new ShardingConfig instance with auto-sharding enabled
-    pub fn with_auto_sharding(
-        sharder: Box<dyn Sharder<Sink> + Send + Sync>,
-        shards: usize,
-    ) -> Self {
+    pub fn with_auto_sharding(sharder: Box<dyn Sharder<Sink> + Send>, shards: usize) -> Self {
         // Ensure shards is at least 1
         let shards = std::cmp::max(shards, 1);
 
         Self {
-            sharder,
+            sharder: Mutex::new(sharder),
             shards,
             enable_auto_sharding: true,
         }
@@ -415,8 +412,13 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Returns
     /// A Result indicating success or failure
     fn create_new_shard(&self) -> Result<()> {
-        // Create a new sink using the sharder
-        let sink = self.sharding_config.sharder.create_sink()?;
+        // Create a new sink using the sharder (lock the mutex for thread-safe access)
+        let sink = self
+            .sharding_config
+            .sharder
+            .lock()
+            .map_err(|_| DiskyError::Other("Failed to lock sharder".to_string()))?
+            .create_sink()?;
 
         // Create a new RecordWriter with the sink and configuration
         let writer = RecordWriter::with_config(sink, self.config.writer_config.clone())?;

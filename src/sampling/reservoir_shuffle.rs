@@ -6,9 +6,9 @@
 //! stream, providing better randomization for ML training workloads.
 
 use bytes::Bytes;
-use rand::seq::SliceRandom;
 use rand::Rng;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::seq::SliceRandom;
+use rand::{SeedableRng, rngs::StdRng};
 
 use crate::error::{DiskyError, Result};
 
@@ -210,7 +210,7 @@ where
                     None => {
                         // Input exhausted and our buffer is empty.
 
-                        // This case happens if the source had no data what-so-ever 
+                        // This case happens if the source had no data what-so-ever
                         // or only errors.
                         if self.buffer.is_empty() {
                             self.state = State::Done;

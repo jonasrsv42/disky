@@ -132,11 +132,12 @@ Reading with the multi-threaded API is just as easy:
 use std::path::PathBuf;
 use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
 use disky::parallel::reader::{ShardingConfig, ParallelReaderConfig, DiskyParallelPiece};
-use disky::parallel::sharding::FileShardLocator;
+use disky::shard::source::{FileShards, SequentialShardSource};
 
-// Create a locator for finding sharded files
-let shard_locator = FileShardLocator::new(PathBuf::from("/tmp/output"), "shard")?;
-let sharding_config = ShardingConfig::new(Box::new(shard_locator), 3);
+// Discover sharded files and create a sequential source
+let file_shards = FileShards::from_pattern(PathBuf::from("/tmp/output"), "shard")?;
+let source = SequentialShardSource::new(file_shards);
+let sharding_config = ShardingConfig::new(Box::new(source), 3);
 
 // Create the multi-threaded reader
 let reader = MultiThreadedReader::new(sharding_config, MultiThreadedReaderConfig::default())?;

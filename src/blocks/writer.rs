@@ -111,7 +111,7 @@ impl<Sink: Write + Seek> Seek for WritePositionTracker<Sink> {
 }
 
 /// Configuration options for BlockWriter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct BlockWriterConfig {
     /// Size of a block in bytes (default: 64 KiB).
     pub block_size: u64,

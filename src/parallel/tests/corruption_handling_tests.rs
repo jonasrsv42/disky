@@ -10,57 +10,32 @@ use env_logger;
 use log::debug;
 
 use crate::blocks::writer::BlockWriterConfig;
-use crate::error::{DiskyError, Result};
+use crate::error::Result;
 use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-use crate::parallel::sharding::{Shard, ShardCount, ShardLocator};
 use crate::reader::CorruptionStrategy;
+use crate::shard::source::SequentialShardSource;
+use crate::shard::source::{Shard, Shards};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
-/// A simple test shard locator that provides in-memory Cursors from a predefined list.
-///
-/// This locator is useful for testing, especially with corrupted data.
-pub struct TestShardLocator {
-    /// List of sources to provide
+/// A simple test shard collection that provides in-memory Cursors from a predefined list.
+struct TestShards {
     sources: Vec<Vec<u8>>,
-
-    /// Index of the next source to provide
-    next_index: usize,
 }
 
-impl TestShardLocator {
-    /// Create a new TestShardLocator with the given data.
-    pub fn new(data: Vec<Vec<u8>>) -> Self {
-        Self {
-            sources: data,
-            next_index: 0,
-        }
+impl Shards for TestShards {
+    type Source = Cursor<Vec<u8>>;
+
+    fn count(&self) -> usize {
+        self.sources.len()
     }
-}
 
-impl ShardLocator<Cursor<Vec<u8>>> for TestShardLocator {
-    fn next_shard(&mut self) -> Result<Shard<Cursor<Vec<u8>>>> {
-        // Check if we've exhausted all sources
-        if self.next_index >= self.sources.len() {
-            return Err(DiskyError::NoMoreShards);
-        }
-
-        // Get the current index and increment
-        let index = self.next_index;
-        self.next_index += 1;
-
-        // Clone the underlying Vec<u8> to create a new Cursor
+    fn open(&self, index: usize) -> Result<Shard<Cursor<Vec<u8>>>> {
         let data = self.sources[index].clone();
-        let source = Cursor::new(data);
-
         Ok(Shard {
-            source,
+            source: Cursor::new(data),
             id: format!("test_shard_{}", index),
         })
-    }
-
-    fn shard_count(&self) -> ShardCount {
-        ShardCount::Finite(self.sources.len())
     }
 }
 
@@ -107,6 +82,12 @@ fn corrupt_file(mut buffer: Vec<u8>, position: usize) -> Vec<u8> {
     buffer
 }
 
+fn make_sharding_config(sources: Vec<Vec<u8>>) -> ShardingConfig<Cursor<Vec<u8>>> {
+    let shards = TestShards { sources };
+    let source = SequentialShardSource::new(shards);
+    ShardingConfig::new(Box::new(source), 1)
+}
+
 /// Test that corruption handling works in recovery mode with multi-threaded reader
 #[test]
 fn test_multithreaded_reader_corruption_recovery() {
@@ -134,8 +115,7 @@ fn test_multithreaded_reader_corruption_recovery() {
 
         // Try to read with default error strategy - should fail at some point
         {
-            // Create a shard locator with our corrupted buffer
-            let locator = TestShardLocator::new(vec![corrupted.clone()]);
+            let sharding_config = make_sharding_config(vec![corrupted.clone()]);
 
             // Use same small block size as the writer (128 bytes)
             let reader_config = ParallelReaderConfig::new(
@@ -148,8 +128,6 @@ fn test_multithreaded_reader_corruption_recovery() {
                 1,    // Use minimal threads for test
                 1024, // Small queue size
             );
-
-            let sharding_config = ShardingConfig::new(Box::new(locator), 1);
 
             // Create reader with default (Error) corruption strategy
             let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
@@ -200,8 +178,7 @@ fn test_multithreaded_reader_corruption_recovery() {
 
         // Try with recovery strategy
         {
-            // Create a shard locator with our corrupted buffer
-            let locator = TestShardLocator::new(vec![corrupted.clone()]);
+            let sharding_config = make_sharding_config(vec![corrupted.clone()]);
 
             // Use same small block size as the writer (128 bytes) but with recovery enabled
             let mut reader_config =
@@ -216,8 +193,6 @@ fn test_multithreaded_reader_corruption_recovery() {
                 1,    // Use minimal threads for test
                 1024, // Small queue size
             );
-
-            let sharding_config = ShardingConfig::new(Box::new(locator), 1);
 
             // Create reader with recovery corruption strategy
             let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
@@ -250,12 +225,6 @@ fn test_multithreaded_reader_corruption_recovery() {
                 records.len(),
                 read_error
             );
-
-            // In multithreaded context with corruption recovery, we either:
-            // 1. Get some records (recovery worked)
-            // 2. Get an explicit error
-            // 3. Get EOF due to worker thread exit (which is also acceptable)
-            // So no additional assertion is needed here
 
             // Close the reader
             reader.close().unwrap();
@@ -311,8 +280,7 @@ fn test_multithreaded_reader_multiple_corruptions() {
 
     // Try with recovery enabled in multi-threaded context
     {
-        // Create a shard locator with our corrupted buffer
-        let locator = TestShardLocator::new(vec![corrupted]);
+        let sharding_config = make_sharding_config(vec![corrupted]);
 
         // Use same block size as the writer but with recovery enabled
         let mut reader_config =
@@ -327,8 +295,6 @@ fn test_multithreaded_reader_multiple_corruptions() {
             1,    // Use minimal threads for test
             1024, // Small queue size
         );
-
-        let sharding_config = ShardingConfig::new(Box::new(locator), 1);
 
         // Create reader with recovery corruption strategy
         let reader = MultiThreadedReader::new(sharding_config, config).unwrap();

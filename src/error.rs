@@ -103,10 +103,6 @@ pub enum DiskyError {
     #[error("Queue is closed: {0}")]
     QueueClosed(String),
 
-    /// Indicates that no more shards are available from a ShardLocator.
-    #[error("No more shards available")]
-    NoMoreShards,
-
     /// Indicates that a resource pool is completely exhausted with no resources.
     #[error("Resource pool is exhausted")]
     PoolExhausted,

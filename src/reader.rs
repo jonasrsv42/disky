@@ -85,7 +85,7 @@ impl Default for CorruptionStrategy {
 /// Configuration for the [`RecordReader`].
 ///
 /// Controls the behavior of record reading, including block size and corruption handling.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct RecordReaderConfig {
     /// Underlying block reader configuration (block size, etc.)
     pub block_config: BlockReaderConfig,

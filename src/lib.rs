@@ -24,6 +24,7 @@ pub mod constants;
 pub mod error;
 pub mod hash;
 pub mod reader;
+pub mod shard;
 pub(crate) mod varint;
 pub mod writer;
 

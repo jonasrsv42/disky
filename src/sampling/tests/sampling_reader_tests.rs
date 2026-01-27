@@ -314,12 +314,12 @@ fn test_sampling_reader_with_multi_threaded_readers() {
         MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
     };
     use crate::parallel::reader::ShardingConfig;
-    use crate::parallel::sharding::MemoryShardLocator;
+    use crate::shard::source::{MemoryShards, SequentialShardSource};
     use crate::writer::RecordWriter;
-    use std::io::{Cursor, Seek, SeekFrom};
+    use std::io::Cursor;
 
-    // Helper function to create a cursor with "A" records
-    fn create_a_cursor() -> Result<Cursor<Vec<u8>>> {
+    // Helper function to create data with "A" records
+    fn create_a_data() -> Vec<u8> {
         let mut data = Vec::new();
         {
             let cursor = Cursor::new(&mut data);
@@ -331,14 +331,11 @@ fn test_sampling_reader_with_multi_threaded_readers() {
             }
             writer.close().unwrap();
         }
-
-        let mut cursor = Cursor::new(data);
-        cursor.seek(SeekFrom::Start(0)).unwrap();
-        Ok(cursor)
+        data
     }
 
-    // Helper function to create a cursor with "B" records
-    fn create_b_cursor() -> Result<Cursor<Vec<u8>>> {
+    // Helper function to create data with "B" records
+    fn create_b_data() -> Vec<u8> {
         let mut data = Vec::new();
         {
             let cursor = Cursor::new(&mut data);
@@ -350,19 +347,20 @@ fn test_sampling_reader_with_multi_threaded_readers() {
             }
             writer.close().unwrap();
         }
-
-        let mut cursor = Cursor::new(data);
-        cursor.seek(SeekFrom::Start(0)).unwrap();
-        Ok(cursor)
+        data
     }
 
-    // Create MemoryShardLocator for the first buffer - with "A" records
-    let locator_a = MemoryShardLocator::new(create_a_cursor, 1);
-    let sharding_config_a = ShardingConfig::new(Box::new(locator_a), 1);
+    // Create MemoryShards for the first buffer - with "A" records
+    let a_data = create_a_data();
+    let shards_a = MemoryShards::new(move |_index: usize| Ok(a_data.clone()), 1);
+    let source_a = SequentialShardSource::new(shards_a);
+    let sharding_config_a = ShardingConfig::new(Box::new(source_a), 1);
 
-    // Create MemoryShardLocator for the second buffer - with "B" records
-    let locator_b = MemoryShardLocator::new(create_b_cursor, 1);
-    let sharding_config_b = ShardingConfig::new(Box::new(locator_b), 1);
+    // Create MemoryShards for the second buffer - with "B" records
+    let b_data = create_b_data();
+    let shards_b = MemoryShards::new(move |_index: usize| Ok(b_data.clone()), 1);
+    let source_b = SequentialShardSource::new(shards_b);
+    let sharding_config_b = ShardingConfig::new(Box::new(source_b), 1);
 
     // Create MultiThreadedReader configs
     let mt_config = MultiThreadedReaderConfig::default().with_reading_order(ReadingOrder::Drain);

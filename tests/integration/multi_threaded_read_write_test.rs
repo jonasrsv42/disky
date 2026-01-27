@@ -5,8 +5,9 @@ use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedW
 use disky::parallel::reader::{
     DiskyParallelPiece, ParallelReaderConfig, ShardingConfig as ReaderShardingConfig,
 };
-use disky::parallel::sharding::{FileShardLocator, FileSharder};
+use disky::parallel::sharding::FileSharder;
 use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig as WriterShardingConfig};
+use disky::shard::source::{FileShards, SequentialShardSource};
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -46,11 +47,9 @@ fn test_multi_threaded_reader_with_multi_threaded_writer() -> Result<()> {
     writer.close()?;
 
     // Now create a reader to read the records back
-    let locator = FileShardLocator::new(dir_path, "mt_test")?;
-    let reader_sharding_config = ReaderShardingConfig::new(
-        Box::new(locator),
-        3, // Same number of shards as the writer
-    );
+    let file_shards = FileShards::from_pattern(dir_path, "mt_test")?;
+    let source = SequentialShardSource::new(file_shards);
+    let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
     // Create reader configuration with 2 worker threads
     let reader_config = MultiThreadedReaderConfig::new(
@@ -131,11 +130,9 @@ fn test_multi_threaded_reader_writer_async() -> Result<()> {
     writer.close()?;
 
     // Now create a reader to read the records back
-    let locator = FileShardLocator::new(dir_path, "mt_async_test")?;
-    let reader_sharding_config = ReaderShardingConfig::new(
-        Box::new(locator),
-        4, // Same number of shards as the writer
-    );
+    let file_shards = FileShards::from_pattern(dir_path, "mt_async_test")?;
+    let source = SequentialShardSource::new(file_shards);
+    let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 4);
 
     // Create reader configuration with 3 worker threads
     let reader_config = MultiThreadedReaderConfig::new(
@@ -224,11 +221,9 @@ fn test_large_records_multi_threaded() -> Result<()> {
     drop(writer); // joins and closes to ensure all resources are properly cleaned up
 
     // Now create a reader to read the records back
-    let locator = FileShardLocator::new(dir_path, "mt_large_test")?;
-    let reader_sharding_config = ReaderShardingConfig::new(
-        Box::new(locator),
-        2, // Same number of shards as the writer
-    );
+    let file_shards = FileShards::from_pattern(dir_path, "mt_large_test")?;
+    let source = SequentialShardSource::new(file_shards);
+    let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 2);
 
     // Create reader configuration with 2 worker threads and large queue size
     let reader_config = MultiThreadedReaderConfig::new(

@@ -8,8 +8,9 @@ mod parallel_example {
     use disky::parallel::reader::{
         DiskyParallelPiece, ParallelReaderConfig, ShardingConfig as ReaderShardingConfig,
     };
-    use disky::parallel::sharding::{FileShardLocator, FileSharder};
+    use disky::parallel::sharding::FileSharder;
     use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig as WriterShardingConfig};
+    use disky::shard::source::{FileShards, SequentialShardSource};
     use tempfile::tempdir;
 
     pub fn run_examples() -> disky::error::Result<()> {
@@ -76,11 +77,12 @@ mod parallel_example {
     fn basic_mt_read_example(dir_path: &std::path::Path) -> disky::error::Result<()> {
         println!("Running basic multi-threaded read example...");
 
-        // Create a FileShardLocator to read from our sharded files
-        let shard_locator = FileShardLocator::new(dir_path.to_path_buf(), "mt_shard")?;
+        // Create a FileShards to read from our sharded files
+        let file_shards = FileShards::from_pattern(dir_path.to_path_buf(), "mt_shard")?;
+        let source = SequentialShardSource::new(file_shards);
 
         // Configure the sharding
-        let sharding_config = ReaderShardingConfig::new(Box::new(shard_locator), 3);
+        let sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
         // Create the reader configuration with 4 worker threads
         let config = MultiThreadedReaderConfig {
@@ -124,11 +126,12 @@ mod parallel_example {
     fn iterator_mt_example(dir_path: &std::path::Path) -> disky::error::Result<()> {
         println!("Running multi-threaded iterator example...");
 
-        // Create a FileShardLocator for the sharded files
-        let shard_locator = FileShardLocator::new(dir_path.to_path_buf(), "mt_shard")?;
+        // Create a FileShards for the sharded files
+        let file_shards = FileShards::from_pattern(dir_path.to_path_buf(), "mt_shard")?;
+        let source = SequentialShardSource::new(file_shards);
 
         // Configure the sharding
-        let sharding_config = ReaderShardingConfig::new(Box::new(shard_locator), 3);
+        let sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
         // Create the reader with default configuration
         let reader =

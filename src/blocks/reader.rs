@@ -84,7 +84,7 @@ impl<Source: Read + Seek> Seek for ReadPositionTracker<Source> {
 }
 
 /// Configuration options for BlockReader.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct BlockReaderConfig {
     /// Size of a block in bytes (default: 64 KiB).
     pub block_size: u64,

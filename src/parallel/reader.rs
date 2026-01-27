@@ -13,9 +13,9 @@ use crate::error::{DiskyError, Result};
 use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
-use crate::parallel::sharding::{ShardCount, ShardLocator};
 use crate::parallel::task_queue::TaskQueue;
 use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::shard::Shard;
 
 /// Result of reading a record from the parallel reader
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,43 +84,30 @@ pub struct ReaderResource<Source: Read + Seek + Send + 'static> {
     pub shard_id: String,
 }
 
-/// Sharding configuration for the parallel reader
+/// Sharding configuration for the parallel reader.
 ///
 /// Controls how shards are located and loaded in the parallel reader.
 pub struct ShardingConfig<Source: Read + Seek + Send + 'static> {
-    /// The shard locator for finding and opening shards, wrapped in Mutex for thread-safe access
-    pub locator: Mutex<Box<dyn ShardLocator<Source> + Send>>,
+    /// The shard source iterator, wrapped in Mutex for thread-safe access.
+    pub source: Mutex<Box<dyn Iterator<Item = Result<Shard<Source>>> + Send>>,
 
-    /// Number of shards to keep active at once
+    /// Number of shards to keep active at once.
     pub shards: usize,
 }
 
 impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
-    /// Create a new ShardingConfig with the given locator and number of shards
-    ///
-    /// This constructor will automatically adjust the number of shards to be
-    /// the minimum of the requested count and the estimated count from the locator.
+    /// Create a new ShardingConfig.
     ///
     /// # Arguments
-    /// * `locator` - The shard locator to use for finding and opening shards
-    /// * `shards` - The maximum number of shards to keep active at once
-    ///
-    /// # Returns
-    /// A new ShardingConfig instance
-    pub fn new(locator: Box<dyn ShardLocator<Source> + Send>, shards: usize) -> Self {
-        // Ensure shards is at least 1
-        let requested_shards = std::cmp::max(shards, 1);
-
-        // Calculate the actual number of shards based on shard count
-        let actual_shards = match locator.shard_count() {
-            ShardCount::Finite(count) | ShardCount::Repeating(count) => {
-                std::cmp::min(requested_shards, count)
-            }
-        };
-
+    /// * `source` - Iterator producing shards
+    /// * `shards` - Maximum number of shards to keep active at once
+    pub fn new(
+        source: Box<dyn Iterator<Item = Result<Shard<Source>>> + Send>,
+        shards: usize,
+    ) -> Self {
         Self {
-            locator: Mutex::new(locator),
-            shards: actual_shards,
+            source: Mutex::new(source),
+            shards: std::cmp::max(shards, 1),
         }
     }
 }
@@ -172,24 +159,28 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     /// and adds it to the resource pool.
     ///
     /// # Returns
-    /// A Result indicating success or failure
-    fn get_new_shard(&self) -> Result<()> {
-        // Get a new shard using the locator (lock the mutex for thread-safe access)
-        let shard = self
+    /// Returns `Ok(true)` if a shard was added, `Ok(false)` if the source
+    /// is exhausted, or `Err` on failure.
+    fn get_new_shard(&self) -> Result<bool> {
+        let next = self
             .sharding_config
-            .locator
+            .source
             .lock()
-            .map_err(|_| DiskyError::Other("Failed to lock locator".to_string()))?
-            .next_shard()?;
+            .map_err(|_| DiskyError::Other("Failed to lock shard source".to_string()))?
+            .next();
 
-        // Create a new RecordReader with the source and configuration
-        let reader = RecordReader::with_config(shard.source, self.config.reader_config.clone())?;
-
-        // Add the reader to the resource pool
-        self.reader_pool.add_resource(ReaderResource {
-            reader: Box::new(reader),
-            shard_id: shard.id,
-        })
+        match next {
+            Some(Ok(shard)) => {
+                let reader = RecordReader::with_config(shard.source, self.config.reader_config)?;
+                self.reader_pool.add_resource(ReaderResource {
+                    reader: Box::new(reader),
+                    shard_id: shard.id,
+                })?;
+                Ok(true)
+            }
+            Some(Err(e)) => Err(e),
+            None => Ok(false),
+        }
     }
 
     /// Creates a new ParallelReader with the given sharding and reader configurations
@@ -216,18 +207,10 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             sharding_config,
         };
 
-        // Create initial shards using the count from sharding_config
+        // Create initial shards up to the configured limit
         for _ in 0..reader.sharding_config.shards {
-            match reader.get_new_shard() {
-                Ok(_) => {}
-                Err(DiskyError::NoMoreShards) => {
-                    // No more shards available, that's okay
-                    break;
-                }
-                Err(e) => {
-                    // Actual error
-                    return Err(e);
-                }
+            if !reader.get_new_shard()? {
+                break;
             }
         }
 
@@ -354,17 +337,9 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                         // This reader reached EOF, remove it from the pool
                         resource.forget();
 
-                        // Try to get a new shard
-                        match self.get_new_shard() {
-                            Ok(_) | Err(DiskyError::NoMoreShards) => {
-                                // Signal that this shard is finished, but we can try another
-                                Ok(DiskyParallelPiece::ShardFinished)
-                            }
-                            Err(e) => {
-                                // Error creating a new shard
-                                Err(e)
-                            }
-                        }
+                        // Try to get a new shard (ok regardless of whether one was found)
+                        self.get_new_shard()?;
+                        Ok(DiskyParallelPiece::ShardFinished)
                     }
                     Err(e) => Err(DiskyError::ShardError {
                         shard_id: resource.shard_id.clone(),
@@ -501,18 +476,10 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                             // This reader reached EOF, remove it from the pool
                             resource.forget();
 
-                            // Try to get a new shard
-                            match self.get_new_shard() {
-                                Ok(_) | Err(DiskyError::NoMoreShards) => {
-                                    // Signal that this shard is finished
-                                    byte_queue.push_back(DiskyParallelPiece::ShardFinished)?;
-                                    return Ok(());
-                                }
-                                Err(e) => {
-                                    // Error creating a new shard
-                                    return Err(e);
-                                }
-                            }
+                            // Try to get a new shard (ok regardless of whether one was found)
+                            self.get_new_shard()?;
+                            byte_queue.push_back(DiskyParallelPiece::ShardFinished)?;
+                            return Ok(());
                         }
                         Err(e) => {
                             return Err(DiskyError::ShardError {

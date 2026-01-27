@@ -26,7 +26,7 @@ use crate::compression::CompressionType;
 use crate::error::{DiskyError, Result};
 
 /// Configuration options for a RecordWriter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct RecordWriterConfig {
     /// Compression type to use for records.
     pub compression_type: CompressionType,

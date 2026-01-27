@@ -1,14 +1,13 @@
 use std::error::Error;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use crate::error::{DiskyError, Result};
 use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
 };
-use crate::parallel::sharding::MemoryShardLocator;
+use crate::shard::source::{MemoryShards, SequentialShardSource};
 use crate::writer::RecordWriter;
 
 /// Creates a valid Disky file with the specified number of records
@@ -49,28 +48,19 @@ fn create_corrupted_data(records: usize) -> Vec<u8> {
 #[test]
 fn test_corruption_without_recovery() -> Result<()> {
     // Create a factory that produces one valid file, then one corrupted file
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        if shard_num == 0 {
-            // First shard is good
-            Ok(Cursor::new(create_valid_data(3)))
-        } else if shard_num == 1 {
-            // Second shard is corrupted
-            Ok(Cursor::new(create_corrupted_data(3)))
-        } else {
-            // No more shards
-            Err(DiskyError::NoMoreShards)
-        }
-    };
-
-    // Create a shard locator with 2 shards
-    let shard_count = 2;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(3)),
+            1 => Ok(create_corrupted_data(3)),
+            _ => unreachable!(),
+        },
+        2,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 2;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config (no recovery)
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -112,24 +102,20 @@ fn test_corruption_without_recovery() -> Result<()> {
 /// Test how the reader handles multiple valid shards
 #[test]
 fn test_multiple_valid_shards() -> Result<()> {
-    // Create a factory that produces: valid, valid
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(3))), // First shard with 3 records
-            1 => Ok(Cursor::new(create_valid_data(2))), // Second shard with 2 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 2 shards
-    let shard_count = 2;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    // Create a factory with multiple valid shards
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(3)),
+            1 => Ok(create_valid_data(2)),
+            _ => unreachable!(),
+        },
+        2,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 2;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -178,23 +164,19 @@ fn test_multiple_valid_shards() -> Result<()> {
 #[test]
 fn test_async_reading_across_shards() -> Result<()> {
     // Create a factory with multiple valid shards
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(4))), // First shard with 4 records
-            1 => Ok(Cursor::new(create_valid_data(3))), // Second shard with 3 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 2 shards
-    let shard_count = 2;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(4)),
+            1 => Ok(create_valid_data(3)),
+            _ => unreachable!(),
+        },
+        2,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 2;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -253,23 +235,19 @@ fn test_async_reading_across_shards() -> Result<()> {
 #[test]
 fn test_byte_queue_drain_multiple_resources() -> Result<()> {
     // Create a factory with multiple valid shards
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(3))), // First shard with 3 records
-            1 => Ok(Cursor::new(create_valid_data(2))), // Second shard with 2 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 2 shards
-    let shard_count = 2;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(3)),
+            1 => Ok(create_valid_data(2)),
+            _ => unreachable!(),
+        },
+        2,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 2;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -351,23 +329,19 @@ fn test_byte_queue_drain_multiple_resources() -> Result<()> {
 #[test]
 fn test_async_drain_multiple_resources() -> Result<()> {
     // Create a factory with multiple valid shards
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(3))), // First shard with 3 records
-            1 => Ok(Cursor::new(create_valid_data(2))), // Second shard with 2 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 2 shards
-    let shard_count = 2;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(3)),
+            1 => Ok(create_valid_data(2)),
+            _ => unreachable!(),
+        },
+        2,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 2;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -461,24 +435,20 @@ fn test_async_drain_multiple_resources() -> Result<()> {
 #[test]
 fn test_reading_after_corruption() -> Result<()> {
     // Create a factory with: good shard, corrupt shard, good shard
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(3))), // First shard is good
-            1 => Ok(Cursor::new(create_corrupted_data(3))), // Second shard is corrupt
-            2 => Ok(Cursor::new(create_valid_data(2))), // Third shard is good
-            _ => Err(DiskyError::NoMoreShards),
-        }
-    };
-
-    // Create a shard locator with 3 shards
-    let shard_count = 3;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(3)),
+            1 => Ok(create_corrupted_data(3)),
+            2 => Ok(create_valid_data(2)),
+            _ => unreachable!(),
+        },
+        3,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 3;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -553,22 +523,12 @@ fn test_reading_after_corruption() -> Result<()> {
 #[test]
 fn test_read_error_includes_shard_id() -> Result<()> {
     // Create a factory that produces a corrupted shard with a known identifier
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_corrupted_data(3))), // Corrupted shard
-            _ => Err(DiskyError::NoMoreShards),
-        }
-    };
-
-    // Create a shard locator with 1 shard
-    let shard_count = 1;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(|_index: usize| Ok(create_corrupted_data(3)), 1);
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 1;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -582,7 +542,7 @@ fn test_read_error_includes_shard_id() -> Result<()> {
     // Verify it's a ShardError with the expected shard_id
     match &err {
         DiskyError::ShardError { shard_id, source } => {
-            // The MemoryShardLocator generates IDs like "memory_shard_0"
+            // The MemoryShards generates IDs like "memory_shard_0"
             assert_eq!(
                 shard_id, "memory_shard_0",
                 "Expected shard_id 'memory_shard_0', got '{}'",
@@ -615,22 +575,12 @@ fn test_read_error_includes_shard_id() -> Result<()> {
 #[test]
 fn test_drain_resource_error_includes_shard_id() -> Result<()> {
     // Create a factory that produces a corrupted shard
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_corrupted_data(3))), // Corrupted shard
-            _ => Err(DiskyError::NoMoreShards),
-        }
-    };
-
-    // Create a shard locator with 1 shard
-    let shard_count = 1;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(|_index: usize| Ok(create_corrupted_data(3)), 1);
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 1;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -679,19 +629,11 @@ fn test_drain_resource_error_includes_shard_id() -> Result<()> {
 #[test]
 fn test_shard_error_chains_source_error() -> Result<()> {
     // Create a factory that produces a corrupted shard
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_corrupted_data(3))), // Corrupted shard
-            _ => Err(DiskyError::NoMoreShards),
-        }
-    };
+    let shards = MemoryShards::new(|_index: usize| Ok(create_corrupted_data(3)), 1);
+    let source = SequentialShardSource::new(shards);
 
     let shard_count = 1;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
 
     let result = reader.read();
@@ -727,24 +669,20 @@ fn test_shard_error_chains_source_error() -> Result<()> {
 #[test]
 fn test_async_reading_with_corruption() -> Result<()> {
     // Create a factory with: good shard, corrupt shard, good shard
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(3))), // First shard is good
-            1 => Ok(Cursor::new(create_corrupted_data(3))), // Second shard is corrupt
-            2 => Ok(Cursor::new(create_valid_data(2))), // Third shard is good
-            _ => Err(DiskyError::NoMoreShards),
-        }
-    };
-
-    // Create a shard locator with 3 shards
-    let shard_count = 3;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    let shards = MemoryShards::new(
+        |index: usize| match index {
+            0 => Ok(create_valid_data(3)),
+            1 => Ok(create_corrupted_data(3)),
+            2 => Ok(create_valid_data(2)),
+            _ => unreachable!(),
+        },
+        3,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 3;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;

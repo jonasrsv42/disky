@@ -1,4 +1,4 @@
-use std::io::{Cursor, Seek, SeekFrom};
+use std::io::Cursor;
 
 use bytes::Bytes;
 
@@ -7,112 +7,74 @@ use crate::parallel::multi_threaded_reader::{
     MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
 };
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-use crate::parallel::sharding::MemoryShardLocator;
+use crate::shard::source::{MemoryShards, SequentialShardSource};
 
-/// Create a memory cursor with some test records
-fn create_test_cursor() -> Result<Cursor<Vec<u8>>> {
-    // Create a buffer
+/// Create test data with some records
+fn create_test_data() -> Vec<u8> {
     let mut data = Vec::new();
 
     {
-        // Create a cursor that we can seek on
         let cursor = Cursor::new(&mut data);
-
-        // Create a writer with the cursor
         let mut writer = crate::writer::RecordWriter::with_config(
             cursor,
             crate::writer::RecordWriterConfig::default(),
-        )?;
+        )
+        .unwrap();
 
-        // Write some test records
-        writer.write_record(b"record1")?;
-        writer.write_record(b"record2")?;
-        writer.write_record(b"record3")?;
-        writer.write_record(b"record4")?;
-        writer.write_record(b"record5")?;
-
-        // Writer goes out of scope here, releasing the cursor
+        writer.write_record(b"record1").unwrap();
+        writer.write_record(b"record2").unwrap();
+        writer.write_record(b"record3").unwrap();
+        writer.write_record(b"record4").unwrap();
+        writer.write_record(b"record5").unwrap();
     }
 
-    // Create a new cursor with the data
-    let mut cursor = Cursor::new(data);
-
-    // Rewind the cursor to the beginning
-    cursor.seek(SeekFrom::Start(0))?;
-
-    // Return the cursor
-    Ok(cursor)
+    data
 }
 
-/// Create a memory cursor with records that identify their source
-fn create_identifiable_cursor(shard_id: usize) -> Result<Cursor<Vec<u8>>> {
-    // Create a buffer
+/// Create test data with records that identify their source shard
+fn create_identifiable_data(shard_id: usize) -> Vec<u8> {
     let mut data = Vec::new();
 
     {
-        // Create a cursor that we can seek on
         let cursor = Cursor::new(&mut data);
-
-        // Create a writer with the cursor
         let mut writer = crate::writer::RecordWriter::with_config(
             cursor,
             crate::writer::RecordWriterConfig::default(),
-        )?;
+        )
+        .unwrap();
 
-        // Write records with shard id prefix for identification
         for i in 1..=5 {
             let record = format!("shard{}_record{}", shard_id, i);
-            writer.write_record(record.as_bytes())?;
+            writer.write_record(record.as_bytes()).unwrap();
         }
     }
 
-    // Create a new cursor with the data
-    let mut cursor = Cursor::new(data);
-
-    // Rewind the cursor to the beginning
-    cursor.seek(SeekFrom::Start(0))?;
-
-    // Return the cursor
-    Ok(cursor)
+    data
 }
 
-/// Create a memory shard locator with multiple shards
-fn create_multi_shard_locator(
-    shard_count: usize,
-) -> Box<dyn crate::parallel::sharding::ShardLocator<Cursor<Vec<u8>>> + Send + Sync> {
-    // Create the locator
-    let locator = MemoryShardLocator::new(move || create_test_cursor(), shard_count);
-
-    Box::new(locator)
+/// Create a ShardingConfig for multiple shards with identical test data
+fn create_multi_shard_config(shard_count: usize) -> ShardingConfig<Cursor<Vec<u8>>> {
+    let test_data = create_test_data();
+    let shards = MemoryShards::new(move |_index: usize| Ok(test_data.clone()), shard_count);
+    let source = SequentialShardSource::new(shards);
+    ShardingConfig::new(Box::new(source), shard_count)
 }
 
-/// Create a memory shard locator with multiple shards that have identifiable records
-fn create_identifiable_shard_locator(
-    shard_count: usize,
-) -> Box<dyn crate::parallel::sharding::ShardLocator<Cursor<Vec<u8>>> + Send + Sync> {
-    // Track which shard we're currently creating
-    let counter = std::sync::atomic::AtomicUsize::new(0);
-
-    // Create the locator where each shard has records identifying which shard they're from
-    let locator = MemoryShardLocator::new(
-        move || {
-            let shard_id = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1; // +1 so we have shards numbered from 1
-            create_identifiable_cursor(shard_id)
-        },
+/// Create a ShardingConfig for multiple shards with identifiable records
+fn create_identifiable_shard_config(shard_count: usize) -> ShardingConfig<Cursor<Vec<u8>>> {
+    let shards = MemoryShards::new(
+        move |index: usize| Ok(create_identifiable_data(index + 1)),
         shard_count,
     );
-
-    Box::new(locator)
+    let source = SequentialShardSource::new(shards);
+    ShardingConfig::new(Box::new(source), shard_count)
 }
 
 /// Test that the multi-threaded reader can read records from a single shard
 #[test]
 fn test_multi_threaded_reader_single_shard() -> Result<()> {
-    // Create a locator with a single shard
-    let locator = create_multi_shard_locator(1);
-
-    // Create the sharding config
-    let sharding_config = ShardingConfig::new(locator, 1);
+    // Create the sharding config with a single shard
+    let sharding_config = create_multi_shard_config(1);
 
     // Create the reader config
     let reader_config = MultiThreadedReaderConfig::new(
@@ -158,11 +120,8 @@ fn test_multi_threaded_reader_multiple_shards() -> Result<()> {
         .is_test(true)
         .try_init();
 
-    // Create a locator with multiple shards
-    let locator = create_multi_shard_locator(3);
-
-    // Create the sharding config
-    let sharding_config = ShardingConfig::new(locator, 2);
+    // Create the sharding config with 3 shards
+    let sharding_config = create_multi_shard_config(3);
 
     // Create the reader config with multiple threads
     let reader_config = MultiThreadedReaderConfig::new(
@@ -190,11 +149,8 @@ fn test_multi_threaded_reader_multiple_shards() -> Result<()> {
 /// Test try_read functionality
 #[test]
 fn test_multi_threaded_reader_try_read() -> Result<()> {
-    // Create a locator with a single shard
-    let locator = create_multi_shard_locator(1);
-
-    // Create the sharding config
-    let sharding_config = ShardingConfig::new(locator, 1);
+    // Create the sharding config with a single shard
+    let sharding_config = create_multi_shard_config(1);
 
     // Create the reader config
     let reader_config = MultiThreadedReaderConfig::new(
@@ -252,11 +208,8 @@ fn test_multi_threaded_reader_try_read() -> Result<()> {
 /// Test single-threaded drain reading mode with multiple shards
 #[test]
 fn test_single_threaded_drain_mode() -> Result<()> {
-    // Create a locator with multiple shards, each with identifiable records
-    let locator = create_identifiable_shard_locator(3);
-
-    // Create the sharding config
-    let sharding_config = ShardingConfig::new(locator, 3);
+    // Create the sharding config with identifiable shards
+    let sharding_config = create_identifiable_shard_config(3);
 
     // Create the reader config with only one worker thread and drain mode
     let reader_config = MultiThreadedReaderConfig::new(
@@ -324,11 +277,8 @@ fn test_single_threaded_drain_mode() -> Result<()> {
 /// Test single-threaded round-robin reading mode with multiple shards
 #[test]
 fn test_single_threaded_round_robin_mode() -> Result<()> {
-    // Create a locator with multiple shards, each with identifiable records
-    let locator = create_identifiable_shard_locator(3);
-
-    // Create the sharding config
-    let sharding_config = ShardingConfig::new(locator, 3);
+    // Create the sharding config with identifiable shards
+    let sharding_config = create_identifiable_shard_config(3);
 
     // Create the reader config with only one worker thread and round-robin mode
     let reader_config = MultiThreadedReaderConfig::new(
@@ -397,11 +347,8 @@ fn test_multi_threaded_reading_order() -> Result<()> {
         .try_init();
     // Test both reading modes with 2 threads (non-deterministic order, but should read all records)
     for reading_order in [ReadingOrder::Drain, ReadingOrder::RoundRobin] {
-        // Create a fresh locator for each test (instead of trying to clone the box)
-        let locator = create_identifiable_shard_locator(3);
-
-        // Create the sharding config
-        let sharding_config = ShardingConfig::new(locator, 3);
+        // Create a fresh sharding config for each test
+        let sharding_config = create_identifiable_shard_config(3);
 
         // Create the reader config with multiple threads
         let reader_config = MultiThreadedReaderConfig::new(

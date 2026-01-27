@@ -2,10 +2,10 @@ use crate::error::{DiskyError, Result};
 use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, ShardingConfig};
 use crate::parallel::sharding::Autosharder;
-use crate::parallel::sharding::MemoryShardLocator;
 use crate::parallel::writer::{
     ParallelWriter, ParallelWriterConfig, ShardingConfig as WriterShardingConfig,
 };
+use crate::shard::source::{MemoryShards, SequentialShardSource};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -32,23 +32,14 @@ fn create_valid_data(records: usize) -> Vec<u8> {
 /// Test that pending read tasks have their promises fulfilled with QueueClosed error when closing reader
 #[test]
 fn test_reader_close_fulfills_pending_promises() -> Result<()> {
-    // Create a factory with multiple valid shards
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(5))), // Shard with 5 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 1 shard
-    let shard_count = 1;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    // Create a shard source with 1 shard containing 5 records
+    let data = create_valid_data(5);
+    let shards = MemoryShards::new(move |_index: usize| Ok(data.clone()), 1);
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 1;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -87,23 +78,14 @@ fn test_reader_close_fulfills_pending_promises() -> Result<()> {
 /// Test that pending drain tasks have their promises fulfilled with QueueClosed error when closing reader
 #[test]
 fn test_reader_close_fulfills_pending_drain_promises() -> Result<()> {
-    // Create a factory with multiple valid shards
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(5))), // Shard with 5 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 1 shard
-    let shard_count = 1;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    // Create a shard source with 1 shard containing 5 records
+    let data = create_valid_data(5);
+    let shards = MemoryShards::new(move |_index: usize| Ok(data.clone()), 1);
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 1;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -142,23 +124,14 @@ fn test_reader_close_fulfills_pending_drain_promises() -> Result<()> {
 /// Test that pending close tasks have their promises fulfilled with QueueClosed error when closing reader
 #[test]
 fn test_reader_close_fulfills_pending_close_promises() -> Result<()> {
-    // Create a factory with multiple valid shards
-    let factory = move || {
-        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let shard_num = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        match shard_num {
-            0 => Ok(Cursor::new(create_valid_data(5))), // Shard with 5 records
-            _ => Err(DiskyError::NoMoreShards),         // No more shards
-        }
-    };
-
-    // Create a shard locator with 1 shard
-    let shard_count = 1;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+    // Create a shard source with 1 shard containing 5 records
+    let data = create_valid_data(5);
+    let shards = MemoryShards::new(move |_index: usize| Ok(data.clone()), 1);
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let shard_count = 1;
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader with default config
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;

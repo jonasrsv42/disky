@@ -4,10 +4,11 @@ use disky::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig,
     ShardingConfig as ReaderShardingConfig,
 };
-use disky::parallel::sharding::{FileShardLocator, FileSharder};
+use disky::parallel::sharding::FileSharder;
 use disky::parallel::writer::{
     ParallelWriter, ParallelWriterConfig, ShardingConfig as WriterShardingConfig,
 };
+use disky::shard::source::{FileShards, SequentialShardSource};
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -42,11 +43,9 @@ fn test_parallel_reader_with_parallel_writer() -> Result<()> {
     writer.close()?;
 
     // Now create a reader to read the records back
-    let locator = FileShardLocator::new(dir_path, "test_shard")?;
-    let reader_sharding_config = ReaderShardingConfig::new(
-        Box::new(locator),
-        3, // Same number of shards as the writer
-    );
+    let file_shards = FileShards::from_pattern(dir_path, "test_shard")?;
+    let source = SequentialShardSource::new(file_shards);
+    let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
     let reader = ParallelReader::new(reader_sharding_config, ParallelReaderConfig::default())?;
 
@@ -118,11 +117,9 @@ fn test_parallel_reader_async_with_parallel_writer() -> Result<()> {
     writer.close()?;
 
     // Now create a reader to read the records back
-    let locator = FileShardLocator::new(dir_path, "async_test")?;
-    let reader_sharding_config = ReaderShardingConfig::new(
-        Box::new(locator),
-        5, // Same number of shards as the writer
-    );
+    let file_shards = FileShards::from_pattern(dir_path, "async_test")?;
+    let source = SequentialShardSource::new(file_shards);
+    let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 5);
 
     let reader = ParallelReader::new(reader_sharding_config, ParallelReaderConfig::default())?;
 
@@ -217,11 +214,9 @@ fn test_large_records_parallel_read_write() -> Result<()> {
     writer.close()?;
 
     // Now create a reader to read the records back
-    let locator = FileShardLocator::new(dir_path, "large_test")?;
-    let reader_sharding_config = ReaderShardingConfig::new(
-        Box::new(locator),
-        2, // Same number of shards as the writer
-    );
+    let file_shards = FileShards::from_pattern(dir_path, "large_test")?;
+    let source = SequentialShardSource::new(file_shards);
+    let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 2);
 
     let reader = ParallelReader::new(reader_sharding_config, ParallelReaderConfig::default())?;
 

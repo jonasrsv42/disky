@@ -4,51 +4,56 @@ use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
 };
-use crate::parallel::sharding::MemoryShardLocator;
+use crate::shard::source::{MemoryShards, SequentialShardSource};
 use crate::writer::RecordWriter;
 use std::io::Cursor;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn create_shard_data(shard_num: usize, num_records: usize) -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    {
+        let cursor = Cursor::new(&mut buffer);
+        let mut writer = RecordWriter::new(cursor).unwrap();
+
+        for i in 0..num_records {
+            writer
+                .write_record(format!("Shard {} Record {}", shard_num, i).as_bytes())
+                .unwrap();
+        }
+
+        writer.close().unwrap();
+    }
+
+    buffer
+}
+
+fn create_empty_shard_data() -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    {
+        let cursor = Cursor::new(&mut buffer);
+        let mut writer = RecordWriter::new(cursor).unwrap();
+        writer.close().unwrap();
+    }
+
+    buffer
+}
 
 #[test]
 fn test_drain_resource_basic() -> Result<()> {
-    // Create a counter to track shard creation
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter_clone = counter.clone();
-
-    // Create a factory function that produces cursors with different data
-    let factory = move || {
-        let shard_num = counter_clone.fetch_add(1, Ordering::SeqCst);
-
-        // Create a Vec to hold the serialized data
-        let mut buffer = Vec::new();
-
-        // Create a cursor for the RecordWriter to use
-        let cursor = Cursor::new(&mut buffer);
-
-        // Put some records in the buffer
-        let num_records = 3;
-        {
-            let mut writer = RecordWriter::new(cursor)?;
-
-            for i in 0..num_records {
-                writer.write_record(format!("Shard {} Record {}", shard_num, i).as_bytes())?;
-            }
-
-            writer.close()?;
-        }
-
-        // Return a new cursor with the data for reading
-        Ok(Cursor::new(buffer))
-    };
-
-    // Create a memory shard locator with 3 shards
+    // Create a factory function that produces shards with different data
     let shard_count = 3;
-    let factory1 = factory.clone();
-    let locator = Box::new(MemoryShardLocator::new(factory1, shard_count));
+    let num_records = 3;
+
+    let shards = MemoryShards::new(
+        move |index: usize| Ok(create_shard_data(index, num_records)),
+        shard_count,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -150,15 +155,13 @@ fn test_drain_resource_basic() -> Result<()> {
     assert_eq!(record_count, 3);
 
     // Test asynchronous draining
-    // Reset counter for factory
-    counter.store(0, Ordering::SeqCst);
-
     // Create new reader
-    let factory2 = factory.clone();
-    let sharding_config = ShardingConfig::new(
-        Box::new(MemoryShardLocator::new(factory2, shard_count)),
+    let shards2 = MemoryShards::new(
+        move |index: usize| Ok(create_shard_data(index, num_records)),
         shard_count,
     );
+    let source2 = SequentialShardSource::new(shards2);
+    let sharding_config = ShardingConfig::new(Box::new(source2), shard_count);
 
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
 
@@ -209,25 +212,14 @@ fn test_drain_resource_basic() -> Result<()> {
 #[test]
 fn test_drain_resource_empty_shard() -> Result<()> {
     // Create a factory function that produces empty but valid shards with just a signature
-    let factory = || {
-        let mut buffer = Vec::new();
-        let cursor = Cursor::new(&mut buffer);
-
-        // Create a writer and just close it to write a signature
-        {
-            let mut writer = RecordWriter::new(cursor)?;
-            writer.close()?;
-        }
-
-        Ok(Cursor::new(buffer))
-    };
-
-    // Create a memory shard locator with 3 empty shards (with signatures)
+    let empty_data = create_empty_shard_data();
     let shard_count = 3;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+
+    let shards = MemoryShards::new(move |_index: usize| Ok(empty_data.clone()), shard_count);
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;
@@ -262,48 +254,25 @@ fn test_drain_resource_empty_shard() -> Result<()> {
 
 #[test]
 fn test_drain_resource_mixed_records() -> Result<()> {
-    // Create a counter to track shard creation
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter_clone = counter.clone();
-
     // Create a factory function that produces shards with varying numbers of records
-    let factory = move || {
-        let shard_num = counter_clone.fetch_add(1, Ordering::SeqCst);
-
-        // Create a Vec to hold the serialized data
-        let mut buffer = Vec::new();
-
-        // Create a cursor for the RecordWriter to use
-        let cursor = Cursor::new(&mut buffer);
-
-        // Put records in the buffer - different count for each shard
-        let num_records = match shard_num {
-            0 => 5, // 5 records in first shard
-            1 => 0, // 0 records in second shard (empty but valid)
-            2 => 3, // 3 records in third shard
-            _ => 1, // 1 record in any additional shards
-        };
-
-        {
-            let mut writer = RecordWriter::new(cursor)?;
-
-            for i in 0..num_records {
-                writer.write_record(format!("Shard {} Record {}", shard_num, i).as_bytes())?;
-            }
-
-            writer.close()?;
-        }
-
-        // Return a new cursor with the data for reading
-        Ok(Cursor::new(buffer))
-    };
-
-    // Create a memory shard locator with 3 shards of different sizes
     let shard_count = 3;
-    let locator = Box::new(MemoryShardLocator::new(factory, shard_count));
+
+    let shards = MemoryShards::new(
+        move |index: usize| {
+            let num_records = match index {
+                0 => 5, // 5 records in first shard
+                1 => 0, // 0 records in second shard (empty but valid)
+                2 => 3, // 3 records in third shard
+                _ => 1, // 1 record in any additional shards
+            };
+            Ok(create_shard_data(index, num_records))
+        },
+        shard_count,
+    );
+    let source = SequentialShardSource::new(shards);
 
     // Create a sharding config
-    let sharding_config = ShardingConfig::new(locator, shard_count);
+    let sharding_config = ShardingConfig::new(Box::new(source), shard_count);
 
     // Create a parallel reader
     let reader = ParallelReader::new(sharding_config, ParallelReaderConfig::default())?;

@@ -99,8 +99,9 @@ mod parallel_benchmarks {
 
     use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
     use disky::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-    use disky::parallel::sharding::{FileShardLocator, FileSharder};
+    use disky::parallel::sharding::FileSharder;
     use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
+    use disky::shard::source::{FileShards, SequentialShardSource};
 
     /// Write records to multiple shard files using the parallel writer
     pub fn write_sharded_files(
@@ -141,11 +142,12 @@ mod parallel_benchmarks {
         dir: &TempDir,
         thread_count: usize,
     ) -> Result<(usize, usize)> {
-        // Create a shard locator
-        let locator = FileShardLocator::new(dir.path().to_path_buf(), "shard")?;
+        // Create a shard source
+        let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
+        let source = SequentialShardSource::new(file_shards);
 
         // Create the sharding config - allow reading multiple shards concurrently
-        let sharding_config = ShardingConfig::new(Box::new(locator), thread_count);
+        let sharding_config = ShardingConfig::new(Box::new(source), thread_count);
 
         // Create the reader config
         let reader_config = MultiThreadedReaderConfig::new(

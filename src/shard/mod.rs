@@ -6,5 +6,5 @@
 pub mod reader;
 pub mod source;
 
-pub use reader::SequentialShardReader;
+pub use reader::{RoundRobinShardReader, SequentialShardReader};
 pub use source::{Shard, Shards};

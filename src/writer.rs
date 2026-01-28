@@ -25,9 +25,12 @@ use crate::chunks::{ChunkWriter, SimpleChunkWriter};
 use crate::compression::CompressionType;
 use crate::error::{DiskyError, Result};
 
-/// Configuration options for a RecordWriter.
+/// Configuration options for a [`RecordWriter`].
+///
+/// Controls compression, chunk size, and block configuration.
+/// This is a pure configuration object that can be passed to writer builders.
 #[derive(Debug, Clone, Copy)]
-pub struct RecordWriterConfig {
+pub struct RecordWriterOptions {
     /// Compression type to use for records.
     pub compression_type: CompressionType,
 
@@ -40,7 +43,7 @@ pub struct RecordWriterConfig {
     pub block_config: BlockWriterConfig,
 }
 
-impl Default for RecordWriterConfig {
+impl Default for RecordWriterOptions {
     fn default() -> Self {
         Self {
             compression_type: CompressionType::None,
@@ -50,12 +53,147 @@ impl Default for RecordWriterConfig {
     }
 }
 
-impl RecordWriterConfig {
-    // Set compression type for writer.
+impl RecordWriterOptions {
+    /// Creates options with a custom block size.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_size` - Size of blocks in bytes (must be at least 48 bytes)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if block_size is too small.
+    pub fn with_block_size(block_size: u64) -> Result<Self> {
+        let block_config = BlockWriterConfig::with_block_size(block_size)?;
+        Ok(Self {
+            block_config,
+            ..Default::default()
+        })
+    }
+
+    /// Sets the block configuration.
+    ///
+    /// Returns self for method chaining.
+    pub fn with_block_config(mut self, block_config: BlockWriterConfig) -> Self {
+        self.block_config = block_config;
+        self
+    }
+
+    /// Sets the compression type.
+    ///
+    /// Returns self for method chaining.
     pub fn with_compression(mut self, compression: CompressionType) -> Self {
         self.compression_type = compression;
+        self
+    }
 
-        return self;
+    /// Sets the chunk size in bytes.
+    ///
+    /// When this size is reached, the chunk will be written and a new chunk started.
+    /// Returns self for method chaining.
+    pub fn with_chunk_size(mut self, chunk_size_bytes: u64) -> Self {
+        self.chunk_size_bytes = chunk_size_bytes;
+        self
+    }
+}
+
+/// Builder for creating a [`RecordWriter`].
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::fs::File;
+/// use disky::writer::RecordWriterConfig;
+///
+/// // Create a writer with default options
+/// let file = File::create("example.riegeli").unwrap();
+/// let mut writer = RecordWriterConfig::new(file).build().unwrap();
+/// writer.write_record(b"Hello").unwrap();
+/// writer.close().unwrap();
+/// ```
+///
+/// ```no_run
+/// use std::fs::File;
+/// use disky::writer::{RecordWriterConfig, RecordWriterOptions};
+/// use disky::compression::CompressionType;
+///
+/// // Create a writer with custom options
+/// let file = File::create("example.riegeli").unwrap();
+/// let options = RecordWriterOptions::default()
+///     .with_compression(CompressionType::Zstd(3));
+/// let mut writer = RecordWriterConfig::new(file)
+///     .options(options)
+///     .build()
+///     .unwrap();
+/// ```
+pub struct RecordWriterConfig<Sink> {
+    sink: Sink,
+    options: RecordWriterOptions,
+    append_position: Option<u64>,
+}
+
+impl<Sink: Write + Seek> RecordWriterConfig<Sink> {
+    /// Creates a new builder with the given sink and default options.
+    pub fn new(sink: Sink) -> Self {
+        Self {
+            sink,
+            options: RecordWriterOptions::default(),
+            append_position: None,
+        }
+    }
+
+    /// Sets the writer options.
+    pub fn options(mut self, options: RecordWriterOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Configures the writer for appending to an existing file.
+    ///
+    /// The position should be the size of the existing file.
+    pub fn for_append(mut self, position: u64) -> Self {
+        self.append_position = Some(position);
+        self
+    }
+
+    /// Builds the [`RecordWriter`].
+    pub fn build(self) -> Result<RecordWriter<Sink>> {
+        let chunk_writer = SimpleChunkWriter::with_chunk_size(
+            self.options.compression_type,
+            self.options.chunk_size_bytes as usize,
+        )?;
+
+        match self.append_position {
+            Some(position) => {
+                // Append mode - skip signature writing
+                let block_writer = BlockWriter::for_append_with_config(
+                    self.sink,
+                    position,
+                    self.options.block_config,
+                )?;
+
+                Ok(RecordWriter {
+                    block_writer,
+                    chunk_writer,
+                    options: self.options,
+                    state: WriterState::SignatureWritten,
+                })
+            }
+            None => {
+                // New file mode - write signature
+                let block_writer = BlockWriter::with_config(self.sink, self.options.block_config)?;
+
+                let mut writer = RecordWriter {
+                    block_writer,
+                    chunk_writer,
+                    options: self.options,
+                    state: WriterState::New,
+                };
+
+                writer.write_file_signature()?;
+                Ok(writer)
+            }
+        }
     }
 }
 
@@ -94,12 +232,11 @@ pub(crate) enum WriterState {
 ///
 /// ```no_run
 /// use std::fs::File;
-/// use disky::writer::{RecordWriter, RecordWriterConfig};
-/// use disky::compression::CompressionType;
+/// use disky::writer::RecordWriterConfig;
 ///
 /// // Create a new writer with default settings
 /// let file = File::create("example.riegeli").unwrap();
-/// let mut writer = RecordWriter::new(file).unwrap();
+/// let mut writer = RecordWriterConfig::new(file).build().unwrap();
 ///
 /// // Write some records
 /// writer.write_record(b"Record 1").unwrap();
@@ -116,72 +253,14 @@ pub struct RecordWriter<Sink: Write + Seek> {
     /// The chunk writer for records.
     chunk_writer: SimpleChunkWriter,
 
-    /// Configuration for the writer.
-    config: RecordWriterConfig,
+    /// Options for the writer.
+    options: RecordWriterOptions,
 
     /// Current state of the writer.
     state: WriterState,
 }
 
 impl<Sink: Write + Seek> RecordWriter<Sink> {
-    /// Creates a new RecordWriter with default configuration.
-    pub fn new(sink: Sink) -> Result<Self> {
-        Self::with_config(sink, RecordWriterConfig::default())
-    }
-
-    /// Creates a new RecordWriter with custom configuration.
-    pub fn with_config(sink: Sink, config: RecordWriterConfig) -> Result<Self> {
-        let block_writer = BlockWriter::with_config(sink, config.block_config.clone())?;
-
-        // Create a chunk writer with the appropriate chunk size pre-allocation
-        let chunk_writer = SimpleChunkWriter::with_chunk_size(
-            config.compression_type,
-            config.chunk_size_bytes as usize,
-        )?;
-
-        let mut writer = Self {
-            block_writer,
-            chunk_writer,
-            config,
-            state: WriterState::New,
-        };
-
-        // Write the file signature immediately
-        writer.write_file_signature()?;
-
-        Ok(writer)
-    }
-
-    /// Creates a new RecordWriter for appending to an existing file.
-    pub fn for_append(sink: Sink, position: u64) -> Result<Self> {
-        Self::for_append_with_config(sink, position, RecordWriterConfig::default())
-    }
-
-    /// Creates a new RecordWriter for appending to an existing file with custom configuration.
-    ///
-    /// The position should be the size of the existing file.
-    pub fn for_append_with_config(
-        sink: Sink,
-        position: u64,
-        config: RecordWriterConfig,
-    ) -> Result<Self> {
-        let block_writer =
-            BlockWriter::for_append_with_config(sink, position, config.block_config.clone())?;
-
-        // Create a chunk writer with the appropriate chunk size pre-allocation
-        let chunk_writer = SimpleChunkWriter::with_chunk_size(
-            config.compression_type,
-            config.chunk_size_bytes as usize,
-        )?;
-
-        Ok(Self {
-            block_writer,
-            chunk_writer,
-            config,
-            state: WriterState::SignatureWritten,
-        })
-    }
-
     /// Writes the Riegeli file signature.
     fn write_file_signature(&mut self) -> Result<()> {
         match self.state {
@@ -239,7 +318,7 @@ impl<Sink: Write + Seek> RecordWriter<Sink> {
                 self.state = WriterState::RecordsWritten;
 
                 // Check if we need to write out the chunk based on size only
-                if record_size.0 >= self.config.chunk_size_bytes {
+                if record_size.0 >= self.options.chunk_size_bytes {
                     self.flush_chunk()?;
                 }
 

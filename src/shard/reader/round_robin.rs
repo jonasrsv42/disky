@@ -300,7 +300,7 @@ mod tests {
 
     use crate::error::DiskyError;
     use crate::shard::source::{MemoryShards, SequentialShardSource, Shard, Shards};
-    use crate::writer::RecordWriter;
+    use crate::writer::RecordWriterConfig;
 
     use super::RoundRobinShardReaderConfig;
 
@@ -308,7 +308,9 @@ mod tests {
     fn write_records(records: &[&[u8]]) -> Vec<u8> {
         let mut buffer = Vec::new();
         {
-            let mut writer = RecordWriter::new(Cursor::new(&mut buffer)).unwrap();
+            let mut writer = RecordWriterConfig::new(Cursor::new(&mut buffer))
+                .build()
+                .unwrap();
             for record in records {
                 writer.write_record(record).unwrap();
             }

@@ -10,7 +10,7 @@ use log::error;
 
 use crate::error::{DiskyError, Result};
 use crate::shard::sink;
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriter, RecordWriterConfig, RecordWriterOptions};
 
 /// Default maximum bytes per shard (1 GiB).
 const DEFAULT_MAX_SHARD_BYTES: usize = 1 << 30;
@@ -37,7 +37,6 @@ enum WriterState<Sink: Write + Seek> {
 /// ```
 /// use disky::shard::sink::MemoryShards;
 /// use disky::shard::writer::SequentialShardWriterConfig;
-/// use disky::writer::RecordWriterConfig;
 ///
 /// // Minimal — factory only, defaults for everything else.
 /// let mut writer = SequentialShardWriterConfig::new(MemoryShards::new()).build();
@@ -49,12 +48,12 @@ enum WriterState<Sink: Write + Seek> {
 /// ```
 /// use disky::shard::sink::MemoryShards;
 /// use disky::shard::writer::SequentialShardWriterConfig;
-/// use disky::writer::RecordWriterConfig;
+/// use disky::writer::RecordWriterOptions;
 /// use disky::compression::CompressionType;
 ///
 /// // Everything customised.
 /// let mut writer = SequentialShardWriterConfig::new(MemoryShards::new())
-///     .config(RecordWriterConfig::default().with_compression(CompressionType::None))
+///     .options(RecordWriterOptions::default().with_compression(CompressionType::None))
 ///     .max_shard_bytes(1024 * 1024)
 ///     .build();
 ///
@@ -63,24 +62,24 @@ enum WriterState<Sink: Write + Seek> {
 /// ```
 pub struct SequentialShardWriterConfig<Factory> {
     factory: Factory,
-    writer_config: RecordWriterConfig,
+    writer_options: RecordWriterOptions,
     max_bytes_per_shard: usize,
 }
 
 impl<Factory> SequentialShardWriterConfig<Factory> {
     /// Create a config with the given shard factory. All other options
-    /// use their defaults (`RecordWriterConfig::default()`, no shard rotation).
+    /// use their defaults (`RecordWriterOptions::default()`, no shard rotation).
     pub fn new(factory: Factory) -> Self {
         Self {
             factory,
-            writer_config: RecordWriterConfig::default(),
+            writer_options: RecordWriterOptions::default(),
             max_bytes_per_shard: DEFAULT_MAX_SHARD_BYTES,
         }
     }
 
-    /// Set the [`RecordWriterConfig`] used for each shard's writer.
-    pub fn config(mut self, config: RecordWriterConfig) -> Self {
-        self.writer_config = config;
+    /// Set the [`RecordWriterOptions`] used for each shard's writer.
+    pub fn options(mut self, options: RecordWriterOptions) -> Self {
+        self.writer_options = options;
         self
     }
 
@@ -99,7 +98,7 @@ impl<Factory> SequentialShardWriterConfig<Factory> {
     {
         SequentialShardWriter {
             factory: self.factory,
-            config: self.writer_config,
+            options: self.writer_options,
             max_bytes_per_shard: self.max_bytes_per_shard,
             state: WriterState::Start,
         }
@@ -121,7 +120,7 @@ impl<Factory> SequentialShardWriterConfig<Factory> {
 /// in [`DiskyError::ShardError`] with the shard's id for traceability.
 pub struct SequentialShardWriter<Sink: Write + Seek, Factory: sink::Shards<Sink = Sink>> {
     factory: Factory,
-    config: RecordWriterConfig,
+    options: RecordWriterOptions,
     max_bytes_per_shard: usize,
     state: WriterState<Sink>,
 }
@@ -139,7 +138,10 @@ impl<Sink: Write + Seek, Factory: sink::Shards<Sink = Sink>> SequentialShardWrit
 
                 WriterState::Start => {
                     let shard = self.factory.next()?;
-                    match RecordWriter::with_config(shard.sink, self.config) {
+                    match RecordWriterConfig::new(shard.sink)
+                        .options(self.options)
+                        .build()
+                    {
                         Ok(writer) => {
                             self.state = WriterState::Writing {
                                 writer,

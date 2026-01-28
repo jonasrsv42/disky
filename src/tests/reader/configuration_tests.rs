@@ -18,7 +18,7 @@ use bytes::Bytes;
 
 use crate::blocks::writer::BlockWriterConfig;
 use crate::reader::{CorruptionStrategy, RecordReaderConfig, RecordReaderOptions};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Test creating a reader with custom block size
 #[test]
@@ -32,10 +32,15 @@ fn test_custom_block_size() {
     {
         let cursor = Cursor::new(&mut buffer);
         // Use a specific block size for the writer
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write some records
         for i in 0..10 {
@@ -77,10 +82,15 @@ fn test_minimum_block_size() {
     {
         let cursor = Cursor::new(&mut buffer);
         // Use a small block size
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write small records
         for i in 0..5 {
@@ -112,7 +122,7 @@ fn test_corruption_strategy_config() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         // Write some records
         for i in 0..5 {
@@ -161,7 +171,7 @@ fn test_config_chaining() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
         writer.write_record(&Bytes::from(vec![1, 2, 3])).unwrap();
         writer.close().unwrap();
     }

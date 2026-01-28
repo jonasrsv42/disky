@@ -10,7 +10,7 @@ use bytes::Bytes;
 use crate::compression::core::{CompressionType, Compressor, Decompressor};
 use crate::compression::zstd::{ZstdCompressor, ZstdDecompressor};
 use crate::reader::{DiskyPiece, RecordReaderConfig};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 #[test]
 fn test_zstd_roundtrip_small_data() {
@@ -233,8 +233,10 @@ fn test_zstd_e2e_writer_reader_roundtrip() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd(6));
-        let mut writer = RecordWriter::with_config(cursor, config)
+        let options = RecordWriterOptions::default().with_compression(CompressionType::Zstd(6));
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
             .expect("Failed to create RecordWriter with Zstd compression");
 
         for record in &test_records {
@@ -311,8 +313,10 @@ fn test_zstd_e2e_mixed_record_sizes() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd(6));
-        let mut writer = RecordWriter::with_config(cursor, config)
+        let options = RecordWriterOptions::default().with_compression(CompressionType::Zstd(6));
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
             .expect("Failed to create RecordWriter with Zstd compression");
 
         for record in &test_records {

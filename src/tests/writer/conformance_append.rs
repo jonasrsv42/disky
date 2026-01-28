@@ -33,7 +33,7 @@ use std::io::Cursor;
 
 use crate::compression::CompressionType;
 use crate::tests::utils::format_bytes_for_assert;
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Test 1: Append to a file ending exactly at a block boundary
 /// Tests appending to a file that ends precisely at a block boundary
@@ -45,14 +45,17 @@ fn test_append_at_block_boundary() {
 
     // Create the initial file
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
             .unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options.clone())
+        .build()
+        .unwrap();
 
     // Calculate required record size to hit exact block size
     // File starts with 64 bytes (24 block header + 40 signature)
@@ -76,8 +79,11 @@ fn test_append_at_block_boundary() {
 
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer =
-        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+    let mut appending_writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .for_append(initial_size as u64)
+        .build()
+        .unwrap();
 
     // Append a new record
     let append_record = vec![b'z'; 10];
@@ -184,14 +190,17 @@ fn test_append_mid_block_multi_records() {
 
     // Create a writer with default config but a larger block size for testing
     let block_size = 512;
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
             .unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options.clone())
+        .build()
+        .unwrap();
 
     // Write multiple small records
     writer.write_record(b"record-1").unwrap();
@@ -207,8 +216,11 @@ fn test_append_mid_block_multi_records() {
 
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer =
-        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+    let mut appending_writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .for_append(initial_size as u64)
+        .build()
+        .unwrap();
 
     // Append additional records
     appending_writer.write_record(b"appended-1").unwrap();
@@ -304,13 +316,16 @@ fn test_append_to_empty_file() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with default config
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
     // Create an empty file (just the signature, no records)
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options.clone())
+        .build()
+        .unwrap();
 
     // Close right away without writing any records
     writer.close().unwrap();
@@ -326,8 +341,11 @@ fn test_append_to_empty_file() {
 
     // Now create a new writer that appends to this empty file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer =
-        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+    let mut appending_writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .for_append(initial_size as u64)
+        .build()
+        .unwrap();
 
     // Append records to the previously empty file
     appending_writer
@@ -411,14 +429,17 @@ fn test_block_boundary_alignment() {
 
     // Create the initial file
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
             .unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options.clone())
+        .build()
+        .unwrap();
 
     // Write exactly enough data to reach the block boundary
     let initial_record = vec![b'y'; 21];
@@ -439,8 +460,11 @@ fn test_block_boundary_alignment() {
 
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer =
-        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+    let mut appending_writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .for_append(initial_size as u64)
+        .build()
+        .unwrap();
 
     // Append a large record that will cross another block boundary
     let large_record = vec![b'z'; 100];

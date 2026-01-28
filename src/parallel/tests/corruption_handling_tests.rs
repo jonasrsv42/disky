@@ -16,7 +16,7 @@ use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, Sharding
 use crate::reader::{CorruptionStrategy, RecordReaderOptions};
 use crate::shard::source::SequentialShardSource;
 use crate::shard::source::{Shard, Shards};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// A simple test shard collection that provides in-memory Cursors from a predefined list.
 struct TestShards {
@@ -51,16 +51,19 @@ fn create_test_file() -> Vec<u8> {
 
         // Use a small block size and smaller chunk size to make recovery easier
         // and ensure records are spread across multiple chunks and blocks
-        let mut config = RecordWriterConfig::default();
+        let options = RecordWriterOptions {
+            // Small block size (128 bytes)
+            block_config: BlockWriterConfig::with_block_size(128).unwrap(),
+            // Small chunk size (256 bytes) to ensure records cross chunk boundaries
+            // IMPORTANT: Small chunk size ensures we don't discard all data in case of corruption
+            chunk_size_bytes: 256,
+            ..Default::default()
+        };
 
-        // Small block size (128 bytes)
-        config.block_config = BlockWriterConfig::with_block_size(128).unwrap();
-
-        // Small chunk size (256 bytes) to ensure records cross chunk boundaries
-        // IMPORTANT: Small chunk size ensures we don't discard all data in case of corruption
-        config.chunk_size_bytes = 256;
-
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Create 10 records (100 bytes each) that should be spread across
         // multiple blocks and chunks with our small block/chunk sizes
@@ -248,11 +251,16 @@ fn test_multithreaded_reader_multiple_corruptions() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = 512;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: 512,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write enough records to span multiple blocks
         for i in 0..50 {

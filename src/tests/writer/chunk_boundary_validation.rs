@@ -28,7 +28,7 @@ use std::io::Cursor;
 use crate::blocks::utils::BLOCK_HEADER_SIZE;
 use crate::blocks::writer::{BlockWriter, BlockWriterConfig};
 use crate::compression::CompressionType;
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Tests that all block headers in the file satisfy the chunk boundary formulas
 /// from the Riegeli specification.
@@ -40,13 +40,16 @@ fn test_chunk_boundary_formula_validation() {
 
     // Create the writer with small block size
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write multiple records of varying sizes to create multiple block boundaries
     let record1 = vec![b'a'; 50]; // Will fit in first block with signature
@@ -144,13 +147,16 @@ fn test_append_boundary_formula_validation() {
 
     // Create the initial file
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options.clone())
+        .build()
+        .unwrap();
 
     // Calculate required record size to hit exact block size
     // File starts with 64 bytes (24 block header + 40 signature)
@@ -174,8 +180,11 @@ fn test_append_boundary_formula_validation() {
 
     // Now create a new writer that appends to this file
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer =
-        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+    let mut appending_writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .for_append(initial_size as u64)
+        .build()
+        .unwrap();
 
     // Append a new record
     let append_record = vec![b'z'; 50];
@@ -324,14 +333,17 @@ fn test_multiple_chunk_boundaries() {
 
     // Create the writer with custom block size
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
         chunk_size_bytes: 100, // Small chunk size to force multiple chunks
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write multiple small records that will create multiple chunks
     for i in 0..10 {

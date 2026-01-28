@@ -24,12 +24,12 @@ use tempfile::NamedTempFile;
 
 use disky::error::Result;
 use disky::reader::RecordReaderConfig;
-use disky::writer::{RecordWriter, RecordWriterConfig};
+use disky::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Helper function to write records to a temp file and return the file.
 fn write_records_to_file<P>(
     records: &[P],
-    config: Option<RecordWriterConfig>,
+    options: Option<RecordWriterOptions>,
 ) -> Result<NamedTempFile>
 where
     P: AsRef<[u8]>,
@@ -37,10 +37,12 @@ where
     // Create a temporary file
     let file = NamedTempFile::new().expect("Failed to create temp file");
 
-    // Create a writer with the provided config or default
-    let mut writer = match config {
-        Some(cfg) => RecordWriter::with_config(file.reopen()?, cfg)?,
-        None => RecordWriter::new(file.reopen()?)?,
+    // Create a writer with the provided options or default
+    let mut writer = match options {
+        Some(opts) => RecordWriterConfig::new(file.reopen()?)
+            .options(opts)
+            .build()?,
+        None => RecordWriterConfig::new(file.reopen()?).build()?,
     };
 
     // Write all records
@@ -149,13 +151,13 @@ fn test_many_small_records() -> Result<()> {
         .collect();
 
     // Create a writer with a small chunk size to force multiple chunks
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         chunk_size_bytes: 5000, // Small chunk size to force multiple chunks
         ..Default::default()
     };
 
     // Write records to a temporary file
-    let temp_file = write_records_to_file(&test_records, Some(config))?;
+    let temp_file = write_records_to_file(&test_records, Some(options))?;
 
     // Read back records
     let read_records = read_all_records(temp_file.path())?;
@@ -251,13 +253,13 @@ fn test_large_records() -> Result<()> {
     ];
 
     // Create a writer with a small block size
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         block_config: disky::blocks::writer::BlockWriterConfig::with_block_size(64 * 1024)?, // 64 KB blocks
         ..Default::default()
     };
 
     // Write records to a temporary file
-    let temp_file = write_records_to_file(&test_records, Some(config))?;
+    let temp_file = write_records_to_file(&test_records, Some(options))?;
 
     // Read back records
     let read_records = read_all_records(temp_file.path())?;

@@ -21,7 +21,7 @@ use log;
 
 use crate::blocks::writer::BlockWriterConfig;
 use crate::reader::{CorruptionStrategy, DiskyPiece, RecordReaderConfig, RecordReaderOptions};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Helper function to create a file with 10 records using small block size
 /// and smaller chunk size to ensure records are spread across multiple chunks
@@ -32,18 +32,21 @@ fn create_test_file() -> Vec<u8> {
 
         // Use a small block size and smaller chunk size to make recovery easier
         // and ensure records are spread across multiple chunks
-        let mut config = RecordWriterConfig::default();
+        let options = RecordWriterOptions {
+            // Small block size (128 bytes)
+            block_config: BlockWriterConfig::with_block_size(128).unwrap(),
+            // Small chunk size (256 bytes) to ensure records cross chunk boundaries
+            // IMPORTANT chunk size should be small for our small recovery tests
+            // as otherwise with default chunk size of 1mb all data may just
+            // be discarded in-case the chunk data is corrupt.
+            chunk_size_bytes: 256,
+            ..Default::default()
+        };
 
-        // Small block size (128 bytes)
-        config.block_config = BlockWriterConfig::with_block_size(128).unwrap();
-
-        // Small chunk size (256 bytes) to ensure records cross chunk boundaries
-        // IMPORTANT chunk size should be small for our small recovery tests
-        // as otherwise with default chunk size of 1mb all data may just
-        // be discarded in-case the chunk data is corrupt.
-        config.chunk_size_bytes = 256;
-
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Create 10 records (100 bytes each) that should be spread across
         // multiple blocks and chunks with our small block/chunk sizes
@@ -217,11 +220,16 @@ fn test_mid_file_corruption() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = 256;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: 256,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write enough records to span multiple blocks
         for i in 0..100 {
@@ -330,11 +338,16 @@ fn test_multiple_corruptions() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = 256;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: 256,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         for i in 0..200 {
             let record_data = Bytes::from(vec![i as u8; 20]);

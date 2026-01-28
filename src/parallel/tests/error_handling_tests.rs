@@ -8,7 +8,7 @@ use crate::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
 };
 use crate::shard::source::{MemoryShards, SequentialShardSource};
-use crate::writer::RecordWriter;
+use crate::writer::RecordWriterConfig;
 
 /// Creates a valid Disky file with the specified number of records
 fn create_valid_data(records: usize) -> Vec<u8> {
@@ -16,7 +16,7 @@ fn create_valid_data(records: usize) -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..records {
             writer

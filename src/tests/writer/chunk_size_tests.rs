@@ -19,19 +19,22 @@
 use std::io::Cursor;
 
 use crate::compression::CompressionType;
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Test that record sizes are correctly encoded as varints
 #[test]
 fn test_record_size_varint_encoding() {
     // Create a writer
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write records of different sizes that will produce different varint encodings
     let records = [
@@ -82,12 +85,15 @@ fn test_chunk_size_overhead_calculation() {
 
     // Create a writer
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a 10-byte record
     let record = vec![0u8; 10];
@@ -125,14 +131,17 @@ fn test_chunk_size_with_block_boundaries() {
     let block_size = 64; // Tiny blocks for testing
 
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
             .unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a record that's larger than the block size to force crossing a boundary
     let large_record = vec![0u8; 100]; // Larger than our block size

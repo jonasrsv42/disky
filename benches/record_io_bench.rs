@@ -12,11 +12,11 @@ use tempfile::NamedTempFile;
 use disky::blocks::reader::{BlockReader, BlocksPiece};
 use disky::chunks::chunks_parser::{ChunkPiece, ChunksParser};
 use disky::compression::create_decompressors_map;
-use disky::reader::{DiskyPiece, RecordReader};
-use disky::writer::{RecordWriter, RecordWriterConfig};
+use disky::reader::{DiskyPiece, RecordReaderConfig};
+use disky::writer::RecordWriterConfig;
 
-#[cfg(feature = "zstd")]
 use disky::compression::CompressionType;
+use disky::writer::RecordWriterOptions;
 
 /// Generate test records of a specific size
 fn generate_test_records(num_records: usize, record_size: usize) -> Vec<Vec<u8>> {
@@ -40,7 +40,9 @@ fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
     let file = NamedTempFile::new().expect("Failed to create temp file");
 
     // Create a writer
-    let mut writer = RecordWriter::new(file.reopen().unwrap()).unwrap();
+    let mut writer = RecordWriterConfig::new(file.reopen().unwrap())
+        .build()
+        .unwrap();
 
     // Write all records
     for record in records {
@@ -56,7 +58,7 @@ fn write_records_to_file(records: &[Vec<u8>]) -> NamedTempFile {
 /// Read all records from a file and return the count and total size
 fn read_all_records(file: &NamedTempFile) -> (usize, usize) {
     let reader_file = file.reopen().unwrap();
-    let mut reader = RecordReader::new(reader_file).unwrap();
+    let mut reader = RecordReaderConfig::new(reader_file).build().unwrap();
 
     let mut record_count = 0;
     let mut total_size = 0;
@@ -77,7 +79,7 @@ fn read_all_records(file: &NamedTempFile) -> (usize, usize) {
 /// Read all records from a file using the iterator API
 fn read_all_records_iterator(file: &NamedTempFile) -> (usize, usize) {
     let reader_file = file.reopen().unwrap();
-    let reader = RecordReader::new(reader_file).unwrap();
+    let reader = RecordReaderConfig::new(reader_file).build().unwrap();
 
     let mut record_count = 0;
     let mut total_size = 0;
@@ -94,7 +96,7 @@ fn read_all_records_iterator(file: &NamedTempFile) -> (usize, usize) {
 /// Stream process records (manual iteration)
 fn stream_process_records(file: &NamedTempFile) -> u64 {
     let reader_file = file.reopen().unwrap();
-    let mut reader = RecordReader::new(reader_file).unwrap();
+    let mut reader = RecordReaderConfig::new(reader_file).build().unwrap();
 
     let mut checksum: u64 = 0;
 
@@ -116,7 +118,7 @@ fn stream_process_records(file: &NamedTempFile) -> u64 {
 /// Stream process records using iterator
 fn iterator_process_records(file: &NamedTempFile) -> u64 {
     let reader_file = file.reopen().unwrap();
-    let reader = RecordReader::new(reader_file).unwrap();
+    let reader = RecordReaderConfig::new(reader_file).build().unwrap();
 
     // Calculate a checksum using the iterator
     reader
@@ -473,8 +475,11 @@ fn write_records_to_file_zstd(records: &[Vec<u8>]) -> NamedTempFile {
     let file = NamedTempFile::new().expect("Failed to create temp file");
 
     // Create a writer with zstd compression
-    let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd);
-    let mut writer = RecordWriter::with_config(file.reopen().unwrap(), config).unwrap();
+    let options = RecordWriterOptions::default().with_compression(CompressionType::Zstd(3));
+    let mut writer = RecordWriterConfig::new(file.reopen().unwrap())
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write all records
     for record in records {

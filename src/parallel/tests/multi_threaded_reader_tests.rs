@@ -15,11 +15,9 @@ fn create_test_data() -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut data);
-        let mut writer = crate::writer::RecordWriter::with_config(
-            cursor,
-            crate::writer::RecordWriterConfig::default(),
-        )
-        .unwrap();
+        let mut writer = crate::writer::RecordWriterConfig::new(cursor)
+            .build()
+            .unwrap();
 
         writer.write_record(b"record1").unwrap();
         writer.write_record(b"record2").unwrap();
@@ -37,11 +35,9 @@ fn create_identifiable_data(shard_id: usize) -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut data);
-        let mut writer = crate::writer::RecordWriter::with_config(
-            cursor,
-            crate::writer::RecordWriterConfig::default(),
-        )
-        .unwrap();
+        let mut writer = crate::writer::RecordWriterConfig::new(cursor)
+            .build()
+            .unwrap();
 
         for i in 1..=5 {
             let record = format!("shard{}_record{}", shard_id, i);

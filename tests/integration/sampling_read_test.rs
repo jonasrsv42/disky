@@ -1,7 +1,7 @@
 use disky::error::Result;
 use disky::reader::RecordReaderConfig;
 use disky::sampling::SamplingReader;
-use disky::writer::RecordWriter;
+use disky::writer::RecordWriterConfig;
 use std::io::Cursor;
 
 /// Writes test data to a buffer and returns it
@@ -10,7 +10,9 @@ fn create_test_data(prefix: &str, count: usize) -> Vec<u8> {
 
     {
         // Create a writer with a cursor
-        let mut writer = RecordWriter::new(Cursor::new(&mut buffer)).unwrap();
+        let mut writer = RecordWriterConfig::new(Cursor::new(&mut buffer))
+            .build()
+            .unwrap();
 
         // Write records
         for i in 0..count {

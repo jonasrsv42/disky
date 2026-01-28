@@ -3,7 +3,7 @@ use crate::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
 };
 use crate::shard::source::{MemoryShards, SequentialShardSource};
-use crate::writer::RecordWriter;
+use crate::writer::RecordWriterConfig;
 use std::io::Cursor;
 
 fn create_shard_data(shard_num: usize, num_records: usize) -> Vec<u8> {
@@ -11,7 +11,7 @@ fn create_shard_data(shard_num: usize, num_records: usize) -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..num_records {
             writer
@@ -30,7 +30,7 @@ fn create_empty_shard_data() -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
         writer.close().unwrap();
     }
 
@@ -187,7 +187,7 @@ fn test_reader_error_handling() -> Result<()> {
             let mut buffer = Vec::new();
             {
                 let cursor = Cursor::new(&mut buffer);
-                let mut writer = RecordWriter::new(cursor)?;
+                let mut writer = RecordWriterConfig::new(cursor).build()?;
                 writer.write_record(format!("Record {}", index).as_bytes())?;
                 writer.close()?;
             }

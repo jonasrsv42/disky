@@ -19,7 +19,7 @@ use bytes::{Bytes, BytesMut};
 use crate::blocks::writer::BlockWriterConfig;
 use crate::chunks::signature_writer::SignatureWriter;
 use crate::reader::{CorruptionStrategy, DiskyPiece, RecordReaderConfig, RecordReaderOptions};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Helper function to create a test file with small block and chunk sizes
 fn create_test_file(record_count: usize, record_size: usize) -> Vec<u8> {
@@ -31,11 +31,16 @@ fn create_test_file(record_count: usize, record_size: usize) -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         for i in 0..record_count {
             let record_data = Bytes::from(vec![i as u8; record_size]);
@@ -66,11 +71,16 @@ fn test_extreme_record_sizes() {
 
         {
             let cursor = Cursor::new(&mut buffer);
-            let mut config = RecordWriterConfig::default();
-            config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-            config.chunk_size_bytes = chunk_size;
+            let options = RecordWriterOptions {
+                block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+                chunk_size_bytes: chunk_size,
+                ..Default::default()
+            };
 
-            let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+            let mut writer = RecordWriterConfig::new(cursor)
+                .options(options)
+                .build()
+                .unwrap();
 
             // Create a record with the specified size
             let data = vec![0xAA; size];
@@ -182,11 +192,16 @@ fn test_repeated_signatures() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write first set of records (values 0-4)
         for i in 0..5 {
@@ -198,18 +213,23 @@ fn test_repeated_signatures() {
     }
 
     // Create a signature chunk
-    let mut writer = SignatureWriter::new();
-    let signature_bytes = writer.try_serialize_chunk().unwrap();
+    let mut sig_writer = SignatureWriter::new();
+    let signature_bytes = sig_writer.try_serialize_chunk().unwrap();
 
     // Create the second part of the file
     let mut second_part = Vec::new();
     {
         let cursor = Cursor::new(&mut second_part);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write second set of records (values 5-9)
         for i in 5..10 {
@@ -358,9 +378,14 @@ fn test_empty_records_file() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            ..Default::default()
+        };
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write no records, just close immediately
         writer.close().unwrap();
@@ -397,11 +422,16 @@ fn test_single_byte_record() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Single byte record
         writer.write_record(&[42]).unwrap();
@@ -451,11 +481,16 @@ fn test_alternating_record_sizes() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write alternating record sizes
         for i in 0..20 {

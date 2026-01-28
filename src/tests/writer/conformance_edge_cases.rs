@@ -20,7 +20,7 @@ use std::io::Cursor;
 
 use crate::compression::CompressionType;
 use crate::tests::utils::format_bytes_for_assert;
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Test 2: Empty records at specific positions
 /// Creates a file with empty records at beginning, middle, and end
@@ -30,12 +30,15 @@ fn test_empty_records_at_specific_positions() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with default config
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write records with empty ones at specific positions
     writer.write_record(b"").unwrap(); // Empty record at beginning
@@ -105,14 +108,17 @@ fn test_chunk_ending_near_block_boundary() {
     let block_size = 128;
 
     // Create a writer with custom config
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
             .unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Calculate size to make chunk end exactly at block_size - 1 (right before next boundary)
     // File starts with 64 bytes (24 block header + 40 signature)
@@ -203,13 +209,16 @@ fn test_forced_chunking_pattern() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with small chunk size to force specific chunking
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         chunk_size_bytes: 30, // Force chunking after about 30 bytes of records
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write specific record sizes to force chunk boundaries
     writer.write_record(b"record-1").unwrap(); // 8 bytes
@@ -309,11 +318,14 @@ fn test_forced_chunking_pattern() {
 fn test_append_to_existing_file() {
     // First, create a file with a single record
     let cursor = Cursor::new(Vec::new());
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
-    let mut writer = RecordWriter::with_config(cursor, config.clone()).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options.clone())
+        .build()
+        .unwrap();
     writer.write_record(b"initial-record").unwrap();
     writer.close().unwrap();
 
@@ -323,8 +335,11 @@ fn test_append_to_existing_file() {
 
     // Now create a new writer that simulates appending
     let cursor = Cursor::new(initial_data.to_vec());
-    let mut appending_writer =
-        RecordWriter::for_append_with_config(cursor, initial_size as u64, config).unwrap();
+    let mut appending_writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .for_append(initial_size as u64)
+        .build()
+        .unwrap();
 
     // Append a new record
     appending_writer.write_record(b"appended-record").unwrap();
@@ -414,14 +429,17 @@ fn test_file_with_exact_block_size() {
     let block_size = 128;
 
     // Create a writer with custom config
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(block_size)
             .unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Calculate required record size to hit exact block size
     // We need total file size to be exactly block_size (128 bytes)

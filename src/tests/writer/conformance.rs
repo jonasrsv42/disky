@@ -19,7 +19,7 @@ use std::io::Cursor;
 
 use crate::compression::CompressionType;
 use crate::tests::utils::format_bytes_for_assert;
-use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions, WriterState};
 
 /// Test a small, predictable file containing just the signature chunk
 #[test]
@@ -28,7 +28,7 @@ fn test_empty_file_bytes() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer
-    let mut writer = RecordWriter::new(cursor).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
     // Close immediately without writing any records (just the signature)
     writer.close().unwrap();
@@ -78,12 +78,15 @@ fn test_single_record_file_bytes() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a single record with predictable content
     writer.write_record(b"test-record").unwrap();
@@ -152,13 +155,16 @@ fn test_two_records_same_chunk_bytes() {
 
     // Create a writer with fixed compression type for consistent output
     // and large chunk size to ensure both records go in the same chunk
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         chunk_size_bytes: 1024, // Plenty of space for both records
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write two records with predictable content
     writer.write_record(b"first").unwrap();
@@ -229,13 +235,16 @@ fn test_record_crossing_multiple_block_boundaries() {
 
     // Create a writer with small block size for easier testing
     // Use a 100-byte block size (much smaller than the default 64KB)
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(100).unwrap(),
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Create a record large enough to cross multiple block boundaries
     // After the 64-byte signature (24-byte block header + 40-byte chunk header),
@@ -429,12 +438,15 @@ fn test_no_extra_empty_chunk() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a single record with known content
     writer.write_record(b"test-record").unwrap();
@@ -506,13 +518,16 @@ fn test_multiple_chunks() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with small chunk size to force multiple chunks
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         chunk_size_bytes: 50, // Small chunk size to force multiple chunks
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write records of increasing size to force chunk boundaries
     let records = [
@@ -628,12 +643,15 @@ fn test_empty_records() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with default config
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a sequence including empty records
     let records = [
@@ -718,13 +736,16 @@ fn test_mixed_record_sizes() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with default config but small block size
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         block_config: crate::blocks::writer::BlockWriterConfig::with_block_size(128).unwrap(), // Small block size
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a tiny record first
     writer.write_record(b"tiny").unwrap();

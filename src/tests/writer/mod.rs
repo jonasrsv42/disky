@@ -27,7 +27,7 @@ use std::io::Cursor;
 
 use crate::compression::CompressionType;
 use crate::error::DiskyError;
-use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
+use crate::writer::{RecordWriter, RecordWriterConfig, RecordWriterOptions, WriterState};
 
 // Test-only implementation for RecordWriter with Cursor<Vec<u8>>
 impl RecordWriter<Cursor<Vec<u8>>> {
@@ -53,7 +53,7 @@ fn test_writer_creation_and_signature() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer
-    let writer = RecordWriter::new(cursor).unwrap();
+    let writer = RecordWriterConfig::new(cursor).build().unwrap();
 
     // The writer should be in the SignatureWritten state
     assert_eq!(writer.get_state(), &WriterState::SignatureWritten);
@@ -65,12 +65,15 @@ fn test_write_records() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with a small chunk size to force multiple chunks
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         chunk_size_bytes: 20, // Small size to force multiple chunks
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write 5 records - should create 3 chunks
     for i in 0..5 {
@@ -104,7 +107,7 @@ fn test_close_and_reopen() {
     let cursor = Cursor::new(Vec::new());
 
     // Write some records
-    let mut writer = RecordWriter::new(cursor).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
     writer.write_record(b"Record 1").unwrap();
     writer.write_record(b"Record 2").unwrap();
 
@@ -124,7 +127,10 @@ fn test_close_and_reopen() {
     let cursor = Cursor::new(data);
     let position = cursor.get_ref().len() as u64;
 
-    let mut writer = RecordWriter::for_append(cursor, position).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .for_append(position)
+        .build()
+        .unwrap();
 
     // Write more records
     writer.write_record(b"Record 3").unwrap();
@@ -141,12 +147,15 @@ fn test_no_extra_empty_chunk() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a single record with known content
     writer.write_record(b"test-record").unwrap();

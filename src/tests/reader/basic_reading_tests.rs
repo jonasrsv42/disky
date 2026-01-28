@@ -19,7 +19,7 @@ use bytes::Bytes;
 use crate::blocks::writer::BlockWriterConfig;
 use crate::error::DiskyError;
 use crate::reader::{DiskyPiece, RecordReaderConfig, RecordReaderOptions};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Test reading an empty file fails with signature error on first read attempt
 #[test]
@@ -49,7 +49,7 @@ fn test_read_single_record() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         let record_data = Bytes::from(vec![1, 2, 3, 4, 5]);
         writer.write_record(&record_data).unwrap();
@@ -88,7 +88,7 @@ fn test_read_multiple_records() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..10 {
             let record_data = Bytes::from(vec![i; 5]); // [i,i,i,i,i]
@@ -122,7 +122,7 @@ fn test_various_record_sizes() {
         let mut buffer = Vec::new();
         {
             let cursor = Cursor::new(&mut buffer);
-            let mut writer = RecordWriter::new(cursor).unwrap();
+            let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
             let record_data = Bytes::from(vec![0xA5; size]);
             writer.write_record(&record_data).unwrap();
@@ -161,10 +161,15 @@ fn test_read_multi_block() {
     // Write the file with custom block size
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write records that will force multiple blocks
         for i in 0..num_records {
@@ -217,7 +222,7 @@ fn test_read_after_seek() {
     let mut buffer = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..100 {
             let record_data = Bytes::from(vec![i as u8; 10]);

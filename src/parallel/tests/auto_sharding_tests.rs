@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
 use crate::shard::sink::ClosureShards;
-use crate::writer::RecordWriterConfig;
+use crate::writer::RecordWriterOptions;
 
 #[test]
 fn test_auto_sharding_on_byte_limit() {
@@ -24,7 +24,7 @@ fn test_auto_sharding_on_byte_limit() {
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {
-        writer_config: RecordWriterConfig::default(),
+        writer_options: RecordWriterOptions::default(),
         max_bytes_per_writer: Some(10), // Only allow 10 bytes per writer
         task_queue_capacity: None,
     };
@@ -83,7 +83,7 @@ fn test_auto_sharding_disabled() {
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {
-        writer_config: RecordWriterConfig::default(),
+        writer_options: RecordWriterOptions::default(),
         max_bytes_per_writer: Some(10), // Only allow 10 bytes per writer
         task_queue_capacity: None,
     };
@@ -143,7 +143,7 @@ fn test_auto_sharding_with_failing_sharder() {
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {
-        writer_config: RecordWriterConfig::default(),
+        writer_options: RecordWriterOptions::default(),
         max_bytes_per_writer: Some(10), // Only allow 10 bytes per writer
         task_queue_capacity: None,
     };

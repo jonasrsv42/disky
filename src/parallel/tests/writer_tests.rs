@@ -5,7 +5,7 @@ use std::thread;
 
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
 use crate::shard::sink::MemoryShards;
-use crate::writer::RecordWriterConfig;
+use crate::writer::RecordWriterOptions;
 
 #[test]
 fn test_parallel_writer_basic() {
@@ -307,7 +307,7 @@ fn test_writer_rotation_on_byte_limit() {
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {
-        writer_config: RecordWriterConfig::default(),
+        writer_options: RecordWriterOptions::default(),
         max_bytes_per_writer: Some(15), // Only allow 15 bytes per writer
         task_queue_capacity: None,
     };
@@ -372,7 +372,7 @@ fn test_partial_writer_rotation_on_byte_limit() {
 
     // Create a config with a byte limit that will cause only one writer to be dropped
     let config = ParallelWriterConfig {
-        writer_config: RecordWriterConfig::default(),
+        writer_options: RecordWriterOptions::default(),
         // Only allow 8 bytes per writer, which means first writer will be dropped
         // after the first record, but second writer should remain available
         max_bytes_per_writer: Some(8),

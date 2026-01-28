@@ -9,10 +9,10 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 
 use disky::reader::{DiskyPiece, RecordReaderConfig};
-use disky::writer::RecordWriter;
+use disky::writer::RecordWriterConfig;
 
 #[cfg(feature = "zstd")]
-use disky::writer::RecordWriterConfig;
+use disky::writer::RecordWriterOptions;
 
 #[cfg(feature = "zstd")]
 use disky::compression::CompressionType;
@@ -82,8 +82,9 @@ fn test_logmel_compression_ratios() {
 /// Write records to an uncompressed file and return the file size
 fn write_records_uncompressed(records: &[Vec<u8>]) -> u64 {
     let temp_file = NamedTempFile::new().expect("Failed to create temp file");
-    let mut writer =
-        RecordWriter::new(temp_file.reopen().unwrap()).expect("Failed to create writer");
+    let mut writer = RecordWriterConfig::new(temp_file.reopen().unwrap())
+        .build()
+        .expect("Failed to create writer");
 
     // Write all records
     for record in records {
@@ -141,8 +142,11 @@ fn write_records_with_zstd_level(records: &[Vec<u8>], level: i32) -> u64 {
         Err(_) => return 0,
     };
 
-    let config = RecordWriterConfig::default().with_compression(CompressionType::Zstd(level));
-    let mut writer = match RecordWriter::with_config(temp_file.reopen().unwrap(), config) {
+    let options = RecordWriterOptions::default().with_compression(CompressionType::Zstd(level));
+    let mut writer = match RecordWriterConfig::new(temp_file.reopen().unwrap())
+        .options(options)
+        .build()
+    {
         Ok(w) => w,
         Err(_) => return 0,
     };

@@ -77,7 +77,7 @@ use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::task_queue::TaskQueue;
 use crate::shard::sink;
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriter, RecordWriterConfig, RecordWriterOptions};
 use bytes::Bytes;
 use log::error;
 
@@ -141,10 +141,10 @@ pub struct WriterResource<Sink: Write + Seek + Send + 'static> {
 ///
 /// Controls the behavior of the parallel writer, including the configuration
 /// of the underlying record writers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParallelWriterConfig {
     /// Configuration for the underlying record writer instances
-    pub writer_config: RecordWriterConfig,
+    pub writer_options: RecordWriterOptions,
 
     /// Maximum number of bytes a writer can write before it's dropped from the pool
     /// Set to None to allow unlimited bytes per writer (default)
@@ -159,7 +159,7 @@ pub struct ParallelWriterConfig {
 impl Default for ParallelWriterConfig {
     fn default() -> Self {
         Self {
-            writer_config: RecordWriterConfig::default(),
+            writer_options: RecordWriterOptions::default(),
             max_bytes_per_writer: None,
             task_queue_capacity: None, // Default to unbounded queue
         }
@@ -392,7 +392,9 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
             .next()?;
 
         // TODO: use shard.id for error context
-        let writer = RecordWriter::with_config(shard.sink, self.config.writer_config.clone())?;
+        let writer = RecordWriterConfig::new(shard.sink)
+            .options(self.config.writer_options)
+            .build()?;
 
         // Add the writer to the resource pool
         self.resource_pool.add_resource(WriterResource {

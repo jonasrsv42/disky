@@ -14,12 +14,12 @@ Disky is a Rust reader/writer for a variation of the [Riegeli file format](https
 
 ```rust
 use std::fs::File;
-use disky::reader::{RecordReader, DiskyPiece};
-use disky::writer::RecordWriter;
+use disky::reader::{RecordReaderConfig, DiskyPiece};
+use disky::writer::RecordWriterConfig;
 
 // Writing records
 let file = File::create("data.disky")?;
-let mut writer = RecordWriter::new(file)?;
+let mut writer = RecordWriterConfig::new(file).build()?;
 
 // Write some records
 writer.write_record(b"Record 1")?;
@@ -31,7 +31,7 @@ writer.close()?;
 
 // Reading records
 let file = File::open("data.disky")?;
-let mut reader = RecordReader::new(file)?;
+let mut reader = RecordReaderConfig::new(file).build()?;
 
 // Read all records
 loop {
@@ -48,10 +48,10 @@ loop {
 
 ```rust
 use std::fs::File;
-use disky::reader::RecordReader;
+use disky::reader::RecordReaderConfig;
 
 let file = File::open("data.disky")?;
-let reader = RecordReader::new(file)?;
+let reader = RecordReaderConfig::new(file).build()?;
 
 // Iterate over all records
 for record_result in reader {
@@ -64,14 +64,16 @@ for record_result in reader {
 
 ```rust
 use std::fs::File;
-use disky::writer::RecordWriter;
+use disky::writer::RecordWriterConfig;
 
 // Open existing file for appending
-let file = File::options().read(true).write(true).open("data.riegeli")?;
+let file = File::options().read(true).write(true).open("data.disky")?;
 let file_size = file.metadata()?.len();
 
 // Create a writer in append mode
-let mut writer = RecordWriter::for_append(file, file_size)?;
+let mut writer = RecordWriterConfig::new(file)
+    .for_append(file_size)
+    .build()?;
 
 // Append records
 writer.write_record(b"Appended Record")?;

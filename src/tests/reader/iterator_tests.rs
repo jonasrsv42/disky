@@ -19,7 +19,7 @@ use bytes::Bytes;
 use crate::blocks::writer::BlockWriterConfig;
 use crate::error::DiskyError;
 use crate::reader::{CorruptionStrategy, RecordReaderConfig, RecordReaderOptions};
-use crate::writer::{RecordWriter, RecordWriterConfig};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// Helper function to create a test file with small block and chunk sizes
 fn create_test_file(record_count: usize, record_size: usize) -> Vec<u8> {
@@ -31,11 +31,16 @@ fn create_test_file(record_count: usize, record_size: usize) -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         for i in 0..record_count {
             let record_data = Bytes::from(vec![i as u8; record_size]);
@@ -364,11 +369,16 @@ fn test_human_readable_strings() {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut config = RecordWriterConfig::default();
-        config.block_config = BlockWriterConfig::with_block_size(block_size).unwrap();
-        config.chunk_size_bytes = chunk_size;
+        let options = RecordWriterOptions {
+            block_config: BlockWriterConfig::with_block_size(block_size).unwrap(),
+            chunk_size_bytes: chunk_size,
+            ..Default::default()
+        };
 
-        let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor)
+            .options(options)
+            .build()
+            .unwrap();
 
         // Write each string as a record
         for &s in &strings {

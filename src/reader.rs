@@ -121,6 +121,14 @@ impl RecordReaderOptions {
         })
     }
 
+    /// Sets the block configuration.
+    ///
+    /// Returns self for method chaining.
+    pub fn with_block_config(mut self, block_config: BlockReaderConfig) -> Self {
+        self.block_config = block_config;
+        self
+    }
+
     /// Sets the corruption handling strategy.
     ///
     /// Returns self for method chaining.

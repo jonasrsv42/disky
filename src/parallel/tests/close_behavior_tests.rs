@@ -6,6 +6,7 @@ use crate::parallel::writer::{
 };
 use crate::shard::sink;
 use crate::shard::source::{MemoryShards, SequentialShardSource};
+use crate::writer::RecordWriterConfig;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -15,7 +16,7 @@ fn create_valid_data(records: usize) -> Vec<u8> {
 
     {
         let cursor = Cursor::new(&mut buffer);
-        let mut writer = crate::writer::RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..records {
             writer

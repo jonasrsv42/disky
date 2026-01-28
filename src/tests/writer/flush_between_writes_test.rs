@@ -19,7 +19,7 @@ use std::io::Cursor;
 
 use crate::compression::CompressionType;
 use crate::reader::RecordReaderConfig;
-use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions, WriterState};
 
 /// Test writing records, flushing, then writing more records.
 ///
@@ -31,12 +31,15 @@ fn test_write_flush_write() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write first batch of records
     let batch1 = vec![
@@ -104,13 +107,16 @@ fn test_multiple_flush_cycles() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         chunk_size_bytes: 1024, // Ensure all records can fit in a single chunk if needed
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write records with multiple flush cycles
     for i in 0..5 {
@@ -167,12 +173,15 @@ fn test_empty_records_with_flush() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write a normal record
     writer.write_record(b"normal_record").unwrap();
@@ -226,12 +235,15 @@ fn test_flush_chunk_vs_flush() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with fixed compression type for consistent output
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         compression_type: CompressionType::None,
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write first record
     writer.write_record(b"first_record").unwrap();

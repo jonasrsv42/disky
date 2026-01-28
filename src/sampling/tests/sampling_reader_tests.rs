@@ -17,9 +17,17 @@ use std::collections::HashMap;
 use bytes::Bytes;
 
 use crate::error::Result;
+use crate::parallel::multi_threaded_reader::{
+    MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
+};
+use crate::parallel::reader::ShardingConfig;
 use crate::reader::DiskyPiece;
+use crate::reader::RecordReaderConfig;
 use crate::sampling::SamplingReader;
 use crate::sampling::SamplingReaderConfig;
+use crate::shard::source::{MemoryShards, SequentialShardSource};
+use crate::writer::RecordWriterConfig;
+use std::io::Cursor;
 
 // A simple iterator that produces a numbered sequence of bytes
 struct SequenceIterator {
@@ -236,15 +244,11 @@ fn test_sampling_reader_zero_weight() {
 
 #[test]
 fn test_sampling_reader_with_record_readers() {
-    use crate::reader::RecordReaderConfig;
-    use crate::writer::RecordWriter;
-    use std::io::Cursor;
-
     // Create first data buffer with 5 records containing "A" values
     let mut buffer_a = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer_a);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..5 {
             let record_data = Bytes::from(format!("A{}", i));
@@ -257,7 +261,7 @@ fn test_sampling_reader_with_record_readers() {
     let mut buffer_b = Vec::new();
     {
         let cursor = Cursor::new(&mut buffer_b);
-        let mut writer = RecordWriter::new(cursor).unwrap();
+        let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
         for i in 0..3 {
             let record_data = Bytes::from(format!("B{}", i));
@@ -314,20 +318,12 @@ fn test_sampling_reader_with_record_readers() {
 #[cfg(feature = "parallel")]
 #[test]
 fn test_sampling_reader_with_multi_threaded_readers() {
-    use crate::parallel::multi_threaded_reader::{
-        MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
-    };
-    use crate::parallel::reader::ShardingConfig;
-    use crate::shard::source::{MemoryShards, SequentialShardSource};
-    use crate::writer::RecordWriter;
-    use std::io::Cursor;
-
     // Helper function to create data with "A" records
     fn create_a_data() -> Vec<u8> {
         let mut data = Vec::new();
         {
             let cursor = Cursor::new(&mut data);
-            let mut writer = RecordWriter::new(cursor).unwrap();
+            let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
             for i in 0..5 {
                 let record_data = Bytes::from(format!("A{}", i));
@@ -343,7 +339,7 @@ fn test_sampling_reader_with_multi_threaded_readers() {
         let mut data = Vec::new();
         {
             let cursor = Cursor::new(&mut data);
-            let mut writer = RecordWriter::new(cursor).unwrap();
+            let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
             for i in 0..3 {
                 let record_data = Bytes::from(format!("B{}", i));

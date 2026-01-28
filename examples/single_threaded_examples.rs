@@ -6,7 +6,7 @@ use disky::shard::reader::SequentialShardReaderConfig;
 use disky::shard::sink::FileShardsBuilder;
 use disky::shard::source::{FileShards, SequentialShardSource};
 use disky::shard::writer::SequentialShardWriterConfig;
-use disky::writer::RecordWriter;
+use disky::writer::RecordWriterConfig;
 use tempfile::NamedTempFile;
 
 fn main() -> disky::error::Result<()> {
@@ -45,7 +45,7 @@ fn basic_write_example(path: &Path) -> disky::error::Result<()> {
     let file = File::create(path)?;
 
     // Create a writer with default settings
-    let mut writer = RecordWriter::new(file)?;
+    let mut writer = RecordWriterConfig::new(file).build()?;
 
     // Write some records
     writer.write_record(b"Record 1")?;
@@ -97,7 +97,9 @@ fn append_example(path: &Path) -> disky::error::Result<()> {
     let file_size = file.metadata()?.len();
 
     // Create a writer in append mode
-    let mut writer = RecordWriter::for_append(file, file_size)?;
+    let mut writer = RecordWriterConfig::new(file)
+        .for_append(file_size)
+        .build()?;
 
     // Append a few records
     writer.write_record(b"Appended Record 1")?;

@@ -17,7 +17,7 @@
 use std::io::Cursor;
 
 use crate::reader::{DiskyPiece, RecordReaderConfig};
-use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
+use crate::writer::{RecordWriterConfig, RecordWriterOptions, WriterState};
 
 /// Test empty records within a normal chunk
 #[test]
@@ -26,7 +26,7 @@ fn test_empty_records_with_normal_records() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer
-    let mut writer = RecordWriter::new(cursor).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
     // Write a sequence of records including empty ones
     let records = [
@@ -80,7 +80,7 @@ fn test_only_empty_records() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer
-    let mut writer = RecordWriter::new(cursor).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor).build().unwrap();
 
     // Initial state should be SignatureWritten
     assert_eq!(writer.get_state(), &WriterState::SignatureWritten);
@@ -134,12 +134,15 @@ fn test_empty_records_chunk_boundaries() {
     let cursor = Cursor::new(Vec::new());
 
     // Create a writer with small chunk size
-    let config = RecordWriterConfig {
+    let options = RecordWriterOptions {
         chunk_size_bytes: 10, // Very small to force multiple chunks
         ..Default::default()
     };
 
-    let mut writer = RecordWriter::with_config(cursor, config).unwrap();
+    let mut writer = RecordWriterConfig::new(cursor)
+        .options(options)
+        .build()
+        .unwrap();
 
     // Write sequences to force chunk boundaries
     writer.write_record(b"record1").unwrap(); // Normal record in chunk 1

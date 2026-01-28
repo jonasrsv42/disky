@@ -28,8 +28,8 @@ use std::time::Duration;
 use tempfile::{NamedTempFile, TempDir, tempdir};
 
 use disky::error::Result;
-use disky::reader::{DiskyPiece, RecordReader};
-use disky::writer::RecordWriter;
+use disky::reader::{DiskyPiece, RecordReaderConfig};
+use disky::writer::RecordWriterConfig;
 
 /// Constants for benchmark sizes
 ///
@@ -58,7 +58,7 @@ fn write_single_file(record_count: usize, record_size: usize) -> Result<NamedTem
     let file = NamedTempFile::new().expect("Failed to create temp file");
 
     // Create a writer
-    let mut writer = RecordWriter::new(file.reopen().unwrap())?;
+    let mut writer = RecordWriterConfig::new(file.reopen().unwrap()).build()?;
 
     // Write all records
     for i in 0..record_count {
@@ -75,7 +75,7 @@ fn write_single_file(record_count: usize, record_size: usize) -> Result<NamedTem
 /// Read all records using a standard RecordReader
 fn read_with_record_reader(file: &NamedTempFile) -> Result<(usize, usize)> {
     let reader_file = file.reopen().unwrap();
-    let mut reader = RecordReader::new(reader_file)?;
+    let mut reader = RecordReaderConfig::new(reader_file).build()?;
 
     let mut record_count = 0;
     let mut total_size = 0;

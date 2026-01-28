@@ -6,8 +6,8 @@ use bytes::Bytes;
 
 use crate::error::Result;
 use crate::parallel::multi_threaded_writer::MultiThreadedWriterConfig;
-use crate::parallel::sharding::Autosharder;
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
+use crate::shard::sink::MemoryShards;
 
 #[test]
 fn test_bounded_task_queue() -> Result<()> {
@@ -15,7 +15,7 @@ fn test_bounded_task_queue() -> Result<()> {
     let writer_config = ParallelWriterConfig::default().with_task_queue_capacity(1);
 
     // Create an in-memory test sharder
-    let sharder = Autosharder::new(|| Ok(std::io::Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     let sharding_config = ShardingConfig::new(
         Box::new(sharder),
@@ -101,7 +101,7 @@ fn test_multithreaded_writer_with_bounded_queue() -> Result<()> {
     );
 
     // Create an in-memory test sharder
-    let sharder = Autosharder::new(|| Ok(std::io::Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     let sharding_config = ShardingConfig::new(
         Box::new(sharder),

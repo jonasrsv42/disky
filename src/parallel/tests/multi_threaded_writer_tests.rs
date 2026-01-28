@@ -6,21 +6,15 @@ use std::time::Duration;
 
 use crate::error::Result;
 use crate::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
-use crate::parallel::sharding::{Autosharder, Sharder};
 use crate::parallel::writer::{ParallelWriterConfig, ShardingConfig};
-
-// Helper function to create an in-memory sharder
-fn create_memory_sharder() -> Box<dyn Sharder<Cursor<Vec<u8>>> + Send + Sync> {
-    Box::new(Autosharder::new(|| Ok(Cursor::new(Vec::new()))))
-}
+use crate::shard::sink::MemoryShards;
 
 // Helper to create a multi-threaded writer with minimal configuration
 fn create_test_writer(
     num_shards: usize,
     num_threads: usize,
 ) -> Result<MultiThreadedWriter<Cursor<Vec<u8>>>> {
-    let sharder = create_memory_sharder();
-    let sharding_config = ShardingConfig::new(sharder, num_shards);
+    let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), num_shards);
     let writer_config = ParallelWriterConfig::default();
     let mt_config = MultiThreadedWriterConfig::new(writer_config, num_threads);
 

@@ -26,26 +26,21 @@
 //!
 //! ```rust,no_run
 //! use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-//! use disky::parallel::sharding::{Autosharder, FileSharder, FileSharderConfig};
-//! use std::path::PathBuf;
+//! use disky::shard::sink::FileShardsBuilder;
 //! use bytes::Bytes;
 //!
-//! // Create a file sharder that creates sequentially numbered files
-//! let file_sharder = FileSharder::with_prefix(
-//!     PathBuf::from("/tmp/output"),
-//!     "shard"
-//! );
+//! // Create a file shard factory that creates sequentially numbered files
+//! let file_shards = FileShardsBuilder::new("/tmp/output", "shard").build().unwrap();
 //!
-//! // Or with append mode for appending to an existing sharded file
-//! let config = FileSharderConfig::new("shard").with_append(true);
-//! let append_sharder = FileSharder::with_config(
-//!     PathBuf::from("/tmp/output"),
-//!     config
-//! );
+//! // Or with append mode for appending after existing shards
+//! let append_shards = FileShardsBuilder::new("/tmp/output", "shard")
+//!     .append()
+//!     .build()
+//!     .unwrap();
 //!
 //! // Configure with 4 shards
 //! let sharding_config = ShardingConfig::new(
-//!     Box::new(file_sharder),
+//!     Box::new(file_shards),
 //!     4
 //! );
 //!
@@ -80,8 +75,8 @@ use std::sync::{Arc, Mutex};
 use crate::error::{DiskyError, Result};
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
-use crate::parallel::sharding::Sharder;
 use crate::parallel::task_queue::TaskQueue;
+use crate::shard::sink;
 use crate::writer::{RecordWriter, RecordWriterConfig};
 use bytes::Bytes;
 use log::error;
@@ -179,59 +174,45 @@ impl ParallelWriterConfig {
     }
 }
 
-/// Auto-sharding configuration for the parallel writer
+/// Auto-sharding configuration for the parallel writer.
 ///
-/// Controls how auto-sharding is performed in the parallel writer,
-/// including the sharder implementation and number of shards.
+/// Controls how shards are created and managed, including the number of
+/// initial shards and whether auto-sharding is enabled.
 pub struct ShardingConfig<Sink: Write + Seek + Send + 'static> {
-    /// The sharder implementation for creating new sinks, wrapped in Mutex for thread-safe access
-    pub sharder: Mutex<Box<dyn Sharder<Sink> + Send>>,
+    /// The shard factory, wrapped in Mutex for thread-safe access.
+    pub factory: Mutex<Box<dyn sink::Shards<Sink = Sink> + Send>>,
 
-    /// Number of shards to create and maintain
-    pub shards: usize,
+    /// Number of shards to create initially.
+    pub num_shards: usize,
 
-    /// Whether to enable automatic shard creation and management
+    /// Whether to enable automatic shard creation and management.
     pub enable_auto_sharding: bool,
 }
 
 impl<Sink: Write + Seek + Send + 'static> ShardingConfig<Sink> {
-    /// Create a new ShardingConfig with the given sharder and number of shards
+    /// Create a new ShardingConfig with the given shard factory and count.
     ///
     /// By default, auto-sharding is disabled.
-    ///
-    /// # Arguments
-    /// * `sharder` - The sharder implementation to use for creating new sinks
-    /// * `shards` - The number of shards to create
-    ///
-    /// # Returns
-    /// A new ShardingConfig instance
-    pub fn new(sharder: Box<dyn Sharder<Sink> + Send>, shards: usize) -> Self {
-        // Ensure shards is at least 1
-        let shards = std::cmp::max(shards, 1);
+    pub fn new(factory: Box<dyn sink::Shards<Sink = Sink> + Send>, num_shards: usize) -> Self {
+        let num_shards = std::cmp::max(num_shards, 1);
 
         Self {
-            sharder: Mutex::new(sharder),
-            shards,
-            // Auto-sharding is disabled by default
+            factory: Mutex::new(factory),
+            num_shards,
             enable_auto_sharding: false,
         }
     }
 
-    /// Create a new ShardingConfig with auto-sharding enabled
-    ///
-    /// # Arguments
-    /// * `sharder` - The sharder implementation to use for creating new sinks
-    /// * `shards` - The number of shards to create and maintain
-    ///
-    /// # Returns
-    /// A new ShardingConfig instance with auto-sharding enabled
-    pub fn with_auto_sharding(sharder: Box<dyn Sharder<Sink> + Send>, shards: usize) -> Self {
-        // Ensure shards is at least 1
-        let shards = std::cmp::max(shards, 1);
+    /// Create a new ShardingConfig with auto-sharding enabled.
+    pub fn with_auto_sharding(
+        factory: Box<dyn sink::Shards<Sink = Sink> + Send>,
+        num_shards: usize,
+    ) -> Self {
+        let num_shards = std::cmp::max(num_shards, 1);
 
         Self {
-            sharder: Mutex::new(sharder),
-            shards,
+            factory: Mutex::new(factory),
+            num_shards,
             enable_auto_sharding: true,
         }
     }
@@ -290,17 +271,11 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    ///
-    /// // Create a simple in-memory sharder
-    /// let sharder = Autosharder::new(|| {
-    ///     Ok(Cursor::new(Vec::new()))
-    /// });
+    /// # use disky::shard::sink::MemoryShards;
     ///
     /// // Create a sharding configuration with 3 shards
     /// let sharding_config = ShardingConfig::new(
-    ///     Box::new(sharder),
+    ///     Box::new(MemoryShards::new()),
     ///     3
     /// );
     ///
@@ -321,7 +296,7 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
         };
 
         let resource_pool = Arc::new(ResourcePool::new());
-        let initial_shards = sharding_config.shards;
+        let initial_shards = sharding_config.num_shards;
 
         let writer = Self {
             task_queue,
@@ -352,11 +327,9 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
+    /// # use disky::shard::sink::MemoryShards;
     /// # use bytes::Bytes;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// let data = Bytes::from(b"async record".to_vec());
     /// let promise = parallel_writer.write_record_async(data).unwrap();
@@ -396,10 +369,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # use disky::shard::sink::MemoryShards;
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// parallel_writer.write_record(b"synchronous record").unwrap();
     /// ```
@@ -412,16 +383,16 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Returns
     /// A Result indicating success or failure
     fn create_new_shard(&self) -> Result<()> {
-        // Create a new sink using the sharder (lock the mutex for thread-safe access)
-        let sink = self
+        // Get the next shard from the factory (lock the mutex for thread-safe access)
+        let shard = self
             .sharding_config
-            .sharder
+            .factory
             .lock()
-            .map_err(|_| DiskyError::Other("Failed to lock sharder".to_string()))?
-            .create_sink()?;
+            .map_err(|_| DiskyError::Other("Failed to lock shard factory".to_string()))?
+            .next()?;
 
-        // Create a new RecordWriter with the sink and configuration
-        let writer = RecordWriter::with_config(sink, self.config.writer_config.clone())?;
+        // TODO: use shard.id for error context
+        let writer = RecordWriter::with_config(shard.sink, self.config.writer_config.clone())?;
 
         // Add the writer to the resource pool
         self.resource_pool.add_resource(WriterResource {
@@ -528,13 +499,11 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
+    /// # use disky::shard::sink::MemoryShards;
     /// # use bytes::Bytes;
     /// # use std::thread;
     /// # use std::sync::Arc;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = Arc::new(ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap());
     /// # let data = Bytes::from(b"async record".to_vec());
     /// # parallel_writer.write_record_async(data).unwrap();
@@ -574,13 +543,11 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
+    /// # use disky::shard::sink::MemoryShards;
     /// # use bytes::Bytes;
     /// # use std::sync::Arc;
     /// # use std::thread;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = Arc::new(ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap());
     /// # for i in 0..5 {
     /// #     let data = Bytes::from(format!("record {}", i).into_bytes());
@@ -626,10 +593,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # use disky::shard::sink::MemoryShards;
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// # parallel_writer.write_record(b"some data").unwrap();
     ///
@@ -665,10 +630,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # use disky::shard::sink::MemoryShards;
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// # parallel_writer.write_record(b"some data").unwrap();
     ///
@@ -693,10 +656,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # use disky::shard::sink::MemoryShards;
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// # parallel_writer.write_record(b"some data").unwrap();
     /// # parallel_writer.flush().unwrap();
@@ -745,10 +706,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # use disky::shard::sink::MemoryShards;
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// # parallel_writer.write_record(b"some data").unwrap();
     /// # parallel_writer.flush().unwrap();
@@ -808,11 +767,9 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
+    /// # use disky::shard::sink::MemoryShards;
     /// # use bytes::Bytes;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// # let data = Bytes::from(b"async record".to_vec());
     /// # parallel_writer.write_record_async(data).unwrap();
@@ -836,11 +793,9 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
+    /// # use disky::shard::sink::MemoryShards;
     /// # use bytes::Bytes;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     /// # for i in 0..5 {
     /// #     let data = Bytes::from(format!("record {}", i).into_bytes());
@@ -864,10 +819,8 @@ impl<Sink: Write + Seek + Send + 'static> ParallelWriter<Sink> {
     /// # Example
     /// ```rust,no_run
     /// # use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-    /// # use disky::parallel::sharding::Autosharder;
-    /// # use std::io::Cursor;
-    /// # let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
-    /// # let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+    /// # use disky::shard::sink::MemoryShards;
+    /// # let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), 3);
     /// # let parallel_writer = ParallelWriter::new(sharding_config, ParallelWriterConfig::default()).unwrap();
     ///
     /// let count = parallel_writer.available_resource_count().unwrap();

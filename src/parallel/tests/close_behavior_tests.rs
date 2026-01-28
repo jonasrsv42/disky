@@ -1,10 +1,10 @@
 use crate::error::{DiskyError, Result};
 use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{ParallelReader, ParallelReaderConfig, ShardingConfig};
-use crate::parallel::sharding::Autosharder;
 use crate::parallel::writer::{
     ParallelWriter, ParallelWriterConfig, ShardingConfig as WriterShardingConfig,
 };
+use crate::shard::sink;
 use crate::shard::source::{MemoryShards, SequentialShardSource};
 use std::io::Cursor;
 use std::sync::Arc;
@@ -161,7 +161,7 @@ fn test_reader_close_fulfills_pending_close_promises() -> Result<()> {
 #[test]
 fn test_writer_close_fulfills_pending_write_promises() -> Result<()> {
     // Create an in-memory sharder for testing
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = sink::MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = WriterShardingConfig::new(Box::new(sharder), 1);
@@ -203,7 +203,7 @@ fn test_writer_close_fulfills_pending_write_promises() -> Result<()> {
 #[test]
 fn test_writer_close_fulfills_pending_flush_promises() -> Result<()> {
     // Create an in-memory sharder for testing
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = sink::MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = WriterShardingConfig::new(Box::new(sharder), 1);
@@ -251,7 +251,7 @@ fn test_writer_close_fulfills_pending_flush_promises() -> Result<()> {
 #[test]
 fn test_writer_close_fulfills_pending_close_promises() -> Result<()> {
     // Create an in-memory sharder for testing
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = sink::MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = WriterShardingConfig::new(Box::new(sharder), 1);
@@ -284,7 +284,7 @@ fn test_writer_close_fulfills_pending_close_promises() -> Result<()> {
 #[test]
 fn test_concurrent_operations_with_close() -> Result<()> {
     // Create an in-memory sharder for testing
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = sink::MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = WriterShardingConfig::new(Box::new(sharder), 1);

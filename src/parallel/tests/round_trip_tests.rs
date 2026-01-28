@@ -2,9 +2,9 @@ use bytes::Bytes;
 use std::io::{Cursor, Seek, SeekFrom};
 
 use crate::error::Result;
-use crate::parallel::sharding::Autosharder;
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
 use crate::reader::{DiskyPiece, RecordReader};
+use crate::shard::sink::MemoryShards;
 
 #[test]
 fn test_parallel_writer_round_trip() -> Result<()> {
@@ -18,7 +18,7 @@ fn test_parallel_writer_round_trip() -> Result<()> {
     ];
 
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 1 shard for simplicity
     let sharding_config = ShardingConfig::new(Box::new(sharder), 1);

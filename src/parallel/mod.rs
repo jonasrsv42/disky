@@ -17,7 +17,6 @@ pub mod multi_threaded_writer;
 pub mod promise;
 pub mod reader;
 pub mod resource_pool;
-pub mod sharding;
 pub mod task_queue;
 pub mod writer;
 

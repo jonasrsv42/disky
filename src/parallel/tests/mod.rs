@@ -7,6 +7,5 @@ mod multi_threaded_writer_tests;
 mod reader_tests;
 mod resource_draining_tests;
 mod round_trip_tests;
-mod sharding_tests;
 mod task_queue_capacity_tests;
 mod writer_tests;

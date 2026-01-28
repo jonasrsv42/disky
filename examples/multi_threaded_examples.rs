@@ -8,8 +8,8 @@ mod parallel_example {
     use disky::parallel::reader::{
         DiskyParallelPiece, ParallelReaderConfig, ShardingConfig as ReaderShardingConfig,
     };
-    use disky::parallel::sharding::FileSharder;
     use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig as WriterShardingConfig};
+    use disky::shard::sink::FileShardsBuilder;
     use disky::shard::source::{FileShards, SequentialShardSource};
     use tempfile::tempdir;
 
@@ -38,8 +38,8 @@ mod parallel_example {
     fn basic_mt_write_example(dir_path: &std::path::Path) -> disky::error::Result<()> {
         println!("Running basic multi-threaded write example...");
 
-        // Create a FileSharder that will create multiple shard files
-        let file_sharder = FileSharder::with_prefix(dir_path.to_path_buf(), "mt_shard");
+        // Create a shard factory that will create multiple shard files
+        let file_sharder = FileShardsBuilder::new(dir_path, "mt_shard").build()?;
 
         // Configure the sharding (3 shards in this case)
         let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 3);

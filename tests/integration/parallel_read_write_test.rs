@@ -4,10 +4,10 @@ use disky::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig,
     ShardingConfig as ReaderShardingConfig,
 };
-use disky::parallel::sharding::FileSharder;
 use disky::parallel::writer::{
     ParallelWriter, ParallelWriterConfig, ShardingConfig as WriterShardingConfig,
 };
+use disky::shard::sink::FileShardsBuilder;
 use disky::shard::source::{FileShards, SequentialShardSource};
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
@@ -21,7 +21,9 @@ fn test_parallel_reader_with_parallel_writer() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with the temporary directory
-    let file_sharder = FileSharder::with_prefix(dir_path.clone(), "test_shard");
+    let file_sharder = FileShardsBuilder::new(dir_path.clone(), "test_shard")
+        .build()
+        .unwrap();
 
     // Configure with 3 shards
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 3);
@@ -85,7 +87,9 @@ fn test_parallel_reader_async_with_parallel_writer() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with the temporary directory
-    let file_sharder = FileSharder::with_prefix(dir_path.clone(), "async_test");
+    let file_sharder = FileShardsBuilder::new(dir_path.clone(), "async_test")
+        .build()
+        .unwrap();
 
     // Configure with 5 shards for more parallelism
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 5);
@@ -171,7 +175,9 @@ fn test_large_records_parallel_read_write() -> Result<()> {
     let dir_path = temp_dir.path().to_path_buf();
 
     // Create a file sharder with the temporary directory
-    let file_sharder = FileSharder::with_prefix(dir_path.clone(), "large_test");
+    let file_sharder = FileShardsBuilder::new(dir_path.clone(), "large_test")
+        .build()
+        .unwrap();
 
     // Configure with 2 shards
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 2);

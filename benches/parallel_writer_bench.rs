@@ -79,8 +79,8 @@ mod parallel_benchmarks {
     use bytes::Bytes;
 
     use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
-    use disky::parallel::sharding::FileSharder;
     use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig};
+    use disky::shard::sink::FileShardsBuilder;
 
     /// Write records to multiple shard files using the multi-threaded writer
     pub fn write_with_multi_threaded_writer(
@@ -93,8 +93,8 @@ mod parallel_benchmarks {
         // Create a temporary directory
         let dir = tempdir().expect("Failed to create temp directory");
 
-        // Create a FileSharder for the multi-threaded writer
-        let sharder = FileSharder::with_prefix(dir.path().to_path_buf(), "shard");
+        // Create a shard factory for the multi-threaded writer
+        let sharder = FileShardsBuilder::new(dir.path(), "shard").build().unwrap();
 
         // Create sharding config for the multi-threaded writer
         let sharding_config = ShardingConfig::new(Box::new(sharder), shard_count);

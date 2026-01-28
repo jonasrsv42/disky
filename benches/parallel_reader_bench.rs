@@ -99,8 +99,8 @@ mod parallel_benchmarks {
 
     use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
     use disky::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-    use disky::parallel::sharding::FileSharder;
     use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
+    use disky::shard::sink::FileShardsBuilder;
     use disky::shard::source::{FileShards, SequentialShardSource};
 
     /// Write records to multiple shard files using the parallel writer
@@ -112,8 +112,8 @@ mod parallel_benchmarks {
         // Create a temporary directory
         let dir = tempdir().expect("Failed to create temp directory");
 
-        // Create a FileSharder for the parallel writer
-        let sharder = FileSharder::with_prefix(dir.path().to_path_buf(), "shard");
+        // Create a shard factory for the parallel writer
+        let sharder = FileShardsBuilder::new(dir.path(), "shard").build().unwrap();
 
         // Create sharding config for the parallel writer
         let sharding_config =

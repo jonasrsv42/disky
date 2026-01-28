@@ -1,8 +1,8 @@
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
-use crate::parallel::sharding::Autosharder;
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
+use crate::shard::sink::ClosureShards;
 use crate::writer::RecordWriterConfig;
 
 #[test]
@@ -12,7 +12,7 @@ fn test_auto_sharding_on_byte_limit() {
     let sinks_created_clone = sinks_created.clone();
 
     // Create a sharder that counts the number of sinks created
-    let sharder = Autosharder::new(move || {
+    let factory = ClosureShards::new(move || {
         let mut count = sinks_created_clone.lock().unwrap();
         *count += 1;
         Ok(Cursor::new(Vec::new()))
@@ -20,7 +20,7 @@ fn test_auto_sharding_on_byte_limit() {
 
     // Create sharding config with auto-sharding enabled
     // Start with just 1 shard
-    let sharding_config = ShardingConfig::with_auto_sharding(Box::new(sharder), 1);
+    let sharding_config = ShardingConfig::with_auto_sharding(Box::new(factory), 1);
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {
@@ -71,7 +71,7 @@ fn test_auto_sharding_disabled() {
     let sinks_created_clone = sinks_created.clone();
 
     // Create a sharder that counts the number of sinks created
-    let sharder = Autosharder::new(move || {
+    let factory = ClosureShards::new(move || {
         let mut count = sinks_created_clone.lock().unwrap();
         *count += 1;
         Ok(Cursor::new(Vec::new()))
@@ -79,7 +79,7 @@ fn test_auto_sharding_disabled() {
 
     // Create sharding config with auto-sharding disabled (default)
     // Start with just 1 shard
-    let sharding_config = ShardingConfig::new(Box::new(sharder), 1);
+    let sharding_config = ShardingConfig::new(Box::new(factory), 1);
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {
@@ -124,7 +124,7 @@ fn test_auto_sharding_with_failing_sharder() {
     let sinks_created_clone = sinks_created.clone();
 
     // Create a sharder that fails after the first sink creation
-    let sharder = Autosharder::new(move || {
+    let factory = ClosureShards::new(move || {
         let mut count = sinks_created_clone.lock().unwrap();
         *count += 1;
 
@@ -139,7 +139,7 @@ fn test_auto_sharding_with_failing_sharder() {
     });
 
     // Create sharding config with auto-sharding enabled
-    let sharding_config = ShardingConfig::with_auto_sharding(Box::new(sharder), 1);
+    let sharding_config = ShardingConfig::with_auto_sharding(Box::new(factory), 1);
 
     // Create a config with a low max_bytes_per_writer limit
     let config = ParallelWriterConfig {

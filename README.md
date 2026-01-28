@@ -90,17 +90,16 @@ disky = { version = "0.1.0", features = ["parallel"] }
 Then you can use the multi-threaded API:
 
 ```rust
-use std::path::PathBuf;
 use bytes::Bytes;
 use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
 use disky::parallel::writer::{ShardingConfig, ParallelWriterConfig};
-use disky::parallel::sharding::FileSharder;
+use disky::shard::sink::FileShardsBuilder;
 
-// Create a sharder for multiple output files
-let sharder = FileSharder::with_prefix(PathBuf::from("/tmp/output"), "shard");
+// Create a shard factory for multiple output files
+let file_shards = FileShardsBuilder::new("/tmp/output", "shard").build()?;
 
 // Configure with 3 shards and 4 worker threads
-let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
+let sharding_config = ShardingConfig::new(Box::new(file_shards), 3);
 let config = MultiThreadedWriterConfig {
     writer_config: ParallelWriterConfig::default(),
     worker_threads: 4,

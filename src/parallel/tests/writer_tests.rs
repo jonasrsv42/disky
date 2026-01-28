@@ -1,17 +1,16 @@
 use bytes::Bytes;
-use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::parallel::sharding::Autosharder;
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
+use crate::shard::sink::MemoryShards;
 use crate::writer::RecordWriterConfig;
 
 #[test]
 fn test_parallel_writer_basic() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 3 shards
     let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
@@ -62,7 +61,7 @@ fn test_parallel_writer_basic() {
 #[test]
 fn test_sync_and_async_writes() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 3 shards
     let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
@@ -118,7 +117,7 @@ fn test_sync_and_async_writes() {
 #[test]
 fn test_sync_operations() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 3 shards
     let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
@@ -145,7 +144,7 @@ fn test_sync_operations() {
 #[test]
 fn test_task_queue_operations() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 3 shards
     let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
@@ -215,7 +214,7 @@ fn test_task_queue_operations() {
 #[test]
 fn test_async_write_failure() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = ShardingConfig::new(Box::new(sharder), 1);
@@ -237,7 +236,7 @@ fn test_async_write_failure() {
 #[test]
 fn test_bytes_written_tracking() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = ShardingConfig::new(Box::new(sharder), 1);
@@ -275,7 +274,7 @@ fn test_bytes_written_tracking() {
 #[test]
 fn test_bytes_written_with_async_writes() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 1 shard
     let sharding_config = ShardingConfig::new(Box::new(sharder), 1);
@@ -318,7 +317,7 @@ fn test_bytes_written_with_async_writes() {
 #[test]
 fn test_writer_rotation_on_byte_limit() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 3 shards
     let sharding_config = ShardingConfig::new(Box::new(sharder), 3);
@@ -383,7 +382,7 @@ fn test_writer_rotation_on_byte_limit() {
 #[test]
 fn test_partial_writer_rotation_on_byte_limit() {
     // Create a memory-based sharder
-    let sharder = Autosharder::new(|| Ok(Cursor::new(Vec::new())));
+    let sharder = MemoryShards::new();
 
     // Create sharding config with 2 shards
     let sharding_config = ShardingConfig::new(Box::new(sharder), 2);

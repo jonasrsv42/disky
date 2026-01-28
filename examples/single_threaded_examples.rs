@@ -1,7 +1,11 @@
 use std::fs::File;
 use std::path::Path;
 
-use disky::reader::{DiskyPiece, RecordReader};
+use disky::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
+use disky::shard::reader::SequentialShardReader;
+use disky::shard::sink::FileShardsBuilder;
+use disky::shard::source::{FileShards, SequentialShardSource};
+use disky::shard::writer::SequentialShardWriterConfig;
 use disky::writer::RecordWriter;
 use tempfile::NamedTempFile;
 
@@ -23,6 +27,11 @@ fn main() -> disky::error::Result<()> {
 
     // Using iterator interface
     iterator_example(&path)?;
+
+    // Sharded writing and reading
+    let shard_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    sharded_write_example(shard_dir.path())?;
+    sharded_read_example(shard_dir.path())?;
 
     println!("All examples completed successfully!");
     Ok(())
@@ -129,6 +138,63 @@ fn iterator_example(path: &Path) -> disky::error::Result<()> {
         let record = record_result?;
         println!("#{}: {}", i + 1, String::from_utf8_lossy(&record));
     }
+
+    Ok(())
+}
+
+// Example of writing records across multiple shard files
+fn sharded_write_example(dir: &Path) -> disky::error::Result<()> {
+    println!("Running sharded write example...");
+
+    // Create a shard sink that produces files named "example_000000", "example_000001", ...
+    let sink = FileShardsBuilder::new(dir, "example").build()?;
+
+    // Build a writer that rotates to a new shard every 100 bytes of record data
+    let mut writer = SequentialShardWriterConfig::new(sink)
+        .max_shard_bytes(100)
+        .build();
+
+    // Write records — they'll be spread across multiple shard files
+    for i in 0..10 {
+        let record = format!("Shard record {}", i);
+        writer.write_record(record.as_bytes())?;
+    }
+    writer.close()?;
+
+    let shard_count = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("example_"))
+        .count();
+    println!("Wrote 10 records across {} shard files", shard_count);
+
+    Ok(())
+}
+
+// Example of reading records back from shard files
+fn sharded_read_example(dir: &Path) -> disky::error::Result<()> {
+    println!("Running sharded read example...");
+
+    // Discover shard files matching the "example" prefix
+    let source = FileShards::from_pattern(dir.to_path_buf(), "example")?;
+
+    // Create a sequential shard reader that drains each shard in order
+    let reader = SequentialShardReader::new(
+        SequentialShardSource::new(source),
+        RecordReaderConfig::default(),
+    );
+
+    // Iterate over all records across all shards
+    let mut count = 0;
+    for result in reader {
+        let bytes = result?;
+        count += 1;
+        println!(
+            "Shard record {}: {}",
+            count,
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+    println!("Read {} records from shards", count);
 
     Ok(())
 }

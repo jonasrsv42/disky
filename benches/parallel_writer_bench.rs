@@ -15,12 +15,11 @@
 //! Benchmark comparing the performance of:
 //! - Single-threaded RecordWriter on a single large file (10GB)
 //! - MultiThreadedWriter on multiple smaller files (10 x 1GB)
-//! - MultiThreadedWriter with different task queue capacity limits
+//! - SequentialShardWriter on multiple smaller files (10 x 1GB)
 //!
-//! This benchmark tests how well the multi-threaded writer handles
-//! parallelism across multiple shards compared to a single-threaded
-//! writer on a single large file, and how different queue capacity
-//! settings affect performance.
+//! This benchmark tests how well the multi-threaded writer and the
+//! sequential shard writer handle writing across multiple shards
+//! compared to a single-threaded writer on a single large file.
 
 #![cfg_attr(not(feature = "parallel"), allow(dead_code, unused_imports))]
 
@@ -81,6 +80,7 @@ mod parallel_benchmarks {
     use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
     use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig};
     use disky::shard::sink::FileShardsBuilder;
+    use disky::shard::writer::SequentialShardWriterConfig;
 
     /// Write records to multiple shard files using the multi-threaded writer
     pub fn write_with_multi_threaded_writer(
@@ -118,6 +118,32 @@ mod parallel_benchmarks {
         }
 
         // Close the writer
+        writer.close()?;
+
+        Ok(dir)
+    }
+
+    /// Write records using the sequential shard writer
+    pub fn write_with_sequential_shard_writer(
+        record_count: usize,
+        record_size: usize,
+        shard_count: usize,
+    ) -> Result<TempDir> {
+        let dir = tempdir().expect("Failed to create temp directory");
+        let sharder = FileShardsBuilder::new(dir.path(), "shard").build().unwrap();
+
+        // Set max_shard_bytes so records are spread across roughly shard_count shards
+        let total_bytes = record_count * record_size;
+        let max_shard_bytes = total_bytes / shard_count;
+
+        let mut writer = SequentialShardWriterConfig::new(sharder)
+            .max_shard_bytes(max_shard_bytes)
+            .build();
+
+        for i in 0..record_count {
+            let record = generate_test_record(i, record_size);
+            writer.write_record(&record)?;
+        }
         writer.close()?;
 
         Ok(dir)
@@ -167,6 +193,17 @@ mod parallel_benchmarks {
                         None, // No queue capacity limit
                     )
                     .unwrap()
+                })
+            },
+        );
+
+        // Benchmark sequential shard writer (single-threaded, rotates across shards)
+        group.bench_function(
+            BenchmarkId::new("sequential_shard", format!("{}_shards", SHARD_COUNT)),
+            |b| {
+                b.iter(|| {
+                    write_with_sequential_shard_writer(total_records, RECORD_SIZE, SHARD_COUNT)
+                        .unwrap()
                 })
             },
         );

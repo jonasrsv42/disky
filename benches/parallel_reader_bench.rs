@@ -15,10 +15,11 @@
 //! Benchmark comparing the performance of:
 //! - Single-threaded RecordReader on a single large file (10GB)
 //! - MultiThreadedReader on multiple smaller files (10 x 1GB)
+//! - SequentialShardReader on multiple smaller files (10 x 1GB)
 //!
-//! This benchmark tests how well the multi-threaded reader handles
-//! parallelism across multiple shards compared to a single-threaded
-//! reader on a single large file.
+//! This benchmark tests how well the multi-threaded reader and the
+//! sequential shard reader handle reading across multiple shards
+//! compared to a single-threaded reader on a single large file.
 
 #![cfg_attr(not(feature = "parallel"), allow(dead_code, unused_imports))]
 
@@ -100,6 +101,8 @@ mod parallel_benchmarks {
     use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
     use disky::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
     use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
+    use disky::reader::RecordReaderConfig;
+    use disky::shard::reader::SequentialShardReader;
     use disky::shard::sink::FileShardsBuilder;
     use disky::shard::source::{FileShards, SequentialShardSource};
 
@@ -176,6 +179,26 @@ mod parallel_benchmarks {
         Ok((record_count, total_size))
     }
 
+    /// Read all records using SequentialShardReader
+    pub fn read_with_sequential_shard_reader(dir: &TempDir) -> Result<(usize, usize)> {
+        let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
+        let reader = SequentialShardReader::new(
+            SequentialShardSource::new(file_shards),
+            RecordReaderConfig::default(),
+        );
+
+        let mut record_count = 0;
+        let mut total_size = 0;
+
+        for result in reader {
+            let bytes = result?;
+            record_count += 1;
+            total_size += bytes.len();
+        }
+
+        Ok((record_count, total_size))
+    }
+
     /// Benchmark a single-file vs multi-file comparison
     pub fn bench_single_vs_multi_file(c: &mut Criterion) {
         // Determine total number of records
@@ -222,6 +245,12 @@ mod parallel_benchmarks {
                     read_with_multi_threaded_reader(&sharded_dir, DEFAULT_THREAD_COUNT).unwrap()
                 })
             },
+        );
+
+        // Benchmark sequential shard reader (single-threaded, reads across shards)
+        group.bench_function(
+            BenchmarkId::new("sequential_shard", format!("{}_shards", SHARD_COUNT)),
+            |b| b.iter(|| read_with_sequential_shard_reader(&sharded_dir).unwrap()),
         );
 
         // Finish the group to write results

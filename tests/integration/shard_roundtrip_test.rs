@@ -3,21 +3,10 @@
 use tempfile::tempdir;
 
 use disky::error::Result;
-use disky::reader::RecordReaderConfig;
-use disky::shard::reader::SequentialShardReader;
+use disky::shard::reader::SequentialShardReaderConfig;
 use disky::shard::sink::FileShardsBuilder;
 use disky::shard::source::{FileShards, SequentialShardSource};
 use disky::shard::writer::SequentialShardWriterConfig;
-
-/// Collect all records from a SequentialShardReader into Vec<Vec<u8>>.
-fn collect_records(
-    reader: SequentialShardReader<
-        std::fs::File,
-        impl Iterator<Item = Result<disky::shard::source::Shard<std::fs::File>>>,
-    >,
-) -> Result<Vec<Vec<u8>>> {
-    reader.map(|r| r.map(|b| b.to_vec())).collect()
-}
 
 #[test]
 fn single_shard_roundtrip() -> Result<()> {
@@ -38,14 +27,11 @@ fn single_shard_roundtrip() -> Result<()> {
     writer.close()?;
 
     // Read
-    let source = FileShards::from_pattern(dir_path, "shard")?;
-    let reader = SequentialShardReader::new(
-        SequentialShardSource::new(source),
-        RecordReaderConfig::default(),
-    );
-    let actual = collect_records(reader)?;
+    let shards = FileShards::from_pattern(dir_path, "shard")?;
+    let reader = SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
+    let actual: Result<Vec<Vec<u8>>> = reader.map(|r| r.map(|b| b.to_vec())).collect();
 
-    assert_eq!(actual, expected);
+    assert_eq!(actual?, expected);
     Ok(())
 }
 
@@ -81,14 +67,11 @@ fn multi_shard_roundtrip() -> Result<()> {
     );
 
     // Read back all records across shards.
-    let source = FileShards::from_pattern(dir_path, "data")?;
-    let reader = SequentialShardReader::new(
-        SequentialShardSource::new(source),
-        RecordReaderConfig::default(),
-    );
-    let actual = collect_records(reader)?;
+    let shards = FileShards::from_pattern(dir_path, "data")?;
+    let reader = SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
+    let actual: Result<Vec<Vec<u8>>> = reader.map(|r| r.map(|b| b.to_vec())).collect();
 
-    assert_eq!(actual, expected);
+    assert_eq!(actual?, expected);
     Ok(())
 }
 
@@ -109,12 +92,10 @@ fn large_records_across_shards() -> Result<()> {
     }
     writer.close()?;
 
-    let source = FileShards::from_pattern(dir_path, "big")?;
-    let reader = SequentialShardReader::new(
-        SequentialShardSource::new(source),
-        RecordReaderConfig::default(),
-    );
-    let actual = collect_records(reader)?;
+    let shards = FileShards::from_pattern(dir_path, "big")?;
+    let reader = SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
+    let actual: Result<Vec<Vec<u8>>> = reader.map(|r| r.map(|b| b.to_vec())).collect();
+    let actual = actual?;
 
     assert_eq!(actual.len(), expected.len());
     for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -145,13 +126,10 @@ fn empty_records_roundtrip() -> Result<()> {
     }
     writer.close()?;
 
-    let source = FileShards::from_pattern(dir_path, "empty")?;
-    let reader = SequentialShardReader::new(
-        SequentialShardSource::new(source),
-        RecordReaderConfig::default(),
-    );
-    let actual = collect_records(reader)?;
+    let shards = FileShards::from_pattern(dir_path, "empty")?;
+    let reader = SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
+    let actual: Result<Vec<Vec<u8>>> = reader.map(|r| r.map(|b| b.to_vec())).collect();
 
-    assert_eq!(actual, expected);
+    assert_eq!(actual?, expected);
     Ok(())
 }

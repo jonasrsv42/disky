@@ -101,8 +101,7 @@ mod parallel_benchmarks {
     use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
     use disky::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
     use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
-    use disky::reader::RecordReaderConfig;
-    use disky::shard::reader::SequentialShardReader;
+    use disky::shard::reader::SequentialShardReaderConfig;
     use disky::shard::sink::FileShardsBuilder;
     use disky::shard::source::{FileShards, SequentialShardSource};
 
@@ -182,10 +181,8 @@ mod parallel_benchmarks {
     /// Read all records using SequentialShardReader
     pub fn read_with_sequential_shard_reader(dir: &TempDir) -> Result<(usize, usize)> {
         let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
-        let reader = SequentialShardReader::new(
-            SequentialShardSource::new(file_shards),
-            RecordReaderConfig::default(),
-        );
+        let reader =
+            SequentialShardReaderConfig::new(SequentialShardSource::new(file_shards)).build();
 
         let mut record_count = 0;
         let mut total_size = 0;

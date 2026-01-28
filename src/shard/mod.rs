@@ -10,6 +10,9 @@ pub mod sink;
 pub mod source;
 pub mod writer;
 
-pub use reader::{RoundRobinShardReader, SequentialShardReader};
+pub use reader::{
+    RoundRobinShardReader, RoundRobinShardReaderConfig, SequentialShardReader,
+    SequentialShardReaderConfig,
+};
 pub use source::{Shard, Shards};
 pub use writer::{SequentialShardWriter, SequentialShardWriterConfig};

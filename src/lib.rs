@@ -25,6 +25,7 @@ pub mod error;
 pub mod hash;
 pub mod reader;
 pub mod shard;
+pub mod tree;
 pub(crate) mod varint;
 pub mod writer;
 

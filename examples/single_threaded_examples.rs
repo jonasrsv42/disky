@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::path::Path;
 
-use disky::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
-use disky::shard::reader::SequentialShardReader;
+use disky::reader::{DiskyPiece, RecordReader};
+use disky::shard::reader::SequentialShardReaderConfig;
 use disky::shard::sink::FileShardsBuilder;
 use disky::shard::source::{FileShards, SequentialShardSource};
 use disky::shard::writer::SequentialShardWriterConfig;
@@ -175,13 +175,10 @@ fn sharded_read_example(dir: &Path) -> disky::error::Result<()> {
     println!("Running sharded read example...");
 
     // Discover shard files matching the "example" prefix
-    let source = FileShards::from_pattern(dir.to_path_buf(), "example")?;
+    let shards = FileShards::from_pattern(dir.to_path_buf(), "example")?;
 
     // Create a sequential shard reader that drains each shard in order
-    let reader = SequentialShardReader::new(
-        SequentialShardSource::new(source),
-        RecordReaderConfig::default(),
-    );
+    let reader = SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
 
     // Iterate over all records across all shards
     let mut count = 0;

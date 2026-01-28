@@ -1,5 +1,5 @@
 use disky::error::Result;
-use disky::reader::RecordReader;
+use disky::reader::RecordReaderConfig;
 use disky::sampling::SamplingReader;
 use disky::writer::RecordWriter;
 use std::io::Cursor;
@@ -32,8 +32,8 @@ fn test_sampling_from_multiple_files() -> Result<()> {
     let data_b = create_test_data("B", 15);
 
     // Create readers from the data
-    let reader_a = RecordReader::new(Cursor::new(&data_a))?;
-    let reader_b = RecordReader::new(Cursor::new(&data_b))?;
+    let reader_a = RecordReaderConfig::new(Cursor::new(&data_a)).build()?;
+    let reader_b = RecordReaderConfig::new(Cursor::new(&data_b)).build()?;
 
     // Create a sampling reader with different weights
     let sources = vec![(2.0, reader_a), (1.0, reader_b)];

@@ -14,7 +14,7 @@ use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::task_queue::TaskQueue;
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig, RecordReaderOptions};
 use crate::shard::Shard;
 
 /// Result of reading a record from the parallel reader
@@ -113,24 +113,24 @@ impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
 }
 
 /// Configuration for the parallel reader
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParallelReaderConfig {
-    /// Configuration for the underlying record readers
-    pub reader_config: RecordReaderConfig,
+    /// Options for the underlying record readers
+    pub reader_options: RecordReaderOptions,
 }
 
 impl Default for ParallelReaderConfig {
     fn default() -> Self {
         Self {
-            reader_config: RecordReaderConfig::default(),
+            reader_options: RecordReaderOptions::default(),
         }
     }
 }
 
 impl ParallelReaderConfig {
-    /// Creates a new configuration with the specified reader config
-    pub fn new(reader_config: RecordReaderConfig) -> Self {
-        Self { reader_config }
+    /// Creates a new configuration with the specified reader options
+    pub fn new(reader_options: RecordReaderOptions) -> Self {
+        Self { reader_options }
     }
 }
 
@@ -171,7 +171,9 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
 
         match next {
             Some(Ok(shard)) => {
-                let reader = RecordReader::with_config(shard.source, self.config.reader_config)?;
+                let reader = RecordReaderConfig::new(shard.source)
+                    .options(self.config.reader_options)
+                    .build()?;
                 self.reader_pool.add_resource(ReaderResource {
                     reader: Box::new(reader),
                     shard_id: shard.id,

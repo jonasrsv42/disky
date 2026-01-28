@@ -16,7 +16,7 @@
 
 use std::io::Cursor;
 
-use crate::reader::{DiskyPiece, RecordReader};
+use crate::reader::{DiskyPiece, RecordReaderConfig};
 use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
 
 /// Test empty records within a normal chunk
@@ -47,7 +47,7 @@ fn test_empty_records_with_normal_records() {
     let data = writer.get_data().unwrap();
 
     // Read back the records
-    let mut reader = RecordReader::new(Cursor::new(data)).unwrap();
+    let mut reader = RecordReaderConfig::new(Cursor::new(data)).build().unwrap();
     let mut read_records = Vec::new();
 
     loop {
@@ -107,7 +107,7 @@ fn test_only_empty_records() {
     );
 
     // Read back the records
-    let mut reader = RecordReader::new(Cursor::new(data)).unwrap();
+    let mut reader = RecordReaderConfig::new(Cursor::new(data)).build().unwrap();
     let mut count = 0;
 
     // Should immediately hit EOF, no records to read
@@ -162,7 +162,7 @@ fn test_empty_records_chunk_boundaries() {
     let data = writer.get_data().unwrap();
 
     // Read back the records
-    let mut reader = RecordReader::new(Cursor::new(data)).unwrap();
+    let mut reader = RecordReaderConfig::new(Cursor::new(data)).build().unwrap();
     let mut read_records = Vec::new();
 
     loop {

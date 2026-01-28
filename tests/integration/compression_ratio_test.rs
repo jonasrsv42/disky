@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
-use disky::reader::{DiskyPiece, RecordReader};
+use disky::reader::{DiskyPiece, RecordReaderConfig};
 use disky::writer::RecordWriter;
 
 #[cfg(feature = "zstd")]
@@ -34,7 +34,9 @@ fn test_logmel_compression_ratios() {
 
     // Read all records from the logmel file
     let file = fs::File::open(logmel_path).expect("Failed to open logmel.disky");
-    let mut reader = RecordReader::new(file).expect("Failed to create RecordReader");
+    let mut reader = RecordReaderConfig::new(file)
+        .build()
+        .expect("Failed to create RecordReader");
 
     let mut records = Vec::new();
     let mut total_record_size = 0;

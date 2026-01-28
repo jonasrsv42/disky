@@ -3,7 +3,7 @@ use std::io::{Read, Seek};
 use bytes::Bytes;
 
 use crate::error::{DiskyError, Result};
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig, RecordReaderOptions};
 use crate::shard::source::Shard;
 use crate::tree::reader::{Node, Reader};
 
@@ -37,7 +37,7 @@ use crate::tree::reader::{Node, Reader};
 /// ```
 pub struct RoundRobinShardReaderConfig<ShardSource> {
     source: ShardSource,
-    reader_config: RecordReaderConfig,
+    reader_options: RecordReaderOptions,
     max_active: Option<usize>,
 }
 
@@ -48,14 +48,14 @@ impl<ShardSource> RoundRobinShardReaderConfig<ShardSource> {
     pub fn new(source: ShardSource) -> Self {
         Self {
             source,
-            reader_config: RecordReaderConfig::default(),
+            reader_options: RecordReaderOptions::default(),
             max_active: None,
         }
     }
 
-    /// Set the [`RecordReaderConfig`] used for each shard's reader.
-    pub fn reader_config(mut self, config: RecordReaderConfig) -> Self {
-        self.reader_config = config;
+    /// Set the [`RecordReaderOptions`] used for each shard's reader.
+    pub fn reader_options(mut self, options: RecordReaderOptions) -> Self {
+        self.reader_options = options;
         self
     }
 
@@ -86,7 +86,7 @@ where
 
         Ok(RoundRobinShardReader {
             shards: self.source,
-            config: self.reader_config,
+            options: self.reader_options,
             max_active: self.max_active,
             state: ReaderState::Start,
         })
@@ -143,7 +143,7 @@ pub struct RoundRobinShardReader<
     ShardIter: Iterator<Item = Result<Shard<Source>>>,
 > {
     shards: ShardIter,
-    config: RecordReaderConfig,
+    options: RecordReaderOptions,
     max_active: Option<usize>,
     state: ReaderState<Source>,
 }
@@ -157,7 +157,7 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
     /// hold borrows on other fields (e.g. `self.state`) simultaneously.
     fn next_reader(
         shards: &mut ShardIter,
-        config: RecordReaderConfig,
+        options: RecordReaderOptions,
     ) -> Result<Option<ActiveShard<Source>>> {
         let shard = match shards.next() {
             Some(Ok(shard)) => shard,
@@ -165,12 +165,13 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
             None => return Ok(None),
         };
 
-        let reader = RecordReader::with_config(shard.source, config).map_err(|e| {
-            DiskyError::ShardError {
+        let reader = RecordReaderConfig::new(shard.source)
+            .options(options)
+            .build()
+            .map_err(|e| DiskyError::ShardError {
                 shard_id: shard.id.clone(),
                 source: Box::new(e),
-            }
-        })?;
+            })?;
 
         Ok(Some(ActiveShard {
             reader,
@@ -187,9 +188,9 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
         readers: &mut Vec<ActiveShard<Source>>,
         position: &mut usize,
         shards: &mut ShardIter,
-        config: RecordReaderConfig,
+        options: RecordReaderOptions,
     ) -> Result<()> {
-        match Self::next_reader(shards, config)? {
+        match Self::next_reader(shards, options)? {
             Some(replacement) => {
                 readers[*position] = replacement;
             }
@@ -216,7 +217,7 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
                 }
             }
 
-            match Self::next_reader(&mut self.shards, self.config)? {
+            match Self::next_reader(&mut self.shards, self.options)? {
                 Some(active) => readers.push(active),
                 None => break,
             }
@@ -270,7 +271,7 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Ite
                                 readers,
                                 position,
                                 &mut self.shards,
-                                self.config,
+                                self.options,
                             ) {
                                 self.state = ReaderState::Done;
                                 return Some(Err(e));

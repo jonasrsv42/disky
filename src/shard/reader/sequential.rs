@@ -3,7 +3,7 @@ use std::io::{Read, Seek};
 use bytes::Bytes;
 
 use crate::error::{DiskyError, Result};
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig, RecordReaderOptions};
 use crate::shard::source::Shard;
 use crate::tree::reader::{Node, Reader};
 
@@ -34,7 +34,7 @@ use crate::tree::reader::{Node, Reader};
 /// ```
 pub struct SequentialShardReaderConfig<ShardSource> {
     source: ShardSource,
-    reader_config: RecordReaderConfig,
+    reader_options: RecordReaderOptions,
 }
 
 impl<ShardSource> SequentialShardReaderConfig<ShardSource> {
@@ -42,13 +42,13 @@ impl<ShardSource> SequentialShardReaderConfig<ShardSource> {
     pub fn new(source: ShardSource) -> Self {
         Self {
             source,
-            reader_config: RecordReaderConfig::default(),
+            reader_options: RecordReaderOptions::default(),
         }
     }
 
-    /// Set the [`RecordReaderConfig`] used for each shard's reader.
-    pub fn reader_config(mut self, config: RecordReaderConfig) -> Self {
-        self.reader_config = config;
+    /// Set the [`RecordReaderOptions`] used for each shard's reader.
+    pub fn reader_options(mut self, options: RecordReaderOptions) -> Self {
+        self.reader_options = options;
         self
     }
 }
@@ -62,7 +62,7 @@ where
     pub fn build(self) -> SequentialShardReader<Source, ShardSource> {
         SequentialShardReader {
             shards: self.source,
-            config: self.reader_config,
+            options: self.reader_options,
             state: ReaderState::Start,
         }
     }
@@ -111,7 +111,7 @@ pub struct SequentialShardReader<
     ShardIter: Iterator<Item = Result<Shard<Source>>>,
 > {
     shards: ShardIter,
-    config: RecordReaderConfig,
+    options: RecordReaderOptions,
     state: ReaderState<Source>,
 }
 
@@ -134,7 +134,10 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Ite
                         self.state = ReaderState::Done;
                         return Some(Err(e));
                     }
-                    Some(Ok(shard)) => match RecordReader::with_config(shard.source, self.config) {
+                    Some(Ok(shard)) => match RecordReaderConfig::new(shard.source)
+                        .options(self.options)
+                        .build()
+                    {
                         Ok(reader) => {
                             self.state = ReaderState::Reading {
                                 reader,

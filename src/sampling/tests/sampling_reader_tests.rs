@@ -236,7 +236,7 @@ fn test_sampling_reader_zero_weight() {
 
 #[test]
 fn test_sampling_reader_with_record_readers() {
-    use crate::reader::RecordReader;
+    use crate::reader::RecordReaderConfig;
     use crate::writer::RecordWriter;
     use std::io::Cursor;
 
@@ -267,8 +267,12 @@ fn test_sampling_reader_with_record_readers() {
     }
 
     // Create two RecordReaders
-    let reader_a = RecordReader::new(Cursor::new(&buffer_a)).unwrap();
-    let reader_b = RecordReader::new(Cursor::new(&buffer_b)).unwrap();
+    let reader_a = RecordReaderConfig::new(Cursor::new(&buffer_a))
+        .build()
+        .unwrap();
+    let reader_b = RecordReaderConfig::new(Cursor::new(&buffer_b))
+        .build()
+        .unwrap();
 
     // Create a SamplingReader with both RecordReaders
     // Use a fixed seed for deterministic testing

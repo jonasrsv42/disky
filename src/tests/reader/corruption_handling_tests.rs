@@ -20,7 +20,7 @@ use env_logger;
 use log;
 
 use crate::blocks::writer::BlockWriterConfig;
-use crate::reader::{CorruptionStrategy, DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::reader::{CorruptionStrategy, DiskyPiece, RecordReaderConfig, RecordReaderOptions};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Helper function to create a file with 10 records using small block size
@@ -95,8 +95,11 @@ fn test_corruption_recovery() {
         {
             let cursor = Cursor::new(&corrupted);
             // Use same small block size as the writer (128 bytes)
-            let config = RecordReaderConfig::with_block_size(128).unwrap();
-            let mut reader = RecordReader::with_config(cursor, config).unwrap();
+            let config = RecordReaderOptions::with_block_size(128).unwrap();
+            let mut reader = RecordReaderConfig::new(cursor)
+                .options(config)
+                .build()
+                .unwrap();
 
             let mut records = Vec::new();
             let mut read_error = false;
@@ -130,11 +133,14 @@ fn test_corruption_recovery() {
         {
             let cursor = Cursor::new(&corrupted);
             // Use same small block size as the writer (128 bytes) but with recovery enabled
-            let config = RecordReaderConfig::with_block_size(128)
+            let config = RecordReaderOptions::with_block_size(128)
                 .unwrap()
                 .with_corruption_strategy(CorruptionStrategy::Recover);
 
-            let mut reader = RecordReader::with_config(cursor, config).unwrap();
+            let mut reader = RecordReaderConfig::new(cursor)
+                .options(config)
+                .build()
+                .unwrap();
 
             let mut records = Vec::new();
             let mut read_error = false;
@@ -178,7 +184,7 @@ fn test_signature_corruption() {
 
     // Reader creation will succeed, but first read should fail with a signature error
     let cursor = Cursor::new(&corrupted);
-    let mut reader = RecordReader::new(cursor).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Attempting to read the first record should fail
     let read_result = reader.next_record();
@@ -186,11 +192,14 @@ fn test_signature_corruption() {
 
     // Try with recovery strategy - signature errors still can't be recovered
     let cursor = Cursor::new(&corrupted);
-    let config = RecordReaderConfig::with_block_size(128)
+    let config = RecordReaderOptions::with_block_size(128)
         .unwrap()
         .with_corruption_strategy(CorruptionStrategy::Recover);
 
-    let mut reader = RecordReader::with_config(cursor, config).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
     let read_result = reader.next_record();
 
     // Even with recovery enabled, signature corruption should be detected
@@ -229,8 +238,11 @@ fn test_mid_file_corruption() {
     // Without recovery, we should encounter an error
     {
         let cursor = Cursor::new(&corrupted);
-        let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-        let mut reader = RecordReader::with_config(cursor, config).unwrap();
+        let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         let mut records = Vec::new();
         let mut read_error = false;
@@ -261,11 +273,14 @@ fn test_mid_file_corruption() {
     // With recovery enabled, we should read at least some records
     {
         let cursor = Cursor::new(&corrupted);
-        let config = RecordReaderConfig::with_block_size(block_size)
+        let config = RecordReaderOptions::with_block_size(block_size)
             .unwrap()
             .with_corruption_strategy(CorruptionStrategy::Recover);
 
-        let mut reader = RecordReader::with_config(cursor, config).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         let mut records = Vec::new();
 
@@ -346,8 +361,11 @@ fn test_multiple_corruptions() {
     // Without recovery, we should encounter an error
     {
         let cursor = Cursor::new(&corrupted);
-        let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-        let mut reader = RecordReader::with_config(cursor, config).unwrap();
+        let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         let mut records = Vec::new();
         let mut read_error = false;
@@ -378,11 +396,14 @@ fn test_multiple_corruptions() {
     // With recovery enabled, try to read as many records as possible
     {
         let cursor = Cursor::new(&corrupted);
-        let config = RecordReaderConfig::with_block_size(block_size)
+        let config = RecordReaderOptions::with_block_size(block_size)
             .unwrap()
             .with_corruption_strategy(CorruptionStrategy::Recover);
 
-        let mut reader = RecordReader::with_config(cursor, config).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         let mut records = Vec::new();
         let mut errors_encountered = 0;

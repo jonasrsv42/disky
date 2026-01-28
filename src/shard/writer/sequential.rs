@@ -230,7 +230,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::error::DiskyError;
-    use crate::reader::{DiskyPiece, RecordReader};
+    use crate::reader::{DiskyPiece, RecordReaderConfig};
     use crate::shard::sink::{ClosureShards, MemoryShards, Shards};
 
     use super::SequentialShardWriterConfig;
@@ -238,7 +238,7 @@ mod tests {
     /// Read all records from a disky buffer.
     fn read_records(data: &[u8]) -> Vec<Vec<u8>> {
         let cursor = Cursor::new(data.to_vec());
-        let mut reader = RecordReader::new(cursor).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor).build().unwrap();
         let mut records = Vec::new();
         loop {
             match reader.next_record().unwrap() {

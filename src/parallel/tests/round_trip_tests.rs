@@ -3,7 +3,7 @@ use std::io::{Cursor, Seek, SeekFrom};
 
 use crate::error::Result;
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
-use crate::reader::{DiskyPiece, RecordReader};
+use crate::reader::{DiskyPiece, RecordReaderConfig};
 use crate::shard::sink::MemoryShards;
 
 #[test]
@@ -54,7 +54,7 @@ fn test_parallel_writer_round_trip() -> Result<()> {
     // Create a reader to read back the data
     let mut read_cursor = Cursor::new(written_data);
     read_cursor.seek(SeekFrom::Start(0))?;
-    let mut reader = RecordReader::new(read_cursor)?;
+    let mut reader = RecordReaderConfig::new(read_cursor).build()?;
 
     // Read back all records and verify they match
     for expected_record in &test_records {

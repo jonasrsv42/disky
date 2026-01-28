@@ -9,7 +9,7 @@ use bytes::Bytes;
 
 use crate::compression::core::{CompressionType, Compressor, Decompressor};
 use crate::compression::zstd::{ZstdCompressor, ZstdDecompressor};
-use crate::reader::{DiskyPiece, RecordReader};
+use crate::reader::{DiskyPiece, RecordReaderConfig};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 #[test]
@@ -247,7 +247,9 @@ fn test_zstd_e2e_writer_reader_roundtrip() {
     // Read records back and verify
     {
         let cursor = Cursor::new(&buffer);
-        let mut reader = RecordReader::new(cursor).expect("Failed to create RecordReader");
+        let mut reader = RecordReaderConfig::new(cursor)
+            .build()
+            .expect("Failed to create RecordReader");
 
         let mut read_records = Vec::new();
 
@@ -323,7 +325,9 @@ fn test_zstd_e2e_mixed_record_sizes() {
     // Read back and verify
     {
         let cursor = Cursor::new(&buffer);
-        let mut reader = RecordReader::new(cursor).expect("Failed to create RecordReader");
+        let mut reader = RecordReaderConfig::new(cursor)
+            .build()
+            .expect("Failed to create RecordReader");
 
         let mut read_records = Vec::new();
 

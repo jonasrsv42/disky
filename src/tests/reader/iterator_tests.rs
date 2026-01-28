@@ -18,7 +18,7 @@ use bytes::Bytes;
 
 use crate::blocks::writer::BlockWriterConfig;
 use crate::error::DiskyError;
-use crate::reader::{CorruptionStrategy, RecordReader, RecordReaderConfig};
+use crate::reader::{CorruptionStrategy, RecordReaderConfig, RecordReaderOptions};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Helper function to create a test file with small block and chunk sizes
@@ -55,11 +55,14 @@ fn test_iterator_basic() {
 
     // IMPORTANT: Use the same block size for reader as was used for the writer
     let block_size = 128u64;
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
 
     // Read with iterator pattern
     let cursor = Cursor::new(&buffer);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Use the iterator directly
     let mut count = 0;
@@ -108,11 +111,14 @@ fn test_iterator_error_propagation() {
 
     // IMPORTANT: Use the same block size for reader as was used for the writer
     let block_size = 128u64;
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
 
     // Read with iterator pattern
     let cursor = Cursor::new(&corrupted);
-    let reader = RecordReader::with_config(cursor, config.clone()).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config.clone())
+        .build()
+        .unwrap();
 
     // Collect results, which should include an error
     let results: Vec<_> = reader.collect();
@@ -126,7 +132,10 @@ fn test_iterator_error_propagation() {
 
     // Create a second reader to verify that the iterator stops after the error
     let cursor = Cursor::new(&corrupted);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Count how many items we get (should be finite)
     let count = reader.count();
@@ -149,13 +158,16 @@ fn test_iterator_partial_collection() {
 
     // IMPORTANT: Use the same block size for reader as was used for the writer
     let block_size = 128u64;
-    let config = RecordReaderConfig::with_block_size(block_size)
+    let config = RecordReaderOptions::with_block_size(block_size)
         .unwrap()
         .with_corruption_strategy(CorruptionStrategy::Recover);
 
     // Read with iterator pattern and recovery enabled
     let cursor = Cursor::new(&corrupted);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // With recovery enabled, we should be able to read some records
     // even after encountering corruption
@@ -197,7 +209,7 @@ fn test_iterator_empty_file() {
     let empty_data = Vec::new();
     let cursor = Cursor::new(empty_data);
 
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Collect into a Result
     let results: Result<Vec<_>, _> = reader.collect();
@@ -231,8 +243,11 @@ fn test_iterator_after_error() {
     // First test: Without recovery, iterator should return an error and then stop
     {
         let cursor = Cursor::new(&corrupted);
-        let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-        let reader = RecordReader::with_config(cursor, config.clone()).unwrap();
+        let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+        let reader = RecordReaderConfig::new(cursor)
+            .options(config.clone())
+            .build()
+            .unwrap();
 
         let results: Vec<_> = reader.collect();
 
@@ -245,7 +260,10 @@ fn test_iterator_after_error() {
 
         // Create another reader and verify we only get one error before stopping
         let cursor = Cursor::new(&corrupted);
-        let reader = RecordReader::with_config(cursor, config).unwrap();
+        let reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         let mut count = 0;
         let mut saw_error = false;
@@ -268,11 +286,14 @@ fn test_iterator_after_error() {
     // even after corruption, potentially skipping corrupted parts
     {
         let cursor = Cursor::new(&corrupted);
-        let config = RecordReaderConfig::with_block_size(block_size)
+        let config = RecordReaderOptions::with_block_size(block_size)
             .unwrap()
             .with_corruption_strategy(CorruptionStrategy::Recover);
 
-        let reader = RecordReader::with_config(cursor, config).unwrap();
+        let reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         // Simply verify we get a finite number of records (not an infinite loop)
         let records: Vec<_> = reader.filter_map(Result::ok).collect();
@@ -298,11 +319,14 @@ fn test_iterator_for_each() {
 
     // IMPORTANT: Use the same block size for reader as was used for the writer
     let block_size = 128u64;
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
 
     // Read with iterator pattern
     let cursor = Cursor::new(&buffer);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     let mut count = 0;
 
@@ -356,8 +380,11 @@ fn test_human_readable_strings() {
 
     // Read back the strings
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Collect all records
     let records: Vec<_> = reader.collect::<Result<Vec<_>, _>>().unwrap();

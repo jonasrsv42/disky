@@ -18,7 +18,7 @@ use bytes::Bytes;
 use std::io::Cursor;
 
 use crate::compression::CompressionType;
-use crate::reader::RecordReader;
+use crate::reader::RecordReaderConfig;
 use crate::writer::{RecordWriter, RecordWriterConfig, WriterState};
 
 /// Test writing records, flushing, then writing more records.
@@ -79,7 +79,7 @@ fn test_write_flush_write() {
 
     // Create a reader to verify all records were written correctly
     let cursor = Cursor::new(&data);
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Read back and verify all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -142,7 +142,7 @@ fn test_multiple_flush_cycles() {
 
     // Create a reader to verify all records were written correctly
     let cursor = Cursor::new(&data);
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Read back and verify all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -199,7 +199,7 @@ fn test_empty_records_with_flush() {
 
     // Create a reader to verify all records were written correctly
     let cursor = Cursor::new(&data);
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Read back and verify all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -262,7 +262,7 @@ fn test_flush_chunk_vs_flush() {
 
     // Create a reader to verify all records were written correctly
     let cursor = Cursor::new(&data);
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Read back and verify all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();

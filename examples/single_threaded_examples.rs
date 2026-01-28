@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use disky::reader::{DiskyPiece, RecordReader};
+use disky::reader::{DiskyPiece, RecordReaderConfig};
 use disky::shard::reader::SequentialShardReaderConfig;
 use disky::shard::sink::FileShardsBuilder;
 use disky::shard::source::{FileShards, SequentialShardSource};
@@ -67,7 +67,7 @@ fn basic_read_example(path: &Path) -> disky::error::Result<()> {
     let file = File::open(path)?;
 
     // Create a reader with default settings
-    let mut reader = RecordReader::new(file)?;
+    let mut reader = RecordReaderConfig::new(file).build()?;
 
     // Read and process all records
     let mut count = 0;
@@ -108,7 +108,7 @@ fn append_example(path: &Path) -> disky::error::Result<()> {
 
     // Now read all records from the file to verify append worked
     let file = File::open(path)?;
-    let mut reader = RecordReader::new(file)?;
+    let mut reader = RecordReaderConfig::new(file).build()?;
 
     let mut count = 0;
     loop {
@@ -130,7 +130,7 @@ fn iterator_example(path: &Path) -> disky::error::Result<()> {
     let file = File::open(path)?;
 
     // Create a reader
-    let reader = RecordReader::new(file)?;
+    let reader = RecordReaderConfig::new(file).build()?;
 
     // Use iterator interface to process records
     println!("Records read via iterator:");

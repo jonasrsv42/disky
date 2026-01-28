@@ -14,13 +14,12 @@
 //!
 //! ```no_run
 //! use std::fs::File;
-//! use disky::reader::RecordReader;
-//! use disky::reader::DiskyPiece;
+//! use disky::reader::{RecordReaderConfig, DiskyPiece};
 //! use disky::error::Result;
 //!
 //! fn read_records(path: &str) -> Result<()> {
 //!     let file = File::open(path)?;
-//!     let mut reader = RecordReader::new(file)?;
+//!     let mut reader = RecordReaderConfig::new(file).build()?;
 //!
 //!     // Read records until EOF
 //!     loop {
@@ -82,11 +81,12 @@ impl Default for CorruptionStrategy {
     }
 }
 
-/// Configuration for the [`RecordReader`].
+/// Options for configuring a [`RecordReader`].
 ///
 /// Controls the behavior of record reading, including block size and corruption handling.
+/// This is a pure configuration object that can be passed to reader builders.
 #[derive(Debug, Clone, Copy)]
-pub struct RecordReaderConfig {
+pub struct RecordReaderOptions {
     /// Underlying block reader configuration (block size, etc.)
     pub block_config: BlockReaderConfig,
 
@@ -94,7 +94,7 @@ pub struct RecordReaderConfig {
     pub corruption_strategy: CorruptionStrategy,
 }
 
-impl Default for RecordReaderConfig {
+impl Default for RecordReaderOptions {
     fn default() -> Self {
         Self {
             block_config: BlockReaderConfig::default(),
@@ -103,8 +103,8 @@ impl Default for RecordReaderConfig {
     }
 }
 
-impl RecordReaderConfig {
-    /// Creates a config with a custom block size.
+impl RecordReaderOptions {
+    /// Creates options with a custom block size.
     ///
     /// # Arguments
     ///
@@ -128,14 +128,85 @@ impl RecordReaderConfig {
     /// # Examples
     ///
     /// ```no_run
-    /// use disky::reader::{RecordReaderConfig, CorruptionStrategy};
+    /// use disky::reader::{RecordReaderOptions, CorruptionStrategy};
     ///
-    /// let config = RecordReaderConfig::default()
+    /// let options = RecordReaderOptions::default()
     ///     .with_corruption_strategy(CorruptionStrategy::Recover);
     /// ```
     pub fn with_corruption_strategy(mut self, strategy: CorruptionStrategy) -> Self {
         self.corruption_strategy = strategy;
         self
+    }
+}
+
+use crate::tree::reader::{Node, Reader};
+
+/// Builder for [`RecordReader`].
+///
+/// Takes a source (any `Read + Seek`) and optional configuration.
+/// Call [`build()`](Self::build) to create the reader, or use as a
+/// [`Node`] in a reader tree.
+///
+/// # Examples
+///
+/// ```ignore
+/// use std::fs::File;
+/// use disky::reader::RecordReaderConfig;
+///
+/// let file = File::open("data.disky")?;
+/// let reader = RecordReaderConfig::new(file).build()?;
+///
+/// for record in reader {
+///     let bytes = record?;
+///     // ...
+/// }
+/// ```
+pub struct RecordReaderConfig<Source> {
+    source: Source,
+    options: RecordReaderOptions,
+}
+
+impl<Source> RecordReaderConfig<Source> {
+    /// Create a config with the given source.
+    pub fn new(source: Source) -> Self {
+        Self {
+            source,
+            options: RecordReaderOptions::default(),
+        }
+    }
+
+    /// Set the [`RecordReaderOptions`] for this reader.
+    pub fn options(mut self, options: RecordReaderOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Set the corruption handling strategy.
+    pub fn corruption_strategy(mut self, strategy: CorruptionStrategy) -> Self {
+        self.options.corruption_strategy = strategy;
+        self
+    }
+}
+
+impl<Source: Read + Seek> RecordReaderConfig<Source> {
+    /// Build the [`RecordReader`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be positioned or read.
+    pub fn build(self) -> Result<RecordReader<Source>> {
+        Ok(RecordReader {
+            block_reader: BlockReader::with_config(self.source, self.options.block_config)?,
+            state: ReaderState::Ready,
+            options: self.options,
+            decompressors: create_decompressors_map(),
+        })
+    }
+}
+
+impl<Source: Read + Seek + Send + 'static> Node for RecordReaderConfig<Source> {
+    fn make(self: Box<Self>) -> Result<Reader> {
+        Ok(Box::new(self.build()?))
     }
 }
 
@@ -200,58 +271,14 @@ pub struct RecordReader<Source: Read + Seek> {
     /// Current state in the reading state machine
     state: ReaderState,
 
-    /// Reader configuration parameters
-    config: RecordReaderConfig,
+    /// Reader options
+    options: RecordReaderOptions,
 
     /// Map of decompressors by compression type byte
     decompressors: BTreeMap<u8, Box<dyn Decompressor>>,
 }
 
 impl<Source: Read + Seek> RecordReader<Source> {
-    /// Creates a new reader with default configuration.
-    ///
-    /// This constructor uses sensible defaults:
-    /// - 64 KiB block size
-    /// - Error handling for corruption (no recovery attempts)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the source cannot be positioned or read.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::fs::File;
-    /// use disky::reader::RecordReader;
-    ///
-    /// # fn example() -> disky::error::Result<()> {
-    /// let file = File::open("example.riegeli")?;
-    /// let reader = RecordReader::new(file)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new(source: Source) -> Result<Self> {
-        Self::with_config(source, RecordReaderConfig::default())
-    }
-
-    /// Creates a new reader with custom configuration.
-    ///
-    /// Use this constructor when you need to customize behavior such as:
-    /// - Setting a non-standard block size
-    /// - Enabling corruption recovery
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the source cannot be positioned or read.
-    pub fn with_config(source: Source, config: RecordReaderConfig) -> Result<Self> {
-        Ok(Self {
-            block_reader: BlockReader::with_config(source, config.block_config.clone())?,
-            state: ReaderState::Ready,
-            config,
-            decompressors: create_decompressors_map(),
-        })
-    }
-
     /// Reads the next record from the file or signals EOF.
     ///
     /// This is the primary method for extracting records from a Riegeli file.
@@ -274,11 +301,11 @@ impl<Source: Read + Seek> RecordReader<Source> {
     ///
     /// ```no_run
     /// use std::fs::File;
-    /// use disky::reader::{RecordReader, DiskyPiece};
+    /// use disky::reader::{RecordReaderConfig, DiskyPiece};
     ///
     /// # fn example() -> disky::error::Result<()> {
     /// let file = File::open("data.riegeli")?;
-    /// let mut reader = RecordReader::new(file)?;
+    /// let mut reader = RecordReaderConfig::new(file).build()?;
     ///
     /// while let DiskyPiece::Record(record) = reader.next_record()? {
     ///     println!("Record size: {}", record.len());
@@ -431,7 +458,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
 
                 ReaderState::BlockCorruption(error) => {
                     // Error during disk reading.
-                    if self.config.corruption_strategy == CorruptionStrategy::Recover {
+                    if self.options.corruption_strategy == CorruptionStrategy::Recover {
                         info!("Attempting to recover from block corruption: {}", error);
                         if let Err(recovery_err) = self.block_reader.recover() {
                             // Unrecoverable corruption
@@ -457,7 +484,7 @@ impl<Source: Read + Seek> RecordReader<Source> {
 
                 ReaderState::ChunkCorruption(error, mut parser) => {
                     // Error during parsing
-                    if self.config.corruption_strategy == CorruptionStrategy::Recover {
+                    if self.options.corruption_strategy == CorruptionStrategy::Recover {
                         warn!("Attempting to recover from chunk corruption: {}", error);
 
                         // Try to recover by skipping the chunk
@@ -516,11 +543,11 @@ impl<Source: Read + Seek> RecordReader<Source> {
 ///
 /// ```no_run
 /// use std::fs::File;
-/// use disky::reader::RecordReader;
+/// use disky::reader::RecordReaderConfig;
 ///
 /// # fn example() -> disky::error::Result<()> {
 /// let file = File::open("data.riegeli")?;
-/// let reader = RecordReader::new(file)?;
+/// let reader = RecordReaderConfig::new(file).build()?;
 ///
 /// // Process records with a for loop
 /// for record_result in reader {

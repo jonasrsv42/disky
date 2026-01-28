@@ -18,7 +18,7 @@ use bytes::{Bytes, BytesMut};
 
 use crate::blocks::writer::BlockWriterConfig;
 use crate::chunks::signature_writer::SignatureWriter;
-use crate::reader::{CorruptionStrategy, DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::reader::{CorruptionStrategy, DiskyPiece, RecordReaderConfig, RecordReaderOptions};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Helper function to create a test file with small block and chunk sizes
@@ -81,8 +81,11 @@ fn test_extreme_record_sizes() {
 
         // Read the file with the same block size
         let cursor = Cursor::new(&buffer);
-        let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-        let mut reader = RecordReader::with_config(cursor, config).unwrap();
+        let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor)
+            .options(config)
+            .build()
+            .unwrap();
 
         // Read the record
         match reader.next_record().unwrap() {
@@ -128,13 +131,16 @@ fn test_concatenated_files() {
 
     // IMPORTANT: Use the same block size for reader as was used for the writer
     let block_size = 128u64;
-    let config = RecordReaderConfig::with_block_size(block_size)
+    let config = RecordReaderOptions::with_block_size(block_size)
         .unwrap()
         .with_corruption_strategy(CorruptionStrategy::Recover);
 
     // Read with recovery enabled
     let cursor = Cursor::new(&combined);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Collect all successful records, filtering out errors
     let records: Vec<_> = reader.filter_map(Result::ok).collect();
@@ -224,11 +230,14 @@ fn test_repeated_signatures() {
 
     // Read with recovery enabled
     let cursor = Cursor::new(&final_buffer);
-    let config = RecordReaderConfig::with_block_size(block_size)
+    let config = RecordReaderOptions::with_block_size(block_size)
         .unwrap()
         .with_corruption_strategy(CorruptionStrategy::Recover);
 
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Collect all records
     let mut records = Vec::new();
@@ -302,13 +311,16 @@ fn test_recovery_at_file_boundaries() {
 
     // IMPORTANT: Use the same block size for reader as was used for the writer
     let block_size = 128u64;
-    let config = RecordReaderConfig::with_block_size(block_size)
+    let config = RecordReaderOptions::with_block_size(block_size)
         .unwrap()
         .with_corruption_strategy(CorruptionStrategy::Recover);
 
     // Read with recovery enabled
     let cursor = Cursor::new(&buffer);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // With recovery enabled, we should still get at least some records
     let records: Vec<_> = reader.filter_map(Result::ok).collect();
@@ -356,8 +368,11 @@ fn test_empty_records_file() {
 
     // Read the file with the same block size
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let mut reader = RecordReader::with_config(cursor, config).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Should go straight to EOF
     match reader.next_record().unwrap() {
@@ -396,8 +411,11 @@ fn test_single_byte_record() {
 
     // Read the file
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let mut reader = RecordReader::with_config(cursor, config).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Should get the single byte record
     match reader.next_record().unwrap() {
@@ -451,8 +469,11 @@ fn test_alternating_record_sizes() {
 
     // Read the file
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Collect the records
     let records = reader.collect::<Result<Vec<_>, _>>().unwrap();

@@ -17,7 +17,7 @@ use std::io::Cursor;
 use bytes::Bytes;
 
 use crate::blocks::writer::BlockWriterConfig;
-use crate::reader::{CorruptionStrategy, RecordReader, RecordReaderConfig};
+use crate::reader::{CorruptionStrategy, RecordReaderConfig, RecordReaderOptions};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Test creating a reader with custom block size
@@ -47,8 +47,11 @@ fn test_custom_block_size() {
 
     // Create a reader with the same block size as the writer
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Read all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -89,8 +92,11 @@ fn test_minimum_block_size() {
 
     // Create a reader with the same block size as the writer
     let cursor = Cursor::new(&buffer);
-    let config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Read all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -119,9 +125,12 @@ fn test_corruption_strategy_config() {
     // Create a reader with corruption recovery enabled
     let cursor = Cursor::new(&buffer);
     let config =
-        RecordReaderConfig::default().with_corruption_strategy(CorruptionStrategy::Recover);
+        RecordReaderOptions::default().with_corruption_strategy(CorruptionStrategy::Recover);
 
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Just verify we can read all records (no corruption to recover from)
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -132,7 +141,7 @@ fn test_corruption_strategy_config() {
 #[test]
 fn test_too_small_block_size() {
     // Try to create a config with a block size that's too small
-    let config = RecordReaderConfig::with_block_size(10);
+    let config = RecordReaderOptions::with_block_size(10);
 
     // This should fail
     assert!(config.is_err());
@@ -143,7 +152,7 @@ fn test_too_small_block_size() {
 fn test_config_chaining() {
     // Test that method chaining works for configuration
     let config =
-        RecordReaderConfig::default().with_corruption_strategy(CorruptionStrategy::Recover);
+        RecordReaderOptions::default().with_corruption_strategy(CorruptionStrategy::Recover);
 
     // Verify the corruption strategy was set
     assert_eq!(config.corruption_strategy, CorruptionStrategy::Recover);
@@ -159,7 +168,10 @@ fn test_config_chaining() {
 
     // Create a reader with the chained config
     let cursor = Cursor::new(&buffer);
-    let reader = RecordReader::with_config(cursor, config).unwrap();
+    let reader = RecordReaderConfig::new(cursor)
+        .options(config)
+        .build()
+        .unwrap();
 
     // Verify we can read the record
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();

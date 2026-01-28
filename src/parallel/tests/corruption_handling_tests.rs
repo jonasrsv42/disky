@@ -13,7 +13,7 @@ use crate::blocks::writer::BlockWriterConfig;
 use crate::error::Result;
 use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-use crate::reader::CorruptionStrategy;
+use crate::reader::{CorruptionStrategy, RecordReaderOptions};
 use crate::shard::source::SequentialShardSource;
 use crate::shard::source::{Shard, Shards};
 use crate::writer::{RecordWriter, RecordWriterConfig};
@@ -118,9 +118,8 @@ fn test_multithreaded_reader_corruption_recovery() {
             let sharding_config = make_sharding_config(vec![corrupted.clone()]);
 
             // Use same small block size as the writer (128 bytes)
-            let reader_config = ParallelReaderConfig::new(
-                crate::reader::RecordReaderConfig::with_block_size(128).unwrap(),
-            );
+            let reader_config =
+                ParallelReaderConfig::new(RecordReaderOptions::with_block_size(128).unwrap());
 
             // Configure a minimal multi-threaded reader (1-2 threads)
             let config = MultiThreadedReaderConfig::new(
@@ -181,11 +180,11 @@ fn test_multithreaded_reader_corruption_recovery() {
             let sharding_config = make_sharding_config(vec![corrupted.clone()]);
 
             // Use same small block size as the writer (128 bytes) but with recovery enabled
-            let mut reader_config =
-                crate::reader::RecordReaderConfig::with_block_size(128).unwrap();
-            reader_config = reader_config.with_corruption_strategy(CorruptionStrategy::Recover);
+            let reader_options = RecordReaderOptions::with_block_size(128)
+                .unwrap()
+                .with_corruption_strategy(CorruptionStrategy::Recover);
 
-            let parallel_config = ParallelReaderConfig::new(reader_config);
+            let parallel_config = ParallelReaderConfig::new(reader_options);
 
             // Configure a minimal multi-threaded reader (1-2 threads)
             let config = MultiThreadedReaderConfig::new(
@@ -283,11 +282,11 @@ fn test_multithreaded_reader_multiple_corruptions() {
         let sharding_config = make_sharding_config(vec![corrupted]);
 
         // Use same block size as the writer but with recovery enabled
-        let mut reader_config =
-            crate::reader::RecordReaderConfig::with_block_size(block_size).unwrap();
-        reader_config = reader_config.with_corruption_strategy(CorruptionStrategy::Recover);
+        let reader_options = RecordReaderOptions::with_block_size(block_size)
+            .unwrap()
+            .with_corruption_strategy(CorruptionStrategy::Recover);
 
-        let parallel_config = ParallelReaderConfig::new(reader_config);
+        let parallel_config = ParallelReaderConfig::new(reader_options);
 
         // Configure a minimal multi-threaded reader (1-2 threads)
         let config = MultiThreadedReaderConfig::new(

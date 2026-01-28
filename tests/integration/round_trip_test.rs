@@ -23,7 +23,7 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 
 use disky::error::Result;
-use disky::reader::RecordReader;
+use disky::reader::RecordReaderConfig;
 use disky::writer::{RecordWriter, RecordWriterConfig};
 
 /// Helper function to write records to a temp file and return the file.
@@ -60,7 +60,7 @@ fn read_all_records<P: AsRef<Path>>(path: P) -> Result<Vec<Vec<u8>>> {
     let file = File::open(path)?;
 
     // Create a reader
-    let reader = RecordReader::new(file)?;
+    let reader = RecordReaderConfig::new(file).build()?;
 
     // Collect all records
     let records: Result<Vec<_>> = reader.map(|r| r.map(|bytes| bytes.to_vec())).collect();

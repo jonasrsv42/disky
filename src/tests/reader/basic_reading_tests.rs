@@ -18,7 +18,7 @@ use bytes::Bytes;
 
 use crate::blocks::writer::BlockWriterConfig;
 use crate::error::DiskyError;
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig};
+use crate::reader::{DiskyPiece, RecordReaderConfig, RecordReaderOptions};
 use crate::writer::{RecordWriter, RecordWriterConfig};
 
 /// Test reading an empty file fails with signature error on first read attempt
@@ -28,7 +28,7 @@ fn test_empty_file() {
     let cursor = Cursor::new(empty_data);
 
     // Reader creation should succeed (lazy initialization)
-    let mut reader = RecordReader::new(cursor).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // First read attempt should fail with a SignatureReadingError
     match reader.next_record() {
@@ -58,7 +58,7 @@ fn test_read_single_record() {
 
     // Read the record back
     let cursor = Cursor::new(&buffer);
-    let mut reader = RecordReader::new(cursor).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // First call should return the record
     match reader.next_record().unwrap() {
@@ -99,7 +99,7 @@ fn test_read_multiple_records() {
 
     // Read and verify records
     let cursor = Cursor::new(&buffer);
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
 
     // Use iterator interface to read all records
     let records: Vec<Bytes> = reader.collect::<Result<Vec<_>, _>>().unwrap();
@@ -131,7 +131,7 @@ fn test_various_record_sizes() {
 
         // Read the record back
         let cursor = Cursor::new(&buffer);
-        let mut reader = RecordReader::new(cursor).unwrap();
+        let mut reader = RecordReaderConfig::new(cursor).build().unwrap();
 
         match reader.next_record().unwrap() {
             DiskyPiece::Record(bytes) => {
@@ -176,8 +176,11 @@ fn test_read_multi_block() {
 
     // Read with the SAME block size as the writer
     let cursor = Cursor::new(&buffer);
-    let reader_config = RecordReaderConfig::with_block_size(block_size).unwrap();
-    let mut reader = RecordReader::with_config(cursor, reader_config).unwrap();
+    let reader_config = RecordReaderOptions::with_block_size(block_size).unwrap();
+    let mut reader = RecordReaderConfig::new(cursor)
+        .options(reader_config)
+        .build()
+        .unwrap();
 
     let mut records = Vec::new();
 
@@ -234,7 +237,7 @@ fn test_read_after_seek() {
         .seek(std::io::SeekFrom::Start(buffer.len() as u64 / 2))
         .unwrap();
 
-    let reader = RecordReader::new(cursor).unwrap();
+    let reader = RecordReaderConfig::new(cursor).build().unwrap();
     let result = reader.collect::<Result<Vec<_>, _>>();
 
     // The reader should fail with an appropriate error

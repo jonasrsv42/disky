@@ -10,3 +10,4 @@ pub mod multi_threaded_read_write_test;
 pub mod sampling_read_test;
 
 pub mod compression_ratio_test;
+pub mod shard_roundtrip_test;

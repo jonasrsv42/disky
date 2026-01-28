@@ -163,41 +163,27 @@ fn test_task_queue_operations() {
     let promise1 = parallel_writer.write_record_async(data1).unwrap();
     let promise2 = parallel_writer.write_record_async(data2).unwrap();
 
-    // Check task count
-    assert_eq!(parallel_writer.pending_task_count().unwrap(), 2);
-    assert!(parallel_writer.has_pending_tasks().unwrap());
-
-    // Process tasks in a separate thread to test concurrency
-    let (ready_tx, ready_rx) = mpsc::channel();
-    let (done_tx, done_rx) = mpsc::channel();
-    let writer_clone = parallel_writer.clone();
-
-    let handle = thread::spawn(move || {
-        // Signal ready to process
-        ready_tx.send(()).unwrap();
-
-        // Process all tasks
-        writer_clone.process_all_tasks().unwrap();
-
-        // Signal completion
-        done_tx.send(()).unwrap();
-    });
-
-    // Wait for thread to be ready
-    ready_rx.recv().unwrap();
-
-    // Queue an async flush operation
+    // Queue an async flush operation before spawning the worker thread
+    // to avoid a race where the worker's process_all_tasks drains
+    // the flush and the main thread's process_next_task blocks forever.
     let flush_promise = parallel_writer.flush_async().unwrap();
 
-    // Wait for processing to complete
-    done_rx.recv().unwrap();
+    // Check task count (2 writes + 1 flush)
+    assert_eq!(parallel_writer.pending_task_count().unwrap(), 3);
+    assert!(parallel_writer.has_pending_tasks().unwrap());
 
-    // Wait for promises to be fulfilled
+    // Process all tasks in a separate thread
+    let writer_clone = parallel_writer.clone();
+    let handle = thread::spawn(move || {
+        writer_clone.process_all_tasks().unwrap();
+    });
+
+    // Wait for the thread to complete
+    handle.join().unwrap();
+
+    // All promises should be fulfilled
     assert!(promise1.wait().unwrap().is_ok());
     assert!(promise2.wait().unwrap().is_ok());
-
-    // Process the flush task
-    parallel_writer.process_next_task().unwrap();
     assert!(flush_promise.wait().unwrap().is_ok());
 
     // Queue should be empty now
@@ -206,9 +192,6 @@ fn test_task_queue_operations() {
 
     // Test resource count
     assert!(parallel_writer.available_resource_count().unwrap() >= 3);
-
-    // Wait for the thread to complete
-    handle.join().unwrap();
 }
 
 #[test]

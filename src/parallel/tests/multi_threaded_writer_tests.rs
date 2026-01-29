@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::error::Result;
 use crate::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
-use crate::parallel::writer::{ParallelWriterConfig, ShardingConfig};
+use crate::parallel::writer::ShardingConfig;
 use crate::shard::sink::MemoryShards;
 
 // Helper to create a multi-threaded writer with minimal configuration
@@ -15,10 +15,10 @@ fn create_test_writer(
     num_threads: usize,
 ) -> Result<MultiThreadedWriter<Cursor<Vec<u8>>>> {
     let sharding_config = ShardingConfig::new(Box::new(MemoryShards::new()), num_shards);
-    let writer_config = ParallelWriterConfig::default();
-    let mt_config = MultiThreadedWriterConfig::new(writer_config, num_threads);
 
-    MultiThreadedWriter::new(sharding_config, mt_config)
+    MultiThreadedWriterConfig::new(sharding_config)
+        .with_worker_threads(num_threads)
+        .build()
 }
 
 // Helper to generate test data of a specific size

@@ -98,8 +98,8 @@ fn read_with_record_reader(file: &NamedTempFile) -> Result<(usize, usize)> {
 mod parallel_benchmarks {
     use super::*;
 
-    use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
-    use disky::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
+    use disky::parallel::multi_threaded_reader::MultiThreadedReaderConfig;
+    use disky::parallel::reader::{DiskyParallelPiece, ShardingConfig};
     use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
     use disky::shard::reader::SequentialShardReaderConfig;
     use disky::shard::sink::FileShardsBuilder;
@@ -151,15 +151,11 @@ mod parallel_benchmarks {
         // Create the sharding config - allow reading multiple shards concurrently
         let sharding_config = ShardingConfig::new(Box::new(source), thread_count);
 
-        // Create the reader config
-        let reader_config = MultiThreadedReaderConfig::new(
-            ParallelReaderConfig::default(),
-            thread_count,
-            10 * 1024 * 1024 * 1024, // 10 GB queue
-        );
-
         // Create the multi-threaded reader
-        let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+        let reader = MultiThreadedReaderConfig::new(sharding_config)
+            .with_worker_threads(thread_count)
+            .with_queue_size_bytes(10 * 1024 * 1024 * 1024) // 10 GB queue
+            .build()?;
 
         let mut record_count = 0;
         let mut total_size = 0;

@@ -11,7 +11,7 @@ use log::debug;
 
 use crate::blocks::writer::BlockWriterConfig;
 use crate::error::Result;
-use crate::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
+use crate::parallel::multi_threaded_reader::MultiThreadedReaderConfig;
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
 use crate::reader::{CorruptionStrategy, RecordReaderOptions};
 use crate::shard::source::SequentialShardSource;
@@ -125,14 +125,13 @@ fn test_multithreaded_reader_corruption_recovery() {
                 ParallelReaderConfig::new(RecordReaderOptions::with_block_size(128).unwrap());
 
             // Configure a minimal multi-threaded reader (1-2 threads)
-            let config = MultiThreadedReaderConfig::new(
-                reader_config,
-                1,    // Use minimal threads for test
-                1024, // Small queue size
-            );
-
             // Create reader with default (Error) corruption strategy
-            let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
+            let reader = MultiThreadedReaderConfig::new(sharding_config)
+                .with_reader_config(reader_config)
+                .with_worker_threads(1)
+                .with_queue_size_bytes(1024)
+                .build()
+                .unwrap();
 
             let mut records = Vec::new();
             let mut read_error = false;
@@ -190,14 +189,13 @@ fn test_multithreaded_reader_corruption_recovery() {
             let parallel_config = ParallelReaderConfig::new(reader_options);
 
             // Configure a minimal multi-threaded reader (1-2 threads)
-            let config = MultiThreadedReaderConfig::new(
-                parallel_config,
-                1,    // Use minimal threads for test
-                1024, // Small queue size
-            );
-
             // Create reader with recovery corruption strategy
-            let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
+            let reader = MultiThreadedReaderConfig::new(sharding_config)
+                .with_reader_config(parallel_config)
+                .with_worker_threads(1)
+                .with_queue_size_bytes(1024)
+                .build()
+                .unwrap();
 
             let mut records = Vec::new();
             let mut read_error = false;
@@ -297,14 +295,13 @@ fn test_multithreaded_reader_multiple_corruptions() {
         let parallel_config = ParallelReaderConfig::new(reader_options);
 
         // Configure a minimal multi-threaded reader (1-2 threads)
-        let config = MultiThreadedReaderConfig::new(
-            parallel_config,
-            1,    // Use minimal threads for test
-            1024, // Small queue size
-        );
-
         // Create reader with recovery corruption strategy
-        let reader = MultiThreadedReader::new(sharding_config, config).unwrap();
+        let reader = MultiThreadedReaderConfig::new(sharding_config)
+            .with_reader_config(parallel_config)
+            .with_worker_threads(1)
+            .with_queue_size_bytes(1024)
+            .build()
+            .unwrap();
 
         let mut records = Vec::new();
         let mut errors_encountered = 0;

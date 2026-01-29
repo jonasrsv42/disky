@@ -19,6 +19,7 @@ use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::reader::{
     DiskyParallelPiece, ParallelReader, ParallelReaderConfig, ShardingConfig,
 };
+use crate::tree::reader::{Node, Reader};
 
 /// Reading order for the multi-threaded reader
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,9 +37,9 @@ impl Default for ReadingOrder {
     }
 }
 
-/// Configuration for the multi-threaded reader
+/// Options for configuring a [`MultiThreadedReader`].
 #[derive(Debug, Clone)]
-pub struct MultiThreadedReaderConfig {
+pub struct MultiThreadedReaderOptions {
     /// Configuration for the underlying parallel reader
     pub reader_config: ParallelReaderConfig,
 
@@ -52,39 +53,114 @@ pub struct MultiThreadedReaderConfig {
     pub reading_order: ReadingOrder,
 }
 
-impl Default for MultiThreadedReaderConfig {
+impl Default for MultiThreadedReaderOptions {
     fn default() -> Self {
-        // Default to using the number of available CPUs for worker threads
-        let worker_threads = 2;
-
         Self {
             reader_config: ParallelReaderConfig::default(),
-            worker_threads,
+            worker_threads: 2,
             queue_size_bytes: 8 * 1024 * 1024, // Default to 8MB queue size
             reading_order: ReadingOrder::default(),
         }
     }
 }
 
-impl MultiThreadedReaderConfig {
-    /// Creates a new configuration with custom settings
-    pub fn new(
-        reader_config: ParallelReaderConfig,
-        worker_threads: usize,
-        queue_size_bytes: usize,
-    ) -> Self {
-        Self {
-            reader_config,
-            worker_threads: worker_threads.max(1), // Ensure at least one worker
-            queue_size_bytes: queue_size_bytes.max(1024), // Ensure reasonable minimum queue size
-            reading_order: ReadingOrder::default(),
-        }
-    }
-
-    /// Sets the reading order for this configuration
+impl MultiThreadedReaderOptions {
+    /// Sets the reading order.
     pub fn with_reading_order(mut self, reading_order: ReadingOrder) -> Self {
         self.reading_order = reading_order;
         self
+    }
+
+    /// Sets the number of worker threads.
+    pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
+        self.worker_threads = worker_threads.max(1);
+        self
+    }
+
+    /// Sets the queue size in bytes.
+    pub fn with_queue_size_bytes(mut self, queue_size_bytes: usize) -> Self {
+        self.queue_size_bytes = queue_size_bytes.max(1024);
+        self
+    }
+
+    /// Sets the parallel reader config.
+    pub fn with_reader_config(mut self, reader_config: ParallelReaderConfig) -> Self {
+        self.reader_config = reader_config;
+        self
+    }
+}
+
+/// Builder for [`MultiThreadedReader`].
+///
+/// # Example
+///
+/// ```ignore
+/// use disky::parallel::multi_threaded_reader::{MultiThreadedReaderConfig, ReadingOrder};
+/// use disky::parallel::reader::ShardingConfig;
+///
+/// let reader = MultiThreadedReaderConfig::new(sharding_config)
+///     .with_reading_order(ReadingOrder::RoundRobin)
+///     .with_worker_threads(4)
+///     .build()?;
+///
+/// for record in reader {
+///     let bytes = record?;
+///     // ...
+/// }
+/// ```
+pub struct MultiThreadedReaderConfig<Source: Read + Seek + Send + 'static> {
+    sharding_config: ShardingConfig<Source>,
+    options: MultiThreadedReaderOptions,
+}
+
+impl<Source: Read + Seek + Send + 'static> MultiThreadedReaderConfig<Source> {
+    /// Creates a new builder with the given sharding config.
+    pub fn new(sharding_config: ShardingConfig<Source>) -> Self {
+        Self {
+            sharding_config,
+            options: MultiThreadedReaderOptions::default(),
+        }
+    }
+
+    /// Sets the options.
+    pub fn options(mut self, options: MultiThreadedReaderOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Sets the reading order.
+    pub fn with_reading_order(mut self, reading_order: ReadingOrder) -> Self {
+        self.options.reading_order = reading_order;
+        self
+    }
+
+    /// Sets the number of worker threads.
+    pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
+        self.options.worker_threads = worker_threads.max(1);
+        self
+    }
+
+    /// Sets the queue size in bytes.
+    pub fn with_queue_size_bytes(mut self, queue_size_bytes: usize) -> Self {
+        self.options.queue_size_bytes = queue_size_bytes.max(1024);
+        self
+    }
+
+    /// Sets the parallel reader config.
+    pub fn with_reader_config(mut self, reader_config: ParallelReaderConfig) -> Self {
+        self.options.reader_config = reader_config;
+        self
+    }
+
+    /// Builds the [`MultiThreadedReader`].
+    pub fn build(self) -> Result<MultiThreadedReader<Source>> {
+        MultiThreadedReader::from_config(self.sharding_config, self.options)
+    }
+}
+
+impl<Source: Read + Seek + Send + 'static> Node for MultiThreadedReaderConfig<Source> {
+    fn make(self: Box<Self>) -> Result<Reader> {
+        Ok(Box::new(self.build()?))
     }
 }
 
@@ -117,20 +193,10 @@ pub struct MultiThreadedReader<Source: Read + Seek + Send + 'static> {
 }
 
 impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
-    /// Creates a new multi-threaded reader
-    ///
-    /// This constructor initializes the reader and starts worker threads
-    /// to process read operations.
-    ///
-    /// # Arguments
-    /// * `sharding_config` - Configuration for creating and managing shards
-    /// * `config` - Configuration for the multi-threaded reader
-    ///
-    /// # Returns
-    /// A new MultiThreadedReader instance
-    pub fn new(
+    /// Creates a new multi-threaded reader from config.
+    fn from_config(
         sharding_config: ShardingConfig<Source>,
-        config: MultiThreadedReaderConfig,
+        config: MultiThreadedReaderOptions,
     ) -> Result<Self> {
         // Create the underlying parallel reader
         let reader = Arc::new(ParallelReader::new(sharding_config, config.reader_config)?);

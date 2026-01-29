@@ -1,11 +1,9 @@
 use bytes::Bytes;
 use disky::error::Result;
-use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
-use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
-use disky::parallel::reader::{
-    DiskyParallelPiece, ParallelReaderConfig, ShardingConfig as ReaderShardingConfig,
-};
-use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig as WriterShardingConfig};
+use disky::parallel::multi_threaded_reader::MultiThreadedReaderConfig;
+use disky::parallel::multi_threaded_writer::MultiThreadedWriterConfig;
+use disky::parallel::reader::{DiskyParallelPiece, ShardingConfig as ReaderShardingConfig};
+use disky::parallel::writer::ShardingConfig as WriterShardingConfig;
 use disky::shard::sink::FileShardsBuilder;
 use disky::shard::source::{FileShards, SequentialShardSource};
 use std::collections::HashSet;
@@ -27,11 +25,10 @@ fn test_multi_threaded_reader_with_multi_threaded_writer() -> Result<()> {
     // Configure with 3 shards
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 3);
 
-    // Create writer configuration with 2 worker threads
-    let writer_config = MultiThreadedWriterConfig::new(ParallelWriterConfig::default(), 2);
-
-    // Initialize the multi-threaded writer
-    let writer = MultiThreadedWriter::new(sharding_config, writer_config)?;
+    // Initialize the multi-threaded writer with 2 worker threads
+    let writer = MultiThreadedWriterConfig::new(sharding_config)
+        .with_worker_threads(2)
+        .build()?;
 
     // Write some test records - 50 records total
     let num_records = 50;
@@ -53,15 +50,11 @@ fn test_multi_threaded_reader_with_multi_threaded_writer() -> Result<()> {
     let source = SequentialShardSource::new(file_shards);
     let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
-    // Create reader configuration with 2 worker threads
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        2,
-        1024 * 1024, // 1MB queue size
-    );
-
-    // Create the multi-threaded reader
-    let reader = MultiThreadedReader::new(reader_sharding_config, reader_config)?;
+    // Create the multi-threaded reader with 2 worker threads
+    let reader = MultiThreadedReaderConfig::new(reader_sharding_config)
+        .with_worker_threads(2)
+        .with_queue_size_bytes(1024 * 1024) // 1MB queue size
+        .build()?;
 
     // Read all records
     let mut actual_records = HashSet::new();
@@ -103,11 +96,10 @@ fn test_multi_threaded_reader_writer_async() -> Result<()> {
     // Configure with 4 shards for more parallelism
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 4);
 
-    // Create writer configuration with 3 worker threads
-    let writer_config = MultiThreadedWriterConfig::new(ParallelWriterConfig::default(), 3);
-
-    // Initialize the multi-threaded writer
-    let writer = MultiThreadedWriter::new(sharding_config, writer_config)?;
+    // Initialize the multi-threaded writer with 3 worker threads
+    let writer = MultiThreadedWriterConfig::new(sharding_config)
+        .with_worker_threads(3)
+        .build()?;
 
     // Write some test records asynchronously - 100 records total
     let num_records = 100;
@@ -138,15 +130,11 @@ fn test_multi_threaded_reader_writer_async() -> Result<()> {
     let source = SequentialShardSource::new(file_shards);
     let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 4);
 
-    // Create reader configuration with 3 worker threads
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        3,
-        1024 * 1024, // 1MB queue size
-    );
-
-    // Create the multi-threaded reader
-    let reader = MultiThreadedReader::new(reader_sharding_config, reader_config)?;
+    // Create the multi-threaded reader with 3 worker threads
+    let reader = MultiThreadedReaderConfig::new(reader_sharding_config)
+        .with_worker_threads(3)
+        .with_queue_size_bytes(1024 * 1024) // 1MB queue size
+        .build()?;
 
     // Read all records
     let mut actual_records = HashSet::new();
@@ -185,11 +173,10 @@ fn test_large_records_multi_threaded() -> Result<()> {
     // Configure with 2 shards
     let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 2);
 
-    // Create writer configuration with 2 worker threads
-    let writer_config = MultiThreadedWriterConfig::new(ParallelWriterConfig::default(), 2);
-
-    // Initialize the multi-threaded writer
-    let writer = MultiThreadedWriter::new(sharding_config, writer_config)?;
+    // Initialize the multi-threaded writer with 2 worker threads
+    let writer = MultiThreadedWriterConfig::new(sharding_config)
+        .with_worker_threads(2)
+        .build()?;
 
     // Write a few large records
     let num_records = 5;
@@ -231,15 +218,11 @@ fn test_large_records_multi_threaded() -> Result<()> {
     let source = SequentialShardSource::new(file_shards);
     let reader_sharding_config = ReaderShardingConfig::new(Box::new(source), 2);
 
-    // Create reader configuration with 2 worker threads and large queue size
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        2,
-        10 * 1024 * 1024, // 10MB queue size for large records
-    );
-
-    // Create the multi-threaded reader
-    let reader = MultiThreadedReader::new(reader_sharding_config, reader_config)?;
+    // Create the multi-threaded reader with 2 worker threads and large queue size
+    let reader = MultiThreadedReaderConfig::new(reader_sharding_config)
+        .with_worker_threads(2)
+        .with_queue_size_bytes(10 * 1024 * 1024) // 10MB queue size for large records
+        .build()?;
 
     // Read all records and verify their hashes
     let mut actual_hashes = Vec::new();

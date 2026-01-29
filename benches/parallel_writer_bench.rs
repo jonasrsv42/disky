@@ -77,7 +77,7 @@ mod parallel_benchmarks {
     use super::*;
     use bytes::Bytes;
 
-    use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
+    use disky::parallel::multi_threaded_writer::MultiThreadedWriterConfig;
     use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig};
     use disky::shard::sink::FileShardsBuilder;
     use disky::shard::writer::SequentialShardWriterConfig;
@@ -99,16 +99,17 @@ mod parallel_benchmarks {
         // Create sharding config for the multi-threaded writer
         let sharding_config = ShardingConfig::new(Box::new(sharder), shard_count);
 
-        // Create multi-threaded writer config with specified thread count and queue capacity
-        let mut writer_config = ParallelWriterConfig::default();
+        // Create multi-threaded writer with specified thread count and optional queue capacity
+        let mut builder =
+            MultiThreadedWriterConfig::new(sharding_config).with_worker_threads(thread_count);
+
         if let Some(capacity) = queue_capacity {
-            writer_config = writer_config.with_task_queue_capacity(capacity);
+            let writer_config = ParallelWriterConfig::default().with_task_queue_capacity(capacity);
+            builder = builder.with_writer_config(writer_config);
         }
 
-        let config = MultiThreadedWriterConfig::new(writer_config, thread_count);
-
         // Create the multi-threaded writer
-        let writer = MultiThreadedWriter::new(sharding_config, config)?;
+        let writer = builder.build()?;
 
         // Write records using the multi-threaded writer
         for i in 0..record_count {

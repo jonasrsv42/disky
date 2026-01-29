@@ -93,8 +93,8 @@ Then you can use the multi-threaded API:
 
 ```rust
 use bytes::Bytes;
-use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
-use disky::parallel::writer::{ShardingConfig, ParallelWriterConfig};
+use disky::parallel::multi_threaded_writer::MultiThreadedWriterConfig;
+use disky::parallel::writer::ShardingConfig;
 use disky::shard::sink::FileShardsBuilder;
 
 // Create a shard factory for multiple output files
@@ -102,13 +102,11 @@ let file_shards = FileShardsBuilder::new("/tmp/output", "shard").build()?;
 
 // Configure with 3 shards and 4 worker threads
 let sharding_config = ShardingConfig::new(Box::new(file_shards), 3);
-let config = MultiThreadedWriterConfig {
-    writer_config: ParallelWriterConfig::default(),
-    worker_threads: 4,
-};
 
 // Create the multi-threaded writer
-let writer = MultiThreadedWriter::new(sharding_config, config)?;
+let writer = MultiThreadedWriterConfig::new(sharding_config)
+    .with_worker_threads(4)
+    .build()?;
 
 // Write records asynchronously
 for i in 0..1000 {
@@ -131,7 +129,7 @@ Reading with the multi-threaded API is just as easy:
 
 ```rust
 use std::path::PathBuf;
-use disky::parallel::multi_threaded_reader::{MultiThreadedReader, MultiThreadedReaderConfig};
+use disky::parallel::multi_threaded_reader::MultiThreadedReaderConfig;
 use disky::parallel::reader::{ShardingConfig, ParallelReaderConfig, DiskyParallelPiece};
 use disky::shard::source::{FileShards, SequentialShardSource};
 
@@ -141,7 +139,7 @@ let source = SequentialShardSource::new(file_shards);
 let sharding_config = ShardingConfig::new(Box::new(source), 3);
 
 // Create the multi-threaded reader
-let reader = MultiThreadedReader::new(sharding_config, MultiThreadedReaderConfig::default())?;
+let reader = MultiThreadedReaderConfig::new(sharding_config).build()?;
 
 // Use iterator interface
 for record_result in reader {

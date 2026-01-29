@@ -93,13 +93,6 @@ fn test_bounded_task_queue() -> Result<()> {
 
 #[test]
 fn test_multithreaded_writer_with_bounded_queue() -> Result<()> {
-    // Create a configuration with a small queue capacity and just one worker thread
-    // to make the test more predictable
-    let config = MultiThreadedWriterConfig::new(
-        ParallelWriterConfig::default().with_task_queue_capacity(5),
-        1, // Just one worker thread
-    );
-
     // Create an in-memory test sharder
     let sharder = MemoryShards::new();
 
@@ -108,9 +101,12 @@ fn test_multithreaded_writer_with_bounded_queue() -> Result<()> {
         1, // Just a single shard to simplify testing
     );
 
-    // Create a multi-threaded writer
-    let writer =
-        crate::parallel::multi_threaded_writer::MultiThreadedWriter::new(sharding_config, config)?;
+    // Create a multi-threaded writer with a small queue capacity and just one worker thread
+    // to make the test more predictable
+    let writer = MultiThreadedWriterConfig::new(sharding_config)
+        .with_worker_threads(1)
+        .with_task_queue_capacity(5)
+        .build()?;
 
     // Setup a channel to track task completions
     let (completion_tx, completion_rx) = std::sync::mpsc::channel();

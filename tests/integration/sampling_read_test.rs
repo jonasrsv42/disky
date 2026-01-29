@@ -1,6 +1,6 @@
 use disky::error::Result;
 use disky::reader::RecordReaderConfig;
-use disky::sampling::SamplingReader;
+use disky::tree::sampling::SamplingReaderConfig;
 use disky::writer::RecordWriterConfig;
 use std::io::Cursor;
 
@@ -39,7 +39,7 @@ fn test_sampling_from_multiple_files() -> Result<()> {
 
     // Create a sampling reader with different weights
     let sources = vec![(2.0, reader_a), (1.0, reader_b)];
-    let reader = SamplingReader::new(sources)?;
+    let reader = SamplingReaderConfig::new(sources).build()?;
 
     // Collect all records using Iterator trait
     let mut records = Vec::new();

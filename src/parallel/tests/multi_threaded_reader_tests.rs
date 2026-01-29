@@ -3,10 +3,8 @@ use std::io::Cursor;
 use bytes::Bytes;
 
 use crate::error::Result;
-use crate::parallel::multi_threaded_reader::{
-    MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
-};
-use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
+use crate::parallel::multi_threaded_reader::{MultiThreadedReaderConfig, ReadingOrder};
+use crate::parallel::reader::{DiskyParallelPiece, ShardingConfig};
 use crate::shard::source::{MemoryShards, SequentialShardSource};
 
 /// Create test data with some records
@@ -72,15 +70,11 @@ fn test_multi_threaded_reader_single_shard() -> Result<()> {
     // Create the sharding config with a single shard
     let sharding_config = create_multi_shard_config(1);
 
-    // Create the reader config
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        2,           // Two worker threads
-        1024 * 1024, // 1MB queue
-    );
-
     // Create the reader
-    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+    let reader = MultiThreadedReaderConfig::new(sharding_config)
+        .with_worker_threads(2)
+        .with_queue_size_bytes(1024 * 1024)
+        .build()?;
 
     // Read records
     let mut records = Vec::new();
@@ -119,15 +113,11 @@ fn test_multi_threaded_reader_multiple_shards() -> Result<()> {
     // Create the sharding config with 3 shards
     let sharding_config = create_multi_shard_config(3);
 
-    // Create the reader config with multiple threads
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        4,           // Four worker threads
-        1024 * 1024, // 1MB queue
-    );
-
-    // Create the reader
-    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+    // Create the reader with multiple threads
+    let reader = MultiThreadedReaderConfig::new(sharding_config)
+        .with_worker_threads(4)
+        .with_queue_size_bytes(1024 * 1024)
+        .build()?;
 
     // Read records using the iterator
     let records: Vec<_> = reader.collect::<Result<Vec<Bytes>>>()?;
@@ -148,15 +138,11 @@ fn test_multi_threaded_reader_try_read() -> Result<()> {
     // Create the sharding config with a single shard
     let sharding_config = create_multi_shard_config(1);
 
-    // Create the reader config
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        2,           // Two worker threads
-        1024 * 1024, // 1MB queue
-    );
-
     // Create the reader
-    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+    let reader = MultiThreadedReaderConfig::new(sharding_config)
+        .with_worker_threads(2)
+        .with_queue_size_bytes(1024 * 1024)
+        .build()?;
 
     // Read records using try_read
     let mut records = Vec::new();
@@ -207,16 +193,12 @@ fn test_single_threaded_drain_mode() -> Result<()> {
     // Create the sharding config with identifiable shards
     let sharding_config = create_identifiable_shard_config(3);
 
-    // Create the reader config with only one worker thread and drain mode
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        1,           // One worker thread (single-threaded)
-        1024 * 1024, // 1MB queue
-    )
-    .with_reading_order(ReadingOrder::Drain);
-
-    // Create the reader
-    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+    // Create the reader with only one worker thread and drain mode
+    let reader = MultiThreadedReaderConfig::new(sharding_config)
+        .with_worker_threads(1)
+        .with_queue_size_bytes(1024 * 1024)
+        .with_reading_order(ReadingOrder::Drain)
+        .build()?;
 
     // Read all records
     let mut records = Vec::new();
@@ -276,16 +258,12 @@ fn test_single_threaded_round_robin_mode() -> Result<()> {
     // Create the sharding config with identifiable shards
     let sharding_config = create_identifiable_shard_config(3);
 
-    // Create the reader config with only one worker thread and round-robin mode
-    let reader_config = MultiThreadedReaderConfig::new(
-        ParallelReaderConfig::default(),
-        1,           // One worker thread (single-threaded)
-        1024 * 1024, // 1MB queue
-    )
-    .with_reading_order(ReadingOrder::RoundRobin);
-
-    // Create the reader
-    let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+    // Create the reader with only one worker thread and round-robin mode
+    let reader = MultiThreadedReaderConfig::new(sharding_config)
+        .with_worker_threads(1)
+        .with_queue_size_bytes(1024 * 1024)
+        .with_reading_order(ReadingOrder::RoundRobin)
+        .build()?;
 
     // Read all records
     let mut records = Vec::new();
@@ -346,16 +324,12 @@ fn test_multi_threaded_reading_order() -> Result<()> {
         // Create a fresh sharding config for each test
         let sharding_config = create_identifiable_shard_config(3);
 
-        // Create the reader config with multiple threads
-        let reader_config = MultiThreadedReaderConfig::new(
-            ParallelReaderConfig::default(),
-            2,           // Two worker threads
-            1024 * 1024, // 1MB queue
-        )
-        .with_reading_order(reading_order);
-
-        // Create the reader
-        let reader = MultiThreadedReader::new(sharding_config, reader_config)?;
+        // Create the reader with multiple threads
+        let reader = MultiThreadedReaderConfig::new(sharding_config)
+            .with_worker_threads(2)
+            .with_queue_size_bytes(1024 * 1024)
+            .with_reading_order(reading_order)
+            .build()?;
 
         // Read all records
         let mut records = Vec::new();

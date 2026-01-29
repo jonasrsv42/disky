@@ -17,15 +17,12 @@ use std::collections::HashMap;
 use bytes::Bytes;
 
 use crate::error::Result;
-use crate::parallel::multi_threaded_reader::{
-    MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
-};
+use crate::parallel::multi_threaded_reader::{MultiThreadedReaderConfig, ReadingOrder};
 use crate::parallel::reader::ShardingConfig;
 use crate::reader::DiskyPiece;
 use crate::reader::RecordReaderConfig;
-use crate::sampling::SamplingReader;
-use crate::sampling::SamplingReaderConfig;
 use crate::shard::source::{MemoryShards, SequentialShardSource};
+use crate::tree::sampling::SamplingReaderConfig;
 use crate::writer::RecordWriterConfig;
 use std::io::Cursor;
 
@@ -69,7 +66,7 @@ fn test_sampling_reader_basic() {
 
     // Create a sampling reader with equal weights
     let sources = vec![(1.0, iter_a), (1.0, iter_b), (1.0, iter_c)];
-    let mut reader = SamplingReader::new(sources).unwrap();
+    let mut reader = SamplingReaderConfig::new(sources).build().unwrap();
 
     // Read all records
     let mut records = Vec::new();
@@ -97,18 +94,18 @@ fn test_sampling_reader_basic() {
 
 #[test]
 fn test_sampling_reader_weighted() {
-    // Create a deterministic test with known seed
-    let config = SamplingReaderConfig::with_seed(12345);
-
     // Create three iterators, all with the same length
     let iter_a = SequenceIterator::new("A", 100);
     let iter_b = SequenceIterator::new("B", 100);
     let iter_c = SequenceIterator::new("C", 100);
 
-    // Create a sampling reader with different weights
+    // Create a sampling reader with different weights and deterministic seed
     // A has weight 1, B has weight 2, C has weight 7
     let sources = vec![(1.0, iter_a), (2.0, iter_b), (7.0, iter_c)];
-    let mut reader = SamplingReader::with_config(sources, config).unwrap();
+    let mut reader = SamplingReaderConfig::new(sources)
+        .with_seed(12345)
+        .build()
+        .unwrap();
 
     // Read 100 records
     let mut records = Vec::new();
@@ -156,7 +153,7 @@ fn test_sampling_reader_exhaustion() {
 
     // Create a sampling reader
     let sources = vec![(1.0, iter_a), (1.0, iter_b), (1.0, iter_c)];
-    let mut reader = SamplingReader::new(sources).unwrap();
+    let mut reader = SamplingReaderConfig::new(sources).build().unwrap();
 
     // Read all records
     let mut records = Vec::new();
@@ -199,7 +196,7 @@ fn test_sampling_reader_as_iterator() {
     let iter_b = SequenceIterator::new("B", 7);
 
     let sources = vec![(1.0, iter_a), (1.0, iter_b)];
-    let reader = SamplingReader::new(sources).unwrap();
+    let reader = SamplingReaderConfig::new(sources).build().unwrap();
 
     // Collect all bytes using the Iterator trait
     let bytes: Vec<Bytes> = reader.map(Result::unwrap).collect();
@@ -228,7 +225,7 @@ fn test_sampling_reader_negative_weight() {
     let iter_b = SequenceIterator::new("B", 7);
 
     let sources = vec![(1.0, iter_a), (-1.0, iter_b)];
-    let _reader = SamplingReader::new(sources).unwrap(); // Should panic
+    let _reader = SamplingReaderConfig::new(sources).build().unwrap(); // Should panic
 }
 
 #[test]
@@ -239,7 +236,7 @@ fn test_sampling_reader_zero_weight() {
     let iter_b = SequenceIterator::new("B", 7);
 
     let sources = vec![(1.0, iter_a), (0.0, iter_b)];
-    let _reader = SamplingReader::new(sources).unwrap(); // Should panic
+    let _reader = SamplingReaderConfig::new(sources).build().unwrap(); // Should panic
 }
 
 #[test]
@@ -280,9 +277,11 @@ fn test_sampling_reader_with_record_readers() {
 
     // Create a SamplingReader with both RecordReaders
     // Use a fixed seed for deterministic testing
-    let config = SamplingReaderConfig::with_seed(42);
     let sources = vec![(1.0, reader_a), (1.0, reader_b)];
-    let sampling_reader = SamplingReader::with_config(sources, config).unwrap();
+    let sampling_reader = SamplingReaderConfig::new(sources)
+        .with_seed(42)
+        .build()
+        .unwrap();
 
     // Read all records using the Iterator trait
     let results: Vec<String> = sampling_reader
@@ -362,18 +361,23 @@ fn test_sampling_reader_with_multi_threaded_readers() {
     let source_b = SequentialShardSource::new(shards_b);
     let sharding_config_b = ShardingConfig::new(Box::new(source_b), 1);
 
-    // Create MultiThreadedReader configs
-    let mt_config = MultiThreadedReaderConfig::default().with_reading_order(ReadingOrder::Drain);
-
-    // Create two MultiThreadedReaders
-    let reader_a = MultiThreadedReader::new(sharding_config_a, mt_config.clone()).unwrap();
-    let reader_b = MultiThreadedReader::new(sharding_config_b, mt_config).unwrap();
+    // Create two MultiThreadedReaders using the builder pattern
+    let reader_a = MultiThreadedReaderConfig::new(sharding_config_a)
+        .with_reading_order(ReadingOrder::Drain)
+        .build()
+        .unwrap();
+    let reader_b = MultiThreadedReaderConfig::new(sharding_config_b)
+        .with_reading_order(ReadingOrder::Drain)
+        .build()
+        .unwrap();
 
     // Create a SamplingReader with both MultiThreadedReaders
     // Use a fixed seed for deterministic testing
-    let config = SamplingReaderConfig::with_seed(42);
     let sources = vec![(1.0, reader_a), (1.0, reader_b)];
-    let sampling_reader = SamplingReader::with_config(sources, config).unwrap();
+    let sampling_reader = SamplingReaderConfig::new(sources)
+        .with_seed(42)
+        .build()
+        .unwrap();
 
     // Read all records using the Iterator trait
     let results: Vec<String> = sampling_reader

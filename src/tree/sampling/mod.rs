@@ -22,7 +22,7 @@ pub mod sampling_reader;
 
 // Re-export main types for convenience
 pub use reservoir_shuffle::{ReservoirShuffle, ReservoirShuffleConfig};
-pub use sampling_reader::{SamplingReader, SamplingReaderConfig};
+pub use sampling_reader::{SamplingReader, SamplingReaderConfig, SamplingReaderOptions};
 
 #[cfg(test)]
 mod tests;

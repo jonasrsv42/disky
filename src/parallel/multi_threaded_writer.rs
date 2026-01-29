@@ -19,9 +19,9 @@ use crate::parallel::promise::Promise;
 use crate::error::{DiskyError, Result};
 use crate::parallel::writer::{ParallelWriter, ParallelWriterConfig, ShardingConfig};
 
-/// Configuration for the multi-threaded writer
+/// Options for configuring a [`MultiThreadedWriter`].
 #[derive(Debug, Clone)]
-pub struct MultiThreadedWriterConfig {
+pub struct MultiThreadedWriterOptions {
     /// Configuration for the underlying parallel writer
     pub writer_config: ParallelWriterConfig,
 
@@ -29,7 +29,7 @@ pub struct MultiThreadedWriterConfig {
     pub worker_threads: usize,
 }
 
-impl Default for MultiThreadedWriterConfig {
+impl Default for MultiThreadedWriterOptions {
     fn default() -> Self {
         // Default to using the number of available CPUs for worker threads
         let worker_threads = match std::thread::available_parallelism() {
@@ -44,20 +44,85 @@ impl Default for MultiThreadedWriterConfig {
     }
 }
 
-impl MultiThreadedWriterConfig {
-    /// Creates a new configuration with custom settings
-    pub fn new(writer_config: ParallelWriterConfig, worker_threads: usize) -> Self {
+impl MultiThreadedWriterOptions {
+    /// Creates a new configuration with task queue capacity
+    pub fn with_task_queue_capacity(mut self, capacity: usize) -> Self {
+        self.writer_config = self.writer_config.with_task_queue_capacity(capacity);
+        self
+    }
+
+    /// Sets the number of worker threads.
+    pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
+        self.worker_threads = worker_threads.max(1);
+        self
+    }
+
+    /// Sets the underlying parallel writer config.
+    pub fn with_writer_config(mut self, writer_config: ParallelWriterConfig) -> Self {
+        self.writer_config = writer_config;
+        self
+    }
+}
+
+/// Builder for [`MultiThreadedWriter`].
+///
+/// # Example
+///
+/// ```ignore
+/// use disky::parallel::multi_threaded_writer::MultiThreadedWriterConfig;
+/// use disky::parallel::writer::ShardingConfig;
+///
+/// let writer = MultiThreadedWriterConfig::new(sharding_config)
+///     .with_worker_threads(4)
+///     .build()?;
+///
+/// writer.write_record_blocking(Bytes::from("hello"))?;
+/// writer.close()?;
+/// ```
+pub struct MultiThreadedWriterConfig<Sink: Write + Seek + Send + 'static> {
+    sharding_config: ShardingConfig<Sink>,
+    options: MultiThreadedWriterOptions,
+}
+
+impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriterConfig<Sink> {
+    /// Creates a new builder with the given sharding config.
+    pub fn new(sharding_config: ShardingConfig<Sink>) -> Self {
         Self {
-            writer_config,
-            worker_threads: worker_threads.max(1), // Ensure at least one worker
+            sharding_config,
+            options: MultiThreadedWriterOptions::default(),
         }
     }
 
-    /// Creates a new configuration with task queue capacity
-    pub fn with_task_queue_capacity(mut self, capacity: usize) -> Self {
-        // Update the writer_config with the task_queue_capacity
-        self.writer_config = self.writer_config.with_task_queue_capacity(capacity);
+    /// Sets the options.
+    pub fn options(mut self, options: MultiThreadedWriterOptions) -> Self {
+        self.options = options;
         self
+    }
+
+    /// Sets the number of worker threads.
+    pub fn with_worker_threads(mut self, worker_threads: usize) -> Self {
+        self.options.worker_threads = worker_threads.max(1);
+        self
+    }
+
+    /// Sets the task queue capacity.
+    pub fn with_task_queue_capacity(mut self, capacity: usize) -> Self {
+        self.options.writer_config = self
+            .options
+            .writer_config
+            .with_task_queue_capacity(capacity);
+        self
+    }
+
+    /// Sets the underlying parallel writer config.
+    pub fn with_writer_config(mut self, writer_config: ParallelWriterConfig) -> Self {
+        self.options.writer_config = writer_config;
+        self
+    }
+
+    /// Builds the [`MultiThreadedWriter`].
+    pub fn build(self) -> Result<MultiThreadedWriter<Sink>> {
+        MultiThreadedWriter::from_config(self)
     }
 }
 
@@ -86,27 +151,17 @@ pub struct MultiThreadedWriter<Sink: Write + Seek + Send + 'static> {
 }
 
 impl<Sink: Write + Seek + Send + 'static> MultiThreadedWriter<Sink> {
-    /// Creates a new multi-threaded writer
-    ///
-    /// This constructor initializes the writer and starts worker threads
-    /// to process write operations.
-    ///
-    /// # Arguments
-    /// * `sharding_config` - Configuration for creating and managing shards
-    /// * `config` - Configuration for the multi-threaded writer
-    ///
-    /// # Returns
-    /// A new MultiThreadedWriter instance
-    pub fn new(
-        sharding_config: ShardingConfig<Sink>,
-        config: MultiThreadedWriterConfig,
-    ) -> Result<Self> {
+    /// Creates a new multi-threaded writer from config.
+    fn from_config(config: MultiThreadedWriterConfig<Sink>) -> Result<Self> {
         // Create the underlying parallel writer (which will handle task queue capacity if configured)
-        let writer = Arc::new(ParallelWriter::new(sharding_config, config.writer_config)?);
+        let writer = Arc::new(ParallelWriter::new(
+            config.sharding_config,
+            config.options.writer_config,
+        )?);
 
         // Start worker threads
-        let mut workers = Vec::with_capacity(config.worker_threads);
-        for i in 0..config.worker_threads {
+        let mut workers = Vec::with_capacity(config.options.worker_threads);
+        for i in 0..config.options.worker_threads {
             let writer_clone = Arc::clone(&writer);
             let running = Arc::new(AtomicBool::new(true));
             let running_clone = Arc::clone(&running);

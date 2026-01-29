@@ -1,14 +1,10 @@
 #[cfg(feature = "parallel")]
 mod parallel_example {
     use bytes::Bytes;
-    use disky::parallel::multi_threaded_reader::{
-        MultiThreadedReader, MultiThreadedReaderConfig, ReadingOrder,
-    };
-    use disky::parallel::multi_threaded_writer::{MultiThreadedWriter, MultiThreadedWriterConfig};
-    use disky::parallel::reader::{
-        DiskyParallelPiece, ParallelReaderConfig, ShardingConfig as ReaderShardingConfig,
-    };
-    use disky::parallel::writer::{ParallelWriterConfig, ShardingConfig as WriterShardingConfig};
+    use disky::parallel::multi_threaded_reader::{MultiThreadedReaderConfig, ReadingOrder};
+    use disky::parallel::multi_threaded_writer::MultiThreadedWriterConfig;
+    use disky::parallel::reader::{DiskyParallelPiece, ShardingConfig as ReaderShardingConfig};
+    use disky::parallel::writer::ShardingConfig as WriterShardingConfig;
     use disky::shard::sink::FileShardsBuilder;
     use disky::shard::source::{FileShards, SequentialShardSource};
     use tempfile::tempdir;
@@ -44,14 +40,10 @@ mod parallel_example {
         // Configure the sharding (3 shards in this case)
         let sharding_config = WriterShardingConfig::new(Box::new(file_sharder), 3);
 
-        // Create the writer configuration with default settings and 4 worker threads
-        let config = MultiThreadedWriterConfig {
-            writer_config: ParallelWriterConfig::default(),
-            worker_threads: 4,
-        };
-
-        // Create the multi-threaded writer
-        let writer = MultiThreadedWriter::new(sharding_config, config)?;
+        // Create the multi-threaded writer with 4 worker threads
+        let writer = MultiThreadedWriterConfig::new(sharding_config)
+            .with_worker_threads(4)
+            .build()?;
 
         // Write some records
         for i in 0..30 {
@@ -84,16 +76,12 @@ mod parallel_example {
         // Configure the sharding
         let sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
-        // Create the reader configuration with 4 worker threads
-        let config = MultiThreadedReaderConfig {
-            reader_config: ParallelReaderConfig::default(),
-            worker_threads: 4,
-            queue_size_bytes: 8 * 1024 * 1024, // 8MB queue
-            reading_order: ReadingOrder::Drain,
-        };
-
-        // Create the multi-threaded reader
-        let reader = MultiThreadedReader::new(sharding_config, config)?;
+        // Create the multi-threaded reader with 4 worker threads
+        let reader = MultiThreadedReaderConfig::new(sharding_config)
+            .with_worker_threads(4)
+            .with_queue_size_bytes(8 * 1024 * 1024) // 8MB queue
+            .with_reading_order(ReadingOrder::Drain)
+            .build()?;
 
         // Read all records
         let mut count = 0;
@@ -134,8 +122,7 @@ mod parallel_example {
         let sharding_config = ReaderShardingConfig::new(Box::new(source), 3);
 
         // Create the reader with default configuration
-        let reader =
-            MultiThreadedReader::new(sharding_config, MultiThreadedReaderConfig::default())?;
+        let reader = MultiThreadedReaderConfig::new(sharding_config).build()?;
 
         // Use iterator interface to process records
         println!("Records read via multi-threaded iterator:");

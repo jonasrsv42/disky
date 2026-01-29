@@ -14,6 +14,7 @@
 pub mod byte_queue;
 pub mod multi_threaded_reader;
 pub mod multi_threaded_writer;
+pub mod node;
 pub mod promise;
 pub mod reader;
 pub mod resource_pool;

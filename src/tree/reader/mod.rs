@@ -89,7 +89,24 @@ pub type Reader = Box<dyn Iterator<Item = Result<Bytes>>>;
 /// but `Box<Self>` allows nodes to be stored as `Box<dyn Node>` in
 /// collections, enabling heterogeneous tree composition where children
 /// can be different concrete node types.
-pub trait Node {
+///
+/// # Why `Send`?
+///
+/// The `Send` bound allows nodes to be moved to other threads, enabling
+/// composition with [`ThreadedNodeConfig`](crate::parallel::node::ThreadedNodeConfig)
+/// which offloads subtrees to dedicated threads.
+///
+/// Without this bound, composite nodes that store `Box<dyn Node>` (like
+/// `SamplingReaderConfig` or `ReservoirShuffleConfig`) would not be `Send`,
+/// even if all their children are `Send`. This creates a frustrating situation
+/// where you can't wrap these composites in a `ThreadedNodeConfig` without
+/// either duplicating types (`FooConfig` vs `FooConfigSend`) or making
+/// everything generic over Send-ness.
+///
+/// Since most real-world nodes (file readers, shard readers, etc.) are
+/// naturally `Send`, requiring it on the trait keeps the API simple and
+/// composable.
+pub trait Node: Send {
     /// Consume this node and build the actual iterator.
     ///
     /// This method recursively builds the entire subtree rooted at this node.

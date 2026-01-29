@@ -12,16 +12,21 @@
 //! # Example
 //!
 //! ```ignore
-//! use disky::tree::reader::*;
+//! use disky::tree::reader::RoundRobinNode;
+//! use disky::shard::reader::SequentialShardReaderConfig;
+//! use disky::shard::source::{FileShards, SequentialShardSource};
 //!
 //! // Build a tree that interleaves records from two shard sources
-//! let tree = interleave(vec![
-//!     sequential_shards(FileShards::from_pattern("/data/a", "shard")?),
-//!     sequential_shards(FileShards::from_pattern("/data/b", "shard")?),
-//! ]);
+//! let tree = RoundRobinNode::new()
+//!     .append(SequentialShardReaderConfig::new(
+//!         SequentialShardSource::new(FileShards::from_pattern("/data/a", "shard")?)
+//!     ))
+//!     .append(SequentialShardReaderConfig::new(
+//!         SequentialShardSource::new(FileShards::from_pattern("/data/b", "shard")?)
+//!     ));
 //!
 //! // Build the actual iterator
-//! let reader = tree.make()?;
+//! let reader = tree.build()?;
 //!
 //! // Use it
 //! for record in reader {
@@ -42,7 +47,7 @@ use crate::error::Result;
 ///
 /// All nodes produce this type from their `make()` method, enabling
 /// heterogeneous tree composition.
-pub type Reader = Box<dyn Iterator<Item = Result<Bytes>> + Send>;
+pub type Reader = Box<dyn Iterator<Item = Result<Bytes>>>;
 
 /// A node in a reader tree.
 ///
@@ -76,11 +81,12 @@ pub type Reader = Box<dyn Iterator<Item = Result<Bytes>> + Send>;
 ///
 /// # Why `self: Box<Self>`?
 ///
-/// The `make` method takes `self: Box<Self>` rather than `self` to maintain
-/// object safety. This allows nodes to be stored as `Box<dyn Node>` in
+/// The `make` method takes `self: Box<Self>` to consume the node while
+/// maintaining object safety. Using plain `self` would not be object-safe,
+/// but `Box<Self>` allows nodes to be stored as `Box<dyn Node>` in
 /// collections, enabling heterogeneous tree composition where children
 /// can be different concrete node types.
-pub trait Node: Send {
+pub trait Node {
     /// Consume this node and build the actual iterator.
     ///
     /// This method recursively builds the entire subtree rooted at this node.

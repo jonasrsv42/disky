@@ -1,17 +1,3 @@
-// Copyright 2024
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! Sampling Reader for Disky.
 //!
 //! This module provides a reader that samples from multiple source iterators based on their weights.
@@ -58,12 +44,11 @@ impl SamplingReaderOptions {
 /// use disky::reader::RecordReaderConfig;
 ///
 /// // Build a sampling tree from weighted nodes
-/// let sampler = SamplingReaderConfig::new(vec![
-///     (2.0, Box::new(RecordReaderConfig::new(file_a)) as Box<dyn Node>),  // 2x weight
-///     (1.0, Box::new(RecordReaderConfig::new(file_b)) as Box<dyn Node>),  // 1x weight
-/// ])
-/// .with_seed(42)
-/// .build()?;
+/// let sampler = SamplingReaderConfig::new()
+///     .append(2.0, RecordReaderConfig::new(file_a))  // 2x weight
+///     .append(1.0, RecordReaderConfig::new(file_b))  // 1x weight
+///     .with_seed(42)
+///     .build()?;
 ///
 /// for record in sampler {
 ///     let bytes = record?;
@@ -76,14 +61,20 @@ pub struct SamplingReaderConfig {
 }
 
 impl SamplingReaderConfig {
-    /// Creates a new builder with the given weighted source nodes.
-    ///
-    /// Each source is a `(weight, node)` pair. Weights must be positive.
-    pub fn new(sources: Vec<(f64, Box<dyn Node>)>) -> Self {
+    /// Creates a new empty builder.
+    pub fn new() -> Self {
         Self {
-            sources,
+            sources: Vec::new(),
             options: SamplingReaderOptions::default(),
         }
+    }
+
+    /// Appends a weighted source node.
+    ///
+    /// The weight must be positive. Higher weights mean the source is sampled more frequently.
+    pub fn append(mut self, weight: f64, node: impl Node + 'static) -> Self {
+        self.sources.push((weight, Box::new(node)));
+        self
     }
 
     /// Sets the options.
@@ -150,6 +141,12 @@ impl SamplingReaderConfig {
     }
 }
 
+impl Default for SamplingReaderConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Node for SamplingReaderConfig {
     fn make(self: Box<Self>) -> Result<Reader> {
         Ok(Box::new(self.build()?))
@@ -171,12 +168,11 @@ impl Node for SamplingReaderConfig {
 /// ```ignore
 /// use disky::tree::sampling::SamplingReaderConfig;
 ///
-/// let sampler = SamplingReaderConfig::new(vec![
-///     (2.0, node_a),
-///     (1.0, node_b),
-/// ])
-/// .with_seed(42)
-/// .build()?;
+/// let sampler = SamplingReaderConfig::new()
+///     .append(2.0, node_a)
+///     .append(1.0, node_b)
+///     .with_seed(42)
+///     .build()?;
 ///
 /// for record in sampler {
 ///     let bytes = record?;

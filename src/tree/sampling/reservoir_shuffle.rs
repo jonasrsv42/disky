@@ -82,8 +82,9 @@ enum State {
 ///
 /// ```ignore
 /// use disky::tree::sampling::ReservoirShuffle;
+/// use disky::reader::RecordReaderConfig;
 ///
-/// let reader = RecordReader::new(file)?;
+/// let reader = RecordReaderConfig::new(file).build()?;
 /// let shuffled = ReservoirShuffle::new(reader, 1000)?;
 ///
 /// for record in shuffled {

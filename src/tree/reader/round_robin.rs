@@ -17,21 +17,15 @@ use super::{Node, Reader};
 /// # Example
 ///
 /// ```ignore
-/// use disky::tree::reader::{interleave, Node};
-/// use disky::shard::reader::RoundRobinShardReaderConfig;
-/// use disky::shard::source::{FileShards, SequentialShardSource};
+/// use disky::tree::reader::{RoundRobinNode, Node};
+/// use disky::reader::RecordReaderConfig;
 ///
-/// // Interleave records from two different shard collections
-/// let tree = interleave(vec![
-///     Box::new(RoundRobinShardReaderConfig::new(
-///         SequentialShardSource::new(FileShards::from_pattern("/data/a", "shard")?)
-///     )),
-///     Box::new(RoundRobinShardReaderConfig::new(
-///         SequentialShardSource::new(FileShards::from_pattern("/data/b", "shard")?)
-///     )),
-/// ]);
+/// // Interleave records from two different sources
+/// let tree = RoundRobinNode::new()
+///     .append(RecordReaderConfig::new(file_a))
+///     .append(RecordReaderConfig::new(file_b));
 ///
-/// let reader = tree.make()?;
+/// let reader = tree.build()?;
 /// for record in reader {
 ///     let bytes = record?;
 ///     // Records arrive interleaved: a0, b0, a1, b1, ...
@@ -42,11 +36,28 @@ pub struct RoundRobinNode {
 }
 
 impl RoundRobinNode {
-    /// Create a new round-robin node with the given children.
-    ///
-    /// Children are built in order when `make()` is called.
-    pub fn new(children: Vec<Box<dyn Node>>) -> Self {
-        Self { children }
+    /// Create an empty round-robin node.
+    pub fn new() -> Self {
+        Self {
+            children: Vec::new(),
+        }
+    }
+
+    /// Append a child node.
+    pub fn append(mut self, node: impl Node + 'static) -> Self {
+        self.children.push(Box::new(node));
+        self
+    }
+
+    /// Build the reader.
+    pub fn build(self) -> Result<Reader> {
+        Box::new(self).make()
+    }
+}
+
+impl Default for RoundRobinNode {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -65,7 +76,9 @@ impl Node for RoundRobinNode {
 
 /// Create a round-robin interleaving node from multiple children.
 ///
-/// This is a convenience function for creating a [`RoundRobinNode`].
+/// This is a convenience function for creating a [`RoundRobinNode`] when you
+/// already have boxed nodes. For building from scratch, prefer using
+/// `RoundRobinNode::new().append(...).append(...)`.
 ///
 /// # Example
 ///
@@ -76,7 +89,7 @@ impl Node for RoundRobinNode {
 /// let reader = tree.make()?;
 /// ```
 pub fn interleave(children: Vec<Box<dyn Node>>) -> Box<dyn Node> {
-    Box::new(RoundRobinNode::new(children))
+    Box::new(RoundRobinNode { children })
 }
 
 /// Iterator that reads from multiple readers in round-robin order.
@@ -159,16 +172,17 @@ mod tests {
 
     #[test]
     fn empty_children_returns_none() {
-        let node = RoundRobinNode::new(vec![]);
-        let mut reader = Box::new(node).make().unwrap();
+        let mut reader = RoundRobinNode::new().build().unwrap();
         assert!(reader.next().is_none());
     }
 
     #[test]
     fn single_child_reads_all() {
         let data = write_records(&[b"aaa", b"bbb", b"ccc"]);
-        let rr = RoundRobinNode::new(vec![node(data)]);
-        let reader = Box::new(rr).make().unwrap();
+        let reader = RoundRobinNode::new()
+            .append(RecordReaderConfig::new(Cursor::new(data)))
+            .build()
+            .unwrap();
 
         let records: Vec<Bytes> = reader.map(|r| r.unwrap()).collect();
         assert_eq!(records.len(), 3);
@@ -183,8 +197,12 @@ mod tests {
         let data1 = write_records(&[b"b0", b"b1"]);
         let data2 = write_records(&[b"c0", b"c1"]);
 
-        let rr = RoundRobinNode::new(vec![node(data0), node(data1), node(data2)]);
-        let reader = Box::new(rr).make().unwrap();
+        let reader = RoundRobinNode::new()
+            .append(RecordReaderConfig::new(Cursor::new(data0)))
+            .append(RecordReaderConfig::new(Cursor::new(data1)))
+            .append(RecordReaderConfig::new(Cursor::new(data2)))
+            .build()
+            .unwrap();
 
         let records: Vec<Bytes> = reader.map(|r| r.unwrap()).collect();
         assert_eq!(records.len(), 6);
@@ -206,8 +224,12 @@ mod tests {
         let data1 = write_records(&[b"b0", b"b1", b"b2"]);
         let data2 = write_records(&[b"c0", b"c1"]);
 
-        let rr = RoundRobinNode::new(vec![node(data0), node(data1), node(data2)]);
-        let reader = Box::new(rr).make().unwrap();
+        let reader = RoundRobinNode::new()
+            .append(RecordReaderConfig::new(Cursor::new(data0)))
+            .append(RecordReaderConfig::new(Cursor::new(data1)))
+            .append(RecordReaderConfig::new(Cursor::new(data2)))
+            .build()
+            .unwrap();
 
         let records: Vec<Bytes> = reader.map(|r| r.unwrap()).collect();
         assert_eq!(records.len(), 6);
@@ -246,8 +268,10 @@ mod tests {
     #[test]
     fn exhausted_iterator_stays_none() {
         let data = write_records(&[b"only"]);
-        let rr = RoundRobinNode::new(vec![node(data)]);
-        let mut reader = Box::new(rr).make().unwrap();
+        let mut reader = RoundRobinNode::new()
+            .append(RecordReaderConfig::new(Cursor::new(data)))
+            .build()
+            .unwrap();
 
         assert!(reader.next().unwrap().is_ok());
         for _ in 0..5 {
@@ -257,15 +281,21 @@ mod tests {
 
     #[test]
     fn nested_interleave() {
-        // Test composability: interleave(interleave(...), ...)
+        // Test composability: nesting round-robin nodes
         let data_a0 = write_records(&[b"a0"]);
         let data_a1 = write_records(&[b"a1"]);
         let data_b0 = write_records(&[b"b0"]);
 
-        let inner = interleave(vec![node(data_a0), node(data_a1)]);
-        let outer = interleave(vec![inner, node(data_b0)]);
+        let inner = RoundRobinNode::new()
+            .append(RecordReaderConfig::new(Cursor::new(data_a0)))
+            .append(RecordReaderConfig::new(Cursor::new(data_a1)));
 
-        let reader = outer.make().unwrap();
+        let reader = RoundRobinNode::new()
+            .append(inner)
+            .append(RecordReaderConfig::new(Cursor::new(data_b0)))
+            .build()
+            .unwrap();
+
         let records: Vec<Bytes> = reader.map(|r| r.unwrap()).collect();
 
         assert_eq!(records.len(), 3);

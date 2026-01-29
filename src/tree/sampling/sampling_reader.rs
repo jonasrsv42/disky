@@ -27,6 +27,7 @@ use rand::rngs::StdRng;
 
 use crate::error::{DiskyError, Result};
 use crate::reader::DiskyPiece;
+use crate::tree::reader::{Node, Reader};
 
 /// Options for configuring a [`SamplingReader`].
 ///
@@ -48,18 +49,18 @@ impl SamplingReaderOptions {
 
 /// Builder for [`SamplingReader`].
 ///
+/// This is a tree node that samples from multiple child nodes based on weights.
+///
 /// # Example
 ///
 /// ```ignore
 /// use disky::tree::sampling::SamplingReaderConfig;
 /// use disky::reader::RecordReaderConfig;
 ///
-/// let reader_a = RecordReaderConfig::new(file_a).build()?;
-/// let reader_b = RecordReaderConfig::new(file_b).build()?;
-///
+/// // Build a sampling tree from weighted nodes
 /// let sampler = SamplingReaderConfig::new(vec![
-///     (2.0, reader_a),  // 2x weight
-///     (1.0, reader_b),  // 1x weight
+///     (2.0, Box::new(RecordReaderConfig::new(file_a)) as Box<dyn Node>),  // 2x weight
+///     (1.0, Box::new(RecordReaderConfig::new(file_b)) as Box<dyn Node>),  // 1x weight
 /// ])
 /// .with_seed(42)
 /// .build()?;
@@ -69,19 +70,16 @@ impl SamplingReaderOptions {
 ///     // ...
 /// }
 /// ```
-pub struct SamplingReaderConfig<I> {
-    sources: Vec<(f64, I)>,
+pub struct SamplingReaderConfig {
+    sources: Vec<(f64, Box<dyn Node>)>,
     options: SamplingReaderOptions,
 }
 
-impl<I> SamplingReaderConfig<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
-    /// Creates a new builder with the given weighted sources.
+impl SamplingReaderConfig {
+    /// Creates a new builder with the given weighted source nodes.
     ///
-    /// Each source is a `(weight, iterator)` pair. Weights must be positive.
-    pub fn new(sources: Vec<(f64, I)>) -> Self {
+    /// Each source is a `(weight, node)` pair. Weights must be positive.
+    pub fn new(sources: Vec<(f64, Box<dyn Node>)>) -> Self {
         Self {
             sources,
             options: SamplingReaderOptions::default(),
@@ -105,15 +103,15 @@ where
     /// # Errors
     ///
     /// Returns an error if sources is empty or contains non-positive weights.
-    pub fn build(self) -> Result<SamplingReader<I>> {
+    pub fn build(self) -> Result<SamplingReader> {
         if self.sources.is_empty() {
             return Err(DiskyError::Other(
                 "Cannot create SamplingReader with empty sources".to_string(),
             ));
         }
 
-        // Separate weights and iterators
-        let (weights, iterators): (Vec<_>, Vec<_>) = self.sources.into_iter().unzip();
+        // Separate weights and nodes
+        let (weights, nodes): (Vec<_>, Vec<_>) = self.sources.into_iter().unzip();
 
         // Check for non-positive weights
         if weights.iter().any(|&w| w <= 0.0) {
@@ -121,6 +119,12 @@ where
                 "Non-positive weights are not allowed".to_string(),
             ));
         }
+
+        // Build all nodes into readers
+        let iterators: Vec<Reader> = nodes
+            .into_iter()
+            .map(|node| node.make())
+            .collect::<Result<Vec<_>>>()?;
 
         // Create the active indices (initially, all iterators are active)
         let active_indices = (0..iterators.len()).collect();
@@ -146,9 +150,15 @@ where
     }
 }
 
+impl Node for SamplingReaderConfig {
+    fn make(self: Box<Self>) -> Result<Reader> {
+        Ok(Box::new(self.build()?))
+    }
+}
+
 /// A reader that samples from multiple readers based on weights.
 ///
-/// The SamplingReader takes a set of (weight, iterator) pairs and samples from them
+/// The SamplingReader takes a set of (weight, reader) pairs and samples from them
 /// based on the provided weights. For each read operation, it selects a reader
 /// probabilistically according to the weights, reads one record from it, and returns
 /// that record. This continues until all readers are exhausted.
@@ -162,8 +172,8 @@ where
 /// use disky::tree::sampling::SamplingReaderConfig;
 ///
 /// let sampler = SamplingReaderConfig::new(vec![
-///     (2.0, reader_a),
-///     (1.0, reader_b),
+///     (2.0, node_a),
+///     (1.0, node_b),
 /// ])
 /// .with_seed(42)
 /// .build()?;
@@ -173,12 +183,9 @@ where
 ///     // ...
 /// }
 /// ```
-pub struct SamplingReader<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
-    /// The iterators to sample from
-    iterators: Vec<I>,
+pub struct SamplingReader {
+    /// The readers to sample from
+    iterators: Vec<Reader>,
 
     /// The weights for each iterator
     weights: Vec<f64>,
@@ -193,10 +200,7 @@ where
     rng: StdRng,
 }
 
-impl<I> SamplingReader<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
+impl SamplingReader {
     /// Updates the weighted distribution based on current active indices.
     fn update_distribution(&mut self) -> Result<()> {
         let active_weights: Vec<f64> = self
@@ -262,10 +266,7 @@ where
     }
 }
 
-impl<I> Iterator for SamplingReader<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
+impl Iterator for SamplingReader {
     type Item = Result<Bytes>;
 
     fn next(&mut self) -> Option<Self::Item> {

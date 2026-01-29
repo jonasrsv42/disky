@@ -1,5 +1,6 @@
 use disky::error::Result;
 use disky::reader::RecordReaderConfig;
+use disky::tree::reader::Node;
 use disky::tree::sampling::SamplingReaderConfig;
 use disky::writer::RecordWriterConfig;
 use std::io::Cursor;
@@ -33,12 +34,12 @@ fn test_sampling_from_multiple_files() -> Result<()> {
     let data_a = create_test_data("A", 10);
     let data_b = create_test_data("B", 15);
 
-    // Create readers from the data
-    let reader_a = RecordReaderConfig::new(Cursor::new(&data_a)).build()?;
-    let reader_b = RecordReaderConfig::new(Cursor::new(&data_b)).build()?;
+    // Create reader nodes from the data
+    let node_a: Box<dyn Node> = Box::new(RecordReaderConfig::new(Cursor::new(data_a)));
+    let node_b: Box<dyn Node> = Box::new(RecordReaderConfig::new(Cursor::new(data_b)));
 
     // Create a sampling reader with different weights
-    let sources = vec![(2.0, reader_a), (1.0, reader_b)];
+    let sources = vec![(2.0, node_a), (1.0, node_b)];
     let reader = SamplingReaderConfig::new(sources).build()?;
 
     // Collect all records using Iterator trait

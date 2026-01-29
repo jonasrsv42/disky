@@ -17,55 +17,50 @@ use std::collections::HashMap;
 use bytes::Bytes;
 
 use crate::error::Result;
-use crate::parallel::multi_threaded_reader::{MultiThreadedReaderConfig, ReadingOrder};
-use crate::parallel::reader::ShardingConfig;
 use crate::reader::DiskyPiece;
 use crate::reader::RecordReaderConfig;
-use crate::shard::source::{MemoryShards, SequentialShardSource};
+use crate::tree::reader::{Node, Reader};
 use crate::tree::sampling::SamplingReaderConfig;
 use crate::writer::RecordWriterConfig;
 use std::io::Cursor;
 
-// A simple iterator that produces a numbered sequence of bytes
-struct SequenceIterator {
+// A simple node that produces a numbered sequence of bytes for testing
+struct SequenceNode {
     prefix: &'static str,
     count: usize,
-    current: usize,
 }
 
-impl SequenceIterator {
+impl SequenceNode {
     fn new(prefix: &'static str, count: usize) -> Self {
-        Self {
-            prefix,
-            count,
-            current: 0,
-        }
+        Self { prefix, count }
+    }
+
+    fn boxed(prefix: &'static str, count: usize) -> Box<dyn Node> {
+        Box::new(Self::new(prefix, count))
     }
 }
 
-impl Iterator for SequenceIterator {
-    type Item = Result<Bytes>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current >= self.count {
-            None
-        } else {
-            let data = format!("{}{}", self.prefix, self.current);
-            self.current += 1;
-            Some(Ok(Bytes::from(data)))
-        }
+impl Node for SequenceNode {
+    fn make(self: Box<Self>) -> Result<Reader> {
+        let prefix = self.prefix;
+        let count = self.count;
+        Ok(Box::new((0..count).map(move |i| {
+            let data = format!("{}{}", prefix, i);
+            Ok(Bytes::from(data))
+        })))
     }
 }
 
 #[test]
 fn test_sampling_reader_basic() {
-    // Create three iterators with different lengths
-    let iter_a = SequenceIterator::new("A", 10);
-    let iter_b = SequenceIterator::new("B", 5);
-    let iter_c = SequenceIterator::new("C", 15);
+    // Create three nodes with different lengths
+    let sources = vec![
+        (1.0, SequenceNode::boxed("A", 10)),
+        (1.0, SequenceNode::boxed("B", 5)),
+        (1.0, SequenceNode::boxed("C", 15)),
+    ];
 
     // Create a sampling reader with equal weights
-    let sources = vec![(1.0, iter_a), (1.0, iter_b), (1.0, iter_c)];
     let mut reader = SamplingReaderConfig::new(sources).build().unwrap();
 
     // Read all records
@@ -94,14 +89,15 @@ fn test_sampling_reader_basic() {
 
 #[test]
 fn test_sampling_reader_weighted() {
-    // Create three iterators, all with the same length
-    let iter_a = SequenceIterator::new("A", 100);
-    let iter_b = SequenceIterator::new("B", 100);
-    let iter_c = SequenceIterator::new("C", 100);
+    // Create three nodes, all with the same length
+    // A has weight 1, B has weight 2, C has weight 7
+    let sources = vec![
+        (1.0, SequenceNode::boxed("A", 100)),
+        (2.0, SequenceNode::boxed("B", 100)),
+        (7.0, SequenceNode::boxed("C", 100)),
+    ];
 
     // Create a sampling reader with different weights and deterministic seed
-    // A has weight 1, B has weight 2, C has weight 7
-    let sources = vec![(1.0, iter_a), (2.0, iter_b), (7.0, iter_c)];
     let mut reader = SamplingReaderConfig::new(sources)
         .with_seed(12345)
         .build()
@@ -146,13 +142,14 @@ fn test_sampling_reader_weighted() {
 
 #[test]
 fn test_sampling_reader_exhaustion() {
-    // Create three iterators with small lengths
-    let iter_a = SequenceIterator::new("A", 2);
-    let iter_b = SequenceIterator::new("B", 3);
-    let iter_c = SequenceIterator::new("C", 1);
+    // Create three nodes with small lengths
+    let sources = vec![
+        (1.0, SequenceNode::boxed("A", 2)),
+        (1.0, SequenceNode::boxed("B", 3)),
+        (1.0, SequenceNode::boxed("C", 1)),
+    ];
 
     // Create a sampling reader
-    let sources = vec![(1.0, iter_a), (1.0, iter_b), (1.0, iter_c)];
     let mut reader = SamplingReaderConfig::new(sources).build().unwrap();
 
     // Read all records
@@ -192,10 +189,10 @@ fn test_sampling_reader_exhaustion() {
 #[test]
 fn test_sampling_reader_as_iterator() {
     // Create a sampling reader using the Iterator trait
-    let iter_a = SequenceIterator::new("A", 5);
-    let iter_b = SequenceIterator::new("B", 7);
-
-    let sources = vec![(1.0, iter_a), (1.0, iter_b)];
+    let sources = vec![
+        (1.0, SequenceNode::boxed("A", 5)),
+        (1.0, SequenceNode::boxed("B", 7)),
+    ];
     let reader = SamplingReaderConfig::new(sources).build().unwrap();
 
     // Collect all bytes using the Iterator trait
@@ -220,22 +217,22 @@ fn test_sampling_reader_as_iterator() {
 #[test]
 #[should_panic(expected = "Non-positive weights are not allowed")]
 fn test_sampling_reader_negative_weight() {
-    // Create iterators with a negative weight
-    let iter_a = SequenceIterator::new("A", 5);
-    let iter_b = SequenceIterator::new("B", 7);
-
-    let sources = vec![(1.0, iter_a), (-1.0, iter_b)];
+    // Create nodes with a negative weight
+    let sources = vec![
+        (1.0, SequenceNode::boxed("A", 5)),
+        (-1.0, SequenceNode::boxed("B", 7)),
+    ];
     let _reader = SamplingReaderConfig::new(sources).build().unwrap(); // Should panic
 }
 
 #[test]
 #[should_panic(expected = "Non-positive weights are not allowed")]
 fn test_sampling_reader_zero_weight() {
-    // Create iterators with a zero weight
-    let iter_a = SequenceIterator::new("A", 5);
-    let iter_b = SequenceIterator::new("B", 7);
-
-    let sources = vec![(1.0, iter_a), (0.0, iter_b)];
+    // Create nodes with a zero weight
+    let sources = vec![
+        (1.0, SequenceNode::boxed("A", 5)),
+        (0.0, SequenceNode::boxed("B", 7)),
+    ];
     let _reader = SamplingReaderConfig::new(sources).build().unwrap(); // Should panic
 }
 
@@ -267,17 +264,13 @@ fn test_sampling_reader_with_record_readers() {
         writer.close().unwrap();
     }
 
-    // Create two RecordReaders
-    let reader_a = RecordReaderConfig::new(Cursor::new(&buffer_a))
-        .build()
-        .unwrap();
-    let reader_b = RecordReaderConfig::new(Cursor::new(&buffer_b))
-        .build()
-        .unwrap();
+    // Create two RecordReaderConfig nodes
+    let node_a: Box<dyn Node> = Box::new(RecordReaderConfig::new(Cursor::new(buffer_a)));
+    let node_b: Box<dyn Node> = Box::new(RecordReaderConfig::new(Cursor::new(buffer_b)));
 
-    // Create a SamplingReader with both RecordReaders
+    // Create a SamplingReader with both nodes
     // Use a fixed seed for deterministic testing
-    let sources = vec![(1.0, reader_a), (1.0, reader_b)];
+    let sources = vec![(1.0, node_a), (1.0, node_b)];
     let sampling_reader = SamplingReaderConfig::new(sources)
         .with_seed(42)
         .build()
@@ -313,10 +306,14 @@ fn test_sampling_reader_with_record_readers() {
     }
 }
 
-// This test is only run when both 'sampling' and 'parallel' features are enabled
+// This test is only run when both 'random' and 'parallel' features are enabled
 #[cfg(feature = "parallel")]
 #[test]
 fn test_sampling_reader_with_multi_threaded_readers() {
+    use crate::parallel::multi_threaded_reader::{MultiThreadedReaderConfig, ReadingOrder};
+    use crate::parallel::reader::ShardingConfig;
+    use crate::shard::source::{MemoryShards, SequentialShardSource};
+
     // Helper function to create data with "A" records
     fn create_a_data() -> Vec<u8> {
         let mut data = Vec::new();
@@ -361,19 +358,17 @@ fn test_sampling_reader_with_multi_threaded_readers() {
     let source_b = SequentialShardSource::new(shards_b);
     let sharding_config_b = ShardingConfig::new(Box::new(source_b), 1);
 
-    // Create two MultiThreadedReaders using the builder pattern
-    let reader_a = MultiThreadedReaderConfig::new(sharding_config_a)
-        .with_reading_order(ReadingOrder::Drain)
-        .build()
-        .unwrap();
-    let reader_b = MultiThreadedReaderConfig::new(sharding_config_b)
-        .with_reading_order(ReadingOrder::Drain)
-        .build()
-        .unwrap();
+    // Create two MultiThreadedReaderConfig nodes
+    let node_a: Box<dyn Node> = Box::new(
+        MultiThreadedReaderConfig::new(sharding_config_a).with_reading_order(ReadingOrder::Drain),
+    );
+    let node_b: Box<dyn Node> = Box::new(
+        MultiThreadedReaderConfig::new(sharding_config_b).with_reading_order(ReadingOrder::Drain),
+    );
 
-    // Create a SamplingReader with both MultiThreadedReaders
+    // Create a SamplingReader with both nodes
     // Use a fixed seed for deterministic testing
-    let sources = vec![(1.0, reader_a), (1.0, reader_b)];
+    let sources = vec![(1.0, node_a), (1.0, node_b)];
     let sampling_reader = SamplingReaderConfig::new(sources)
         .with_seed(42)
         .build()

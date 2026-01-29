@@ -8,7 +8,7 @@
 
 mod file;
 mod memory;
-#[cfg(feature = "sampling")]
+#[cfg(feature = "random")]
 mod random;
 mod sequential;
 
@@ -17,7 +17,7 @@ pub(crate) mod tests;
 
 pub use file::FileShards;
 pub use memory::MemoryShards;
-#[cfg(feature = "sampling")]
+#[cfg(feature = "random")]
 pub use random::RandomRepeatingShardSource;
 pub use sequential::SequentialShardSource;
 

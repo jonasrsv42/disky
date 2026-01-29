@@ -112,12 +112,12 @@ impl RecordWriterOptions {
 /// writer.close().unwrap();
 /// ```
 ///
-/// ```no_run
+/// ```ignore
 /// use std::fs::File;
 /// use disky::writer::{RecordWriterConfig, RecordWriterOptions};
 /// use disky::compression::CompressionType;
 ///
-/// // Create a writer with custom options
+/// // Create a writer with custom options (requires zstd feature)
 /// let file = File::create("example.riegeli").unwrap();
 /// let options = RecordWriterOptions::default()
 ///     .with_compression(CompressionType::Zstd(3));

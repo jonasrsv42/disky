@@ -9,8 +9,8 @@ license = "Apache-2.0"
 [features]
 # Parallel implementation using multiple threads for improved performance
 parallel = []
-# Sampling reader implementation for weighted sampling from multiple sources
-sampling = ["dep:rand"]
+# Random number generation support (enables RandomRepeatingShardSource)
+random = ["dep:rand"]
 # Zstd compression support
 zstd = ["dep:zstd"]
 
@@ -40,3 +40,7 @@ required-features = ["parallel"]
 name = "parallel_writer_bench"
 harness = false
 required-features = ["parallel"]
+
+[[bench]]
+name = "tree_reader_bench"
+harness = false

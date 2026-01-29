@@ -16,14 +16,19 @@
 //! - Single-threaded RecordReader on a single large file (10GB)
 //! - MultiThreadedReader on multiple smaller files (10 x 1GB)
 //! - SequentialShardReader on multiple smaller files (10 x 1GB)
+//! - Tree-based reader with ThreadedNodeConfig per shard (10 x 1GB)
 //!
 //! This benchmark tests how well the multi-threaded reader and the
 //! sequential shard reader handle reading across multiple shards
 //! compared to a single-threaded reader on a single large file.
+//!
+//! The tree-based benchmark compares the composable tree API (where each
+//! shard gets its own dedicated thread via ThreadedNodeConfig) against
+//! the purpose-built MultiThreadedReader.
 
 #![cfg_attr(not(feature = "parallel"), allow(dead_code, unused_imports))]
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::time::Duration;
 use tempfile::{NamedTempFile, TempDir, tempdir};
 
@@ -99,11 +104,14 @@ mod parallel_benchmarks {
     use super::*;
 
     use disky::parallel::multi_threaded_reader::MultiThreadedReaderConfig;
+    use disky::parallel::node::ThreadedNodeConfig;
     use disky::parallel::reader::{DiskyParallelPiece, ShardingConfig};
     use disky::parallel::writer::{ParallelWriter, ParallelWriterConfig};
+    use disky::reader::RecordReaderConfig;
     use disky::shard::reader::SequentialShardReaderConfig;
     use disky::shard::sink::FileShardsBuilder;
     use disky::shard::source::{FileShards, SequentialShardSource};
+    use disky::tree::reader::RoundRobinNode;
 
     /// Write records to multiple shard files using the parallel writer
     pub fn write_sharded_files(
@@ -139,24 +147,25 @@ mod parallel_benchmarks {
         Ok(dir)
     }
 
-    /// Read all records using MultiThreadedReader
-    pub fn read_with_multi_threaded_reader(
+    /// Build a MultiThreadedReader (setup only, for benchmarking)
+    pub fn build_multi_threaded_reader(
         dir: &TempDir,
         thread_count: usize,
-    ) -> Result<(usize, usize)> {
-        // Create a shard source
+    ) -> Result<disky::parallel::multi_threaded_reader::MultiThreadedReader<std::fs::File>> {
         let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
         let source = SequentialShardSource::new(file_shards);
-
-        // Create the sharding config - allow reading multiple shards concurrently
         let sharding_config = ShardingConfig::new(Box::new(source), thread_count);
 
-        // Create the multi-threaded reader
-        let reader = MultiThreadedReaderConfig::new(sharding_config)
+        MultiThreadedReaderConfig::new(sharding_config)
             .with_worker_threads(thread_count)
             .with_queue_size_bytes(10 * 1024 * 1024 * 1024) // 10 GB queue
-            .build()?;
+            .build()
+    }
 
+    /// Iterate a MultiThreadedReader (read only, for benchmarking)
+    pub fn iterate_multi_threaded_reader(
+        reader: disky::parallel::multi_threaded_reader::MultiThreadedReader<std::fs::File>,
+    ) -> Result<(usize, usize)> {
         let mut record_count = 0;
         let mut total_size = 0;
 
@@ -174,12 +183,20 @@ mod parallel_benchmarks {
         Ok((record_count, total_size))
     }
 
-    /// Read all records using SequentialShardReader
-    pub fn read_with_sequential_shard_reader(dir: &TempDir) -> Result<(usize, usize)> {
+    /// Build a SequentialShardReader as a boxed iterator (setup only)
+    pub fn build_sequential_shard_reader(
+        dir: &TempDir,
+    ) -> Result<Box<dyn Iterator<Item = Result<bytes::Bytes>>>> {
         let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
-        let reader =
-            SequentialShardReaderConfig::new(SequentialShardSource::new(file_shards)).build();
+        Ok(Box::new(
+            SequentialShardReaderConfig::new(SequentialShardSource::new(file_shards)).build(),
+        ))
+    }
 
+    /// Iterate any boxed iterator (read only)
+    pub fn iterate_boxed_reader(
+        reader: Box<dyn Iterator<Item = Result<bytes::Bytes>>>,
+    ) -> Result<(usize, usize)> {
         let mut record_count = 0;
         let mut total_size = 0;
 
@@ -190,6 +207,100 @@ mod parallel_benchmarks {
         }
 
         Ok((record_count, total_size))
+    }
+
+    /// Build a tree-based reader with one ThreadedNodeConfig per shard (setup only).
+    ///
+    /// Architecture:
+    /// ```text
+    ///     RoundRobinNode
+    ///        /    |    \
+    ///   Thread  Thread  Thread  ...
+    ///      |      |       |
+    ///   Reader  Reader  Reader  (one per shard file)
+    /// ```
+    pub fn build_tree_threaded_per_shard(
+        dir: &TempDir,
+        buffer_size: usize,
+    ) -> Result<disky::tree::reader::Reader> {
+        use disky::shard::source::Shards;
+
+        let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
+        let shard_count = file_shards.count();
+
+        let mut tree = RoundRobinNode::new();
+
+        for i in 0..shard_count {
+            let shard = file_shards.open(i)?;
+            let threaded_reader = ThreadedNodeConfig::new(RecordReaderConfig::new(shard.source))
+                .with_buffer_size(buffer_size);
+            tree = tree.append(threaded_reader);
+        }
+
+        tree.build()
+    }
+
+    /// Iterate any tree Reader (read only)
+    pub fn iterate_tree_reader(reader: disky::tree::reader::Reader) -> Result<(usize, usize)> {
+        let mut record_count = 0;
+        let mut total_size = 0;
+
+        for result in reader {
+            let bytes = result?;
+            record_count += 1;
+            total_size += bytes.len();
+        }
+
+        Ok((record_count, total_size))
+    }
+
+    /// Build a tree-based reader with fewer threads, each reading multiple shards (setup only).
+    ///
+    /// Architecture:
+    /// ```text
+    ///        RoundRobinNode
+    ///        /      |      \
+    ///   Thread   Thread   Thread   (num_threads total)
+    ///      |        |        |
+    ///   SeqShard  SeqShard  SeqShard  (each reads ~N/num_threads shards)
+    /// ```
+    pub fn build_tree_grouped_shards(
+        dir: &TempDir,
+        num_threads: usize,
+        buffer_size: usize,
+    ) -> Result<disky::tree::reader::Reader> {
+        use disky::shard::source::Shards;
+
+        let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
+        let shard_count = file_shards.count();
+        let shards_per_thread = (shard_count + num_threads - 1) / num_threads;
+
+        let mut tree = RoundRobinNode::new();
+
+        for thread_idx in 0..num_threads {
+            let start = thread_idx * shards_per_thread;
+            let end = ((thread_idx + 1) * shards_per_thread).min(shard_count);
+
+            if start >= shard_count {
+                break;
+            }
+
+            let mut paths = Vec::new();
+            for i in start..end {
+                let shard = file_shards.open(i)?;
+                paths.push(std::path::PathBuf::from(&shard.id));
+            }
+
+            let subset_shards = FileShards::new(paths)?;
+            let shard_reader =
+                SequentialShardReaderConfig::new(SequentialShardSource::new(subset_shards));
+
+            let threaded_reader =
+                ThreadedNodeConfig::new(shard_reader).with_buffer_size(buffer_size);
+            tree = tree.append(threaded_reader);
+        }
+
+        tree.build()
     }
 
     /// Benchmark a single-file vs multi-file comparison
@@ -231,19 +342,52 @@ mod parallel_benchmarks {
         });
 
         // Benchmark multi-threaded reader with several threads
+        // Setup (thread spawning, etc.) is NOT measured - only iteration
         group.bench_function(
             BenchmarkId::new("multi_threaded", format!("{}_shards", SHARD_COUNT)),
             |b| {
-                b.iter(|| {
-                    read_with_multi_threaded_reader(&sharded_dir, DEFAULT_THREAD_COUNT).unwrap()
-                })
+                b.iter_batched(
+                    || build_multi_threaded_reader(&sharded_dir, DEFAULT_THREAD_COUNT).unwrap(),
+                    |reader| iterate_multi_threaded_reader(reader).unwrap(),
+                    BatchSize::PerIteration,
+                )
             },
         );
 
         // Benchmark sequential shard reader (single-threaded, reads across shards)
         group.bench_function(
             BenchmarkId::new("sequential_shard", format!("{}_shards", SHARD_COUNT)),
-            |b| b.iter(|| read_with_sequential_shard_reader(&sharded_dir).unwrap()),
+            |b| {
+                b.iter_batched(
+                    || build_sequential_shard_reader(&sharded_dir).unwrap(),
+                    |reader| iterate_boxed_reader(reader).unwrap(),
+                    BatchSize::PerIteration,
+                )
+            },
+        );
+
+        // Benchmark tree-based reader with one thread per shard
+        group.bench_function(
+            BenchmarkId::new("tree_10_threads", format!("{}_shards", SHARD_COUNT)),
+            |b| {
+                b.iter_batched(
+                    || build_tree_threaded_per_shard(&sharded_dir, 64).unwrap(),
+                    |reader| iterate_tree_reader(reader).unwrap(),
+                    BatchSize::PerIteration,
+                )
+            },
+        );
+
+        // Benchmark tree-based reader with 4 threads, each reading ~2-3 shards sequentially
+        group.bench_function(
+            BenchmarkId::new("tree_4_threads", format!("{}_shards", SHARD_COUNT)),
+            |b| {
+                b.iter_batched(
+                    || build_tree_grouped_shards(&sharded_dir, 4, 64).unwrap(),
+                    |reader| iterate_tree_reader(reader).unwrap(),
+                    BatchSize::PerIteration,
+                )
+            },
         );
 
         // Finish the group to write results

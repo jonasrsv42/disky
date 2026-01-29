@@ -30,6 +30,10 @@
 //! }
 //! ```
 
+mod round_robin;
+
+pub use round_robin::{RoundRobinNode, interleave};
+
 use bytes::Bytes;
 
 use crate::error::Result;

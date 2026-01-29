@@ -11,11 +11,12 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use disky::tree::reader::RoundRobinNode;
 //! use disky::shard::reader::SequentialShardReaderConfig;
 //! use disky::shard::source::{FileShards, SequentialShardSource};
 //!
+//! # fn main() -> disky::error::Result<()> {
 //! // Build a tree that interleaves records from two shard sources
 //! let tree = RoundRobinNode::new()
 //!     .append(SequentialShardReaderConfig::new(
@@ -33,6 +34,8 @@
 //!     let bytes = record?;
 //!     // ...
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 mod round_robin;

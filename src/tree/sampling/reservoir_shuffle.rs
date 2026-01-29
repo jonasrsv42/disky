@@ -1,7 +1,7 @@
 //! Reservoir shuffle for streaming data randomization.
 //!
 //! This module provides a reservoir-based shuffle that can be applied to any
-//! iterator of records. Unlike block-based shuffling which only reorders within
+//! reader tree node. Unlike block-based shuffling which only reorders within
 //! fixed blocks, reservoir shuffle allows items to mix freely across the entire
 //! stream, providing better randomization for ML training workloads.
 
@@ -11,33 +11,135 @@ use rand::seq::SliceRandom;
 use rand::{SeedableRng, rngs::StdRng};
 
 use crate::error::{DiskyError, Result};
+use crate::tree::reader::{Node, Reader};
 
-/// Configuration for the reservoir shuffle.
-#[derive(Debug, Clone)]
-pub struct ReservoirShuffleConfig {
-    /// Size of the shuffle buffer. Must be greater than zero.
+/// Default buffer size for reservoir shuffle.
+pub const DEFAULT_BUFFER_SIZE: usize = 42;
+
+/// Options for configuring a [`ReservoirShuffle`].
+#[derive(Debug, Clone, Copy)]
+pub struct ReservoirShuffleOptions {
+    /// Size of the shuffle buffer. Must be greater than zero. Defaults to 32.
     pub buffer_size: usize,
     /// Optional seed for deterministic shuffling. If not provided, entropy is used.
     pub seed: Option<u64>,
 }
 
-impl ReservoirShuffleConfig {
-    /// Creates a new configuration with the specified buffer size.
-    ///
-    /// Uses entropy for random seed.
-    pub fn new(buffer_size: usize) -> Self {
+impl Default for ReservoirShuffleOptions {
+    fn default() -> Self {
         Self {
-            buffer_size,
+            buffer_size: DEFAULT_BUFFER_SIZE,
             seed: None,
         }
     }
+}
 
-    /// Creates a new configuration with a specific seed for deterministic behavior.
-    pub fn with_seed(buffer_size: usize, seed: u64) -> Self {
+impl ReservoirShuffleOptions {
+    /// Sets the buffer size.
+    pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
+        self.buffer_size = buffer_size;
+        self
+    }
+
+    /// Sets the random seed for deterministic behavior.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+}
+
+/// Builder for [`ReservoirShuffle`].
+///
+/// This is a tree node that shuffles records from a child node using reservoir sampling.
+/// The default buffer size is 42.
+///
+/// # Example
+///
+/// ```no_run
+/// use disky::tree::sampling::ReservoirShuffleConfig;
+/// use disky::reader::RecordReaderConfig;
+/// use std::fs::File;
+///
+/// # fn main() -> disky::error::Result<()> {
+/// let file = File::open("data.disky")?;
+/// let shuffled = ReservoirShuffleConfig::new(RecordReaderConfig::new(file))
+///     .with_buffer_size(1000)
+///     .with_seed(42)
+///     .build()?;
+///
+/// for record in shuffled {
+///     let bytes = record?;
+///     // Process shuffled record
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct ReservoirShuffleConfig {
+    child: Box<dyn Node>,
+    options: ReservoirShuffleOptions,
+}
+
+impl ReservoirShuffleConfig {
+    /// Creates a new config with the given child node.
+    ///
+    /// Uses the default buffer size of 42.
+    pub fn new(child: impl Node + 'static) -> Self {
         Self {
-            buffer_size,
-            seed: Some(seed),
+            child: Box::new(child),
+            options: ReservoirShuffleOptions::default(),
         }
+    }
+
+    /// Sets the options.
+    pub fn options(mut self, options: ReservoirShuffleOptions) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Sets the buffer size.
+    pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
+        self.options.buffer_size = buffer_size;
+        self
+    }
+
+    /// Sets the random seed for deterministic behavior.
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.options.seed = Some(seed);
+        self
+    }
+
+    /// Builds the [`ReservoirShuffle`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `buffer_size` is zero or if the child node fails to build.
+    pub fn build(self) -> Result<ReservoirShuffle> {
+        if self.options.buffer_size == 0 {
+            return Err(DiskyError::Other(
+                "Buffer size must be greater than zero".to_string(),
+            ));
+        }
+
+        let inner = self.child.make()?;
+
+        let rng = match self.options.seed {
+            Some(seed) => StdRng::seed_from_u64(seed),
+            None => StdRng::from_entropy(),
+        };
+
+        Ok(ReservoirShuffle {
+            inner,
+            buffer: Vec::with_capacity(self.options.buffer_size),
+            buffer_size: self.options.buffer_size,
+            rng,
+            state: State::Filling,
+        })
+    }
+}
+
+impl Node for ReservoirShuffleConfig {
+    fn make(self: Box<Self>) -> Result<Reader> {
+        Ok(Box::new(self.build()?))
     }
 }
 
@@ -80,96 +182,33 @@ enum State {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use disky::tree::sampling::ReservoirShuffle;
+/// ```no_run
+/// use disky::tree::sampling::ReservoirShuffleConfig;
 /// use disky::reader::RecordReaderConfig;
+/// use std::fs::File;
 ///
-/// let reader = RecordReaderConfig::new(file).build()?;
-/// let shuffled = ReservoirShuffle::new(reader, 1000)?;
+/// # fn main() -> disky::error::Result<()> {
+/// let file = File::open("data.disky")?;
+/// let shuffled = ReservoirShuffleConfig::new(RecordReaderConfig::new(file))
+///     .with_buffer_size(1000)
+///     .build()?;
 ///
 /// for record in shuffled {
 ///     let bytes = record?;
 ///     // Process shuffled record
 /// }
+/// # Ok(())
+/// # }
 /// ```
-pub struct ReservoirShuffle<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
-    inner: I,
+pub struct ReservoirShuffle {
+    inner: Reader,
     buffer: Vec<Bytes>,
     buffer_size: usize,
     rng: StdRng,
     state: State,
 }
 
-impl<I> ReservoirShuffle<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
-    /// Creates a new ReservoirShuffle with the specified buffer size.
-    ///
-    /// # Arguments
-    ///
-    /// * `inner` - The iterator to shuffle
-    /// * `buffer_size` - Size of the shuffle buffer (must be > 0)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `buffer_size` is zero.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let shuffled = ReservoirShuffle::new(reader, 1000)?;
-    /// ```
-    pub fn new(inner: I, buffer_size: usize) -> Result<Self> {
-        Self::with_config(inner, ReservoirShuffleConfig::new(buffer_size))
-    }
-
-    /// Creates a new ReservoirShuffle with a specific seed for deterministic behavior.
-    ///
-    /// This is useful for reproducible experiments or testing.
-    ///
-    /// # Arguments
-    ///
-    /// * `inner` - The iterator to shuffle
-    /// * `buffer_size` - Size of the shuffle buffer (must be > 0)
-    /// * `seed` - Seed for the random number generator
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `buffer_size` is zero.
-    pub fn with_seed(inner: I, buffer_size: usize, seed: u64) -> Result<Self> {
-        Self::with_config(inner, ReservoirShuffleConfig::with_seed(buffer_size, seed))
-    }
-
-    /// Creates a new ReservoirShuffle with custom configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `buffer_size` is zero.
-    pub fn with_config(inner: I, config: ReservoirShuffleConfig) -> Result<Self> {
-        if config.buffer_size == 0 {
-            return Err(DiskyError::Other(
-                "Buffer size must be greater than zero".to_string(),
-            ));
-        }
-
-        let rng = match config.seed {
-            Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_entropy(),
-        };
-
-        Ok(Self {
-            inner,
-            buffer: Vec::with_capacity(config.buffer_size),
-            buffer_size: config.buffer_size,
-            rng,
-            state: State::Filling,
-        })
-    }
-
+impl ReservoirShuffle {
     /// Returns the configured buffer size.
     pub fn buffer_size(&self) -> usize {
         self.buffer_size
@@ -187,10 +226,7 @@ where
     }
 }
 
-impl<I> Iterator for ReservoirShuffle<I>
-where
-    I: Iterator<Item = Result<Bytes>>,
-{
+impl Iterator for ReservoirShuffle {
     type Item = Result<Bytes>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -254,61 +290,30 @@ where
             }
         }
     }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let buffered = self.buffer.len();
-        let (inner_lo, inner_hi) = self.inner.size_hint();
-        (
-            inner_lo.saturating_add(buffered),
-            inner_hi.and_then(|h| h.checked_add(buffered)),
-        )
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tree::sampling::tests::helpers::{BytesNode, ErrorNode};
     use std::collections::HashSet;
-
-    /// Helper to create an iterator from a vec of bytes
-    fn make_iter(items: Vec<&[u8]>) -> impl Iterator<Item = Result<Bytes>> {
-        items
-            .into_iter()
-            .map(|b| Ok(Bytes::from(b.to_vec())))
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-
-    /// Helper to create an iterator with an error at a specific position
-    fn make_iter_with_error(
-        items: Vec<&[u8]>,
-        error_at: usize,
-    ) -> impl Iterator<Item = Result<Bytes>> {
-        items
-            .into_iter()
-            .enumerate()
-            .map(move |(i, b)| {
-                if i == error_at {
-                    Err(DiskyError::Other(format!("Error at position {}", i)))
-                } else {
-                    Ok(Bytes::from(b.to_vec()))
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
 
     #[test]
     fn test_zero_buffer_size_returns_error() {
-        let iter = make_iter(vec![b"a", b"b", b"c"]);
-        let result = ReservoirShuffle::new(iter, 0);
+        let node = BytesNode::new(vec![b"a", b"b", b"c"]);
+        let result = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(0)
+            .build();
         assert!(result.is_err());
     }
 
     #[test]
     fn test_empty_input() {
-        let iter = make_iter(vec![]);
-        let mut shuffle = ReservoirShuffle::new(iter, 10).unwrap();
+        let node = BytesNode::new(vec![]);
+        let mut shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(10)
+            .build()
+            .unwrap();
         assert!(shuffle.next().is_none());
     }
 
@@ -317,8 +322,12 @@ mod tests {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e", b"f", b"g", b"h"];
         let expected: HashSet<Vec<u8>> = items.iter().map(|b| b.to_vec()).collect();
 
-        let iter = make_iter(items);
-        let shuffle = ReservoirShuffle::with_seed(iter, 3, 42).unwrap();
+        let node = BytesNode::new(items);
+        let shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(3)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         let output: HashSet<Vec<u8>> = shuffle.map(|r| r.unwrap().to_vec()).collect();
 
@@ -330,8 +339,12 @@ mod tests {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c"];
         let expected: HashSet<Vec<u8>> = items.iter().map(|b| b.to_vec()).collect();
 
-        let iter = make_iter(items);
-        let shuffle = ReservoirShuffle::with_seed(iter, 10, 42).unwrap();
+        let node = BytesNode::new(items);
+        let shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(10)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         let output: HashSet<Vec<u8>> = shuffle.map(|r| r.unwrap().to_vec()).collect();
 
@@ -343,8 +356,12 @@ mod tests {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e"];
         let expected: HashSet<Vec<u8>> = items.iter().map(|b| b.to_vec()).collect();
 
-        let iter = make_iter(items);
-        let shuffle = ReservoirShuffle::with_seed(iter, 5, 42).unwrap();
+        let node = BytesNode::new(items);
+        let shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(5)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         let output: HashSet<Vec<u8>> = shuffle.map(|r| r.unwrap().to_vec()).collect();
 
@@ -357,8 +374,12 @@ mod tests {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d"];
         let expected: HashSet<Vec<u8>> = items.iter().map(|b| b.to_vec()).collect();
 
-        let iter = make_iter(items);
-        let shuffle = ReservoirShuffle::with_seed(iter, 1, 42).unwrap();
+        let node = BytesNode::new(items);
+        let shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(1)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         let output: HashSet<Vec<u8>> = shuffle.map(|r| r.unwrap().to_vec()).collect();
 
@@ -370,12 +391,20 @@ mod tests {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e", b"f", b"g", b"h"];
         let seed = 12345u64;
 
-        let iter1 = make_iter(items.clone());
-        let shuffle1 = ReservoirShuffle::with_seed(iter1, 3, seed).unwrap();
+        let node1 = BytesNode::new(items.clone());
+        let shuffle1 = ReservoirShuffleConfig::new(node1)
+            .with_buffer_size(3)
+            .with_seed(seed)
+            .build()
+            .unwrap();
         let output1: Vec<Vec<u8>> = shuffle1.map(|r| r.unwrap().to_vec()).collect();
 
-        let iter2 = make_iter(items);
-        let shuffle2 = ReservoirShuffle::with_seed(iter2, 3, seed).unwrap();
+        let node2 = BytesNode::new(items);
+        let shuffle2 = ReservoirShuffleConfig::new(node2)
+            .with_buffer_size(3)
+            .with_seed(seed)
+            .build()
+            .unwrap();
         let output2: Vec<Vec<u8>> = shuffle2.map(|r| r.unwrap().to_vec()).collect();
 
         assert_eq!(output1, output2, "Same seed should produce same order");
@@ -385,8 +414,12 @@ mod tests {
     fn test_no_output_during_filling() {
         // With buffer_size=5 and 3 items, we should only output during drain
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c"];
-        let iter = make_iter(items);
-        let mut shuffle = ReservoirShuffle::with_seed(iter, 5, 42).unwrap();
+        let node = BytesNode::new(items);
+        let mut shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(5)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         // First three calls fill the buffer, fourth triggers drain
         // Actually, since we loop internally, the first call will fill and then drain
@@ -401,9 +434,13 @@ mod tests {
     #[test]
     fn test_error_surfaces_immediately() {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e"];
-        let iter = make_iter_with_error(items, 2); // Error at position 2
+        let node = ErrorNode::new(items, 2); // Error at position 2
 
-        let mut shuffle = ReservoirShuffle::with_seed(iter, 5, 42).unwrap();
+        let mut shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(5)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         // Items 0, 1 fill buffer, item 2 is error
         // Error should surface immediately
@@ -415,9 +452,13 @@ mod tests {
     #[test]
     fn test_can_continue_after_error() {
         let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e", b"f"];
-        let iter = make_iter_with_error(items, 2); // Error at position 2
+        let node = ErrorNode::new(items, 2); // Error at position 2
 
-        let mut shuffle = ReservoirShuffle::with_seed(iter, 10, 42).unwrap();
+        let mut shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(10)
+            .with_seed(42)
+            .build()
+            .unwrap();
 
         // Get the error
         let result = shuffle.next();
@@ -441,22 +482,15 @@ mod tests {
         let original: Vec<Vec<u8>> = items.clone();
 
         let items_refs: Vec<&[u8]> = items.iter().map(|v| v.as_slice()).collect();
-        let iter = make_iter(items_refs);
-        let shuffle = ReservoirShuffle::with_seed(iter, 5, 42).unwrap();
+        let node = BytesNode::new(items_refs);
+        let shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(5)
+            .with_seed(42)
+            .build()
+            .unwrap();
         let output: Vec<Vec<u8>> = shuffle.map(|r| r.unwrap().to_vec()).collect();
 
         assert_ne!(output, original, "Shuffling should change the order");
-    }
-
-    #[test]
-    fn test_size_hint() {
-        let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e"];
-        let iter = make_iter(items);
-        let shuffle = ReservoirShuffle::new(iter, 3).unwrap();
-
-        let (lo, hi) = shuffle.size_hint();
-        assert_eq!(lo, 5);
-        assert_eq!(hi, Some(5));
     }
 
     #[test]
@@ -471,8 +505,12 @@ mod tests {
         let items: Vec<Vec<u8>> = (0..num_items).map(|i| vec![i as u8]).collect();
         let items_refs: Vec<&[u8]> = items.iter().map(|v| v.as_slice()).collect();
 
-        let iter = make_iter(items_refs);
-        let shuffle = ReservoirShuffle::with_seed(iter, buffer_size, 42).unwrap();
+        let node = BytesNode::new(items_refs);
+        let shuffle = ReservoirShuffleConfig::new(node)
+            .with_buffer_size(buffer_size)
+            .with_seed(42)
+            .build()
+            .unwrap();
         let output: Vec<u8> = shuffle.map(|r| r.unwrap()[0]).collect();
 
         // Check if any item crossed a block boundary
@@ -485,6 +523,27 @@ mod tests {
         assert!(
             crossed,
             "Reservoir shuffle should allow items to cross block boundaries"
+        );
+    }
+
+    #[test]
+    fn test_as_tree_node() {
+        // Test that ReservoirShuffleConfig works as a Node
+        let items: Vec<&[u8]> = vec![b"a", b"b", b"c", b"d", b"e"];
+        let expected: HashSet<Vec<u8>> = items.iter().map(|b| b.to_vec()).collect();
+
+        let inner_node = BytesNode::new(items);
+        let shuffle_node = ReservoirShuffleConfig::new(inner_node)
+            .with_buffer_size(3)
+            .with_seed(42);
+
+        // Use it as a Node
+        let reader = Box::new(shuffle_node).make().unwrap();
+        let output: HashSet<Vec<u8>> = reader.map(|r| r.unwrap().to_vec()).collect();
+
+        assert_eq!(
+            output, expected,
+            "All items should be preserved through Node interface"
         );
     }
 }

@@ -157,10 +157,11 @@ use crate::tree::reader::{Node, Reader};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use std::fs::File;
 /// use disky::reader::RecordReaderConfig;
 ///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let file = File::open("data.disky")?;
 /// let reader = RecordReaderConfig::new(file).build()?;
 ///
@@ -168,6 +169,8 @@ use crate::tree::reader::{Node, Reader};
 ///     let bytes = record?;
 ///     // ...
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct RecordReaderConfig<Source> {
     source: Source,

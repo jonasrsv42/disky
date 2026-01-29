@@ -19,10 +19,11 @@ use crate::tree::reader::{Node, Reader};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use disky::shard::reader::SequentialShardReaderConfig;
 /// use disky::shard::source::{FileShards, SequentialShardSource};
 ///
+/// # fn main() -> disky::error::Result<()> {
 /// let reader = SequentialShardReaderConfig::new(
 ///     SequentialShardSource::new(FileShards::from_pattern("/data", "shard")?)
 /// ).build();
@@ -31,6 +32,8 @@ use crate::tree::reader::{Node, Reader};
 ///     let bytes = record?;
 ///     // ...
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct SequentialShardReaderConfig<ShardSource> {
     source: ShardSource,

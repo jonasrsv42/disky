@@ -21,7 +21,9 @@ pub mod reservoir_shuffle;
 pub mod sampling_reader;
 
 // Re-export main types for convenience
-pub use reservoir_shuffle::{ReservoirShuffle, ReservoirShuffleConfig};
+pub use reservoir_shuffle::{
+    DEFAULT_BUFFER_SIZE, ReservoirShuffle, ReservoirShuffleConfig, ReservoirShuffleOptions,
+};
 pub use sampling_reader::{SamplingReader, SamplingReaderConfig, SamplingReaderOptions};
 
 #[cfg(test)]

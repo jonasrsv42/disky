@@ -14,5 +14,7 @@
 
 //! Tests for the sampling module.
 
+pub mod helpers;
+
 #[cfg(feature = "parallel")]
 mod sampling_reader_tests;

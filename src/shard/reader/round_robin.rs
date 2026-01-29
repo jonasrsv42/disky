@@ -19,10 +19,11 @@ use crate::tree::reader::{Node, Reader};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use disky::shard::reader::RoundRobinShardReaderConfig;
 /// use disky::shard::source::{FileShards, SequentialShardSource};
 ///
+/// # fn main() -> disky::error::Result<()> {
 /// // Read from up to 4 shards concurrently, round-robin style.
 /// let reader = RoundRobinShardReaderConfig::new(
 ///     SequentialShardSource::new(FileShards::from_pattern("/data", "shard")?)
@@ -34,6 +35,8 @@ use crate::tree::reader::{Node, Reader};
 ///     let bytes = record?;
 ///     // ...
 /// }
+/// # Ok(())
+/// # }
 /// ```
 pub struct RoundRobinShardReaderConfig<ShardSource> {
     source: ShardSource,

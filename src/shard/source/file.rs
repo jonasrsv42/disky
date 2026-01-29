@@ -94,7 +94,8 @@ impl FileShards {
 
     /// Create by discovering files with the given prefix in a directory.
     /// Results are returned in sorted order.
-    pub fn from_pattern(dir: PathBuf, prefix: impl Into<String>) -> Result<Self> {
+    pub fn from_pattern(dir: impl Into<PathBuf>, prefix: impl Into<String>) -> Result<Self> {
+        let dir = dir.into();
         let prefix = prefix.into();
         if prefix.is_empty() {
             return Err(DiskyError::Other(

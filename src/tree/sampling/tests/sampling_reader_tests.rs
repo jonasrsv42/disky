@@ -19,33 +19,10 @@ use bytes::Bytes;
 use crate::error::Result;
 use crate::reader::DiskyPiece;
 use crate::reader::RecordReaderConfig;
-use crate::tree::reader::{Node, Reader};
 use crate::tree::sampling::SamplingReaderConfig;
+use crate::tree::sampling::tests::helpers::SequenceNode;
 use crate::writer::RecordWriterConfig;
 use std::io::Cursor;
-
-// A simple node that produces a numbered sequence of bytes for testing
-struct SequenceNode {
-    prefix: &'static str,
-    count: usize,
-}
-
-impl SequenceNode {
-    fn new(prefix: &'static str, count: usize) -> Self {
-        Self { prefix, count }
-    }
-}
-
-impl Node for SequenceNode {
-    fn make(self: Box<Self>) -> Result<Reader> {
-        let prefix = self.prefix;
-        let count = self.count;
-        Ok(Box::new((0..count).map(move |i| {
-            let data = format!("{}{}", prefix, i);
-            Ok(Bytes::from(data))
-        })))
-    }
-}
 
 #[test]
 fn test_sampling_reader_basic() {

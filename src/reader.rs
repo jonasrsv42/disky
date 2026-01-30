@@ -215,7 +215,7 @@ impl<Source: Read + Seek> RecordReaderConfig<Source> {
     }
 }
 
-impl<Source: Read + Seek + Send + 'static> Node for RecordReaderConfig<Source> {
+impl<Source: Read + Seek + Send + Sync + 'static> Node for RecordReaderConfig<Source> {
     fn make(self: Box<Self>) -> Result<Reader> {
         Ok(Box::new(self.build()?))
     }

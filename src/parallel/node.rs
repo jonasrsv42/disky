@@ -37,8 +37,9 @@
 //! 5. **Child panic**: If the child thread panics, `send_ch` is dropped, so
 //!    `recv_ch.recv()` returns `Err` and parent sees `None` from the iterator.
 
-use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
+
+use crossbeam_channel::{Receiver, bounded};
 
 use bytes::Bytes;
 
@@ -106,7 +107,7 @@ impl ThreadedNodeConfig {
     /// See module-level docs for the full lifecycle description.
     pub fn build(self) -> Result<ThreadedReader> {
         let buffer_size = self.buffer_size.max(1); // At least 1
-        let (send_ch, recv_ch) = mpsc::sync_channel::<Result<Bytes>>(buffer_size);
+        let (send_ch, recv_ch) = bounded::<Result<Bytes>>(buffer_size);
 
         let child = self.child;
 

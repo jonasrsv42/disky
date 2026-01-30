@@ -51,9 +51,10 @@ use crate::error::Result;
 /// All nodes produce this type from their `make()` method, enabling
 /// heterogeneous tree composition.
 ///
-/// The `Send` bound allows readers to be moved across threads, which is
+/// The `Send` bound allows readers to be moved across threads.
+/// The `Sync` bound allows shared references across threads, which is
 /// required for use with Python bindings (PyO3) and other multi-threaded contexts.
-pub type Reader = Box<dyn Iterator<Item = Result<Bytes>> + Send>;
+pub type Reader = Box<dyn Iterator<Item = Result<Bytes>> + Send + Sync>;
 
 /// A node in a reader tree.
 ///

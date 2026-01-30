@@ -73,8 +73,8 @@ where
 
 impl<Source, ShardSource> Node for SequentialShardReaderConfig<ShardSource>
 where
-    Source: Read + Seek + Send + 'static,
-    ShardSource: Iterator<Item = Result<Shard<Source>>> + Send + 'static,
+    Source: Read + Seek + Send + Sync + 'static,
+    ShardSource: Iterator<Item = Result<Shard<Source>>> + Send + Sync + 'static,
 {
     fn make(self: Box<Self>) -> Result<Reader> {
         Ok(Box::new(self.build()))

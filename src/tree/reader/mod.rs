@@ -50,7 +50,10 @@ use crate::error::Result;
 ///
 /// All nodes produce this type from their `make()` method, enabling
 /// heterogeneous tree composition.
-pub type Reader = Box<dyn Iterator<Item = Result<Bytes>>>;
+///
+/// The `Send` bound allows readers to be moved across threads, which is
+/// required for use with Python bindings (PyO3) and other multi-threaded contexts.
+pub type Reader = Box<dyn Iterator<Item = Result<Bytes>> + Send>;
 
 /// A node in a reader tree.
 ///

@@ -47,7 +47,7 @@ fn create_identifiable_data(shard_id: usize) -> Vec<u8> {
 }
 
 /// Create a ShardingConfig for multiple shards with identical test data
-fn create_multi_shard_config(shard_count: usize) -> ShardingConfig<Cursor<Vec<u8>>> {
+fn create_multi_shard_config(shard_count: usize) -> ShardingConfig {
     let test_data = create_test_data();
     let shards = MemoryShards::new(move |_index: usize| Ok(test_data.clone()), shard_count);
     let source = SequentialShardSource::new(shards);
@@ -55,7 +55,7 @@ fn create_multi_shard_config(shard_count: usize) -> ShardingConfig<Cursor<Vec<u8
 }
 
 /// Create a ShardingConfig for multiple shards with identifiable records
-fn create_identifiable_shard_config(shard_count: usize) -> ShardingConfig<Cursor<Vec<u8>>> {
+fn create_identifiable_shard_config(shard_count: usize) -> ShardingConfig {
     let shards = MemoryShards::new(
         move |index: usize| Ok(create_identifiable_data(index + 1)),
         shard_count,

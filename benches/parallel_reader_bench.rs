@@ -151,7 +151,7 @@ mod parallel_benchmarks {
     pub fn build_multi_threaded_reader(
         dir: &TempDir,
         thread_count: usize,
-    ) -> Result<disky::parallel::multi_threaded_reader::MultiThreadedReader<std::fs::File>> {
+    ) -> Result<disky::parallel::multi_threaded_reader::MultiThreadedReader> {
         let file_shards = FileShards::from_pattern(dir.path().to_path_buf(), "shard")?;
         let source = SequentialShardSource::new(file_shards);
         let sharding_config = ShardingConfig::new(Box::new(source), thread_count);
@@ -164,7 +164,7 @@ mod parallel_benchmarks {
 
     /// Iterate a MultiThreadedReader (read only, for benchmarking)
     pub fn iterate_multi_threaded_reader(
-        reader: disky::parallel::multi_threaded_reader::MultiThreadedReader<std::fs::File>,
+        reader: disky::parallel::multi_threaded_reader::MultiThreadedReader,
     ) -> Result<(usize, usize)> {
         let mut record_count = 0;
         let mut total_size = 0;
@@ -232,7 +232,9 @@ mod parallel_benchmarks {
 
         for i in 0..shard_count {
             let shard = file_shards.open(i)?;
-            let threaded_reader = ThreadedNodeConfig::new(RecordReaderConfig::new(shard.source))
+            // Open the file directly from the shard id (path)
+            let file = std::fs::File::open(&shard.id)?;
+            let threaded_reader = ThreadedNodeConfig::new(RecordReaderConfig::new(file))
                 .with_buffer_size(buffer_size);
             tree = tree.append(threaded_reader);
         }

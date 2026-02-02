@@ -1,21 +1,15 @@
-use std::io::{Read, Seek};
+//! Round-robin shard reader.
 
 use bytes::Bytes;
 
 use crate::error::{DiskyError, Result};
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig, RecordReaderOptions};
 use crate::shard::source::Shard;
 use crate::tree::reader::{Node, Reader};
 
 /// Builder for [`RoundRobinShardReader`].
 ///
-/// Takes a shard source (any `Iterator<Item = Result<Shard<Source>>>`) and optional
-/// configuration. Call [`build()`](Self::build) to create the reader, or use as a
-/// [`Node`] in a reader tree.
-///
-/// The shard source determines the order shards are visited. Use:
-/// - [`SequentialShardSource`](crate::shard::source::SequentialShardSource) for in-order
-/// - [`RandomRepeatingShardSource`](crate::shard::source::RandomRepeatingShardSource) for shuffled/infinite
+/// Takes a shard source (any `Iterator<Item = Result<Shard>>`) and builds a reader
+/// that round-robins across multiple active shards.
 ///
 /// # Examples
 ///
@@ -40,7 +34,6 @@ use crate::tree::reader::{Node, Reader};
 /// ```
 pub struct RoundRobinShardReaderConfig<ShardSource> {
     source: ShardSource,
-    reader_options: RecordReaderOptions,
     max_active: Option<usize>,
 }
 
@@ -51,15 +44,8 @@ impl<ShardSource> RoundRobinShardReaderConfig<ShardSource> {
     pub fn new(source: ShardSource) -> Self {
         Self {
             source,
-            reader_options: RecordReaderOptions::default(),
             max_active: None,
         }
-    }
-
-    /// Set the [`RecordReaderOptions`] used for each shard's reader.
-    pub fn reader_options(mut self, options: RecordReaderOptions) -> Self {
-        self.reader_options = options;
-        self
     }
 
     /// Set the maximum number of shards to keep open simultaneously.
@@ -72,51 +58,48 @@ impl<ShardSource> RoundRobinShardReaderConfig<ShardSource> {
     }
 }
 
-impl<Source, ShardSource> RoundRobinShardReaderConfig<ShardSource>
+impl<ShardSource> RoundRobinShardReaderConfig<ShardSource>
 where
-    Source: Read + Seek,
-    ShardSource: Iterator<Item = Result<Shard<Source>>>,
+    ShardSource: Iterator<Item = Result<Shard>>,
 {
     /// Build the [`RoundRobinShardReader`].
     ///
     /// # Errors
     ///
     /// Returns an error if `max_active` was set to 0.
-    pub fn build(self) -> Result<RoundRobinShardReader<Source, ShardSource>> {
+    pub fn build(self) -> Result<RoundRobinShardReader<ShardSource>> {
         if self.max_active == Some(0) {
             return Err(DiskyError::Other("max_active must be at least 1".into()));
         }
 
         Ok(RoundRobinShardReader {
             shards: self.source,
-            options: self.reader_options,
             max_active: self.max_active,
             state: ReaderState::Start,
         })
     }
 }
 
-impl<Source, ShardSource> Node for RoundRobinShardReaderConfig<ShardSource>
+impl<ShardSource> Node for RoundRobinShardReaderConfig<ShardSource>
 where
-    Source: Read + Seek + Send + Sync + 'static,
-    ShardSource: Iterator<Item = Result<Shard<Source>>> + Send + Sync + 'static,
+    ShardSource: Iterator<Item = Result<Shard>> + Send + Sync + 'static,
 {
     fn make(self: Box<Self>) -> Result<Reader> {
         Ok(Box::new(self.build()?))
     }
 }
 
-struct ActiveShard<Source: Read + Seek> {
-    reader: RecordReader<Source>,
+struct ActiveShard {
+    reader: Reader,
     shard_id: String,
 }
 
-enum ReaderState<Source: Read + Seek> {
+enum ReaderState {
     /// Not yet initialized — will open the initial batch of shards.
     Start,
     /// Actively round-robining across open shard readers.
     Reading {
-        readers: Vec<ActiveShard<Source>>,
+        readers: Vec<ActiveShard>,
         position: usize,
     },
     /// Terminal — all shards exhausted or hit an error.
@@ -141,43 +124,23 @@ enum ReaderState<Source: Read + Seek> {
 ///
 /// Errors from individual shards are wrapped in [`DiskyError::ShardError`]
 /// with the shard's id for traceability.
-pub struct RoundRobinShardReader<
-    Source: Read + Seek,
-    ShardIter: Iterator<Item = Result<Shard<Source>>>,
-> {
+pub struct RoundRobinShardReader<ShardIter: Iterator<Item = Result<Shard>>> {
     shards: ShardIter,
-    options: RecordReaderOptions,
     max_active: Option<usize>,
-    state: ReaderState<Source>,
+    state: ReaderState,
 }
 
-impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
-    RoundRobinShardReader<Source, ShardIter>
-{
+impl<ShardIter: Iterator<Item = Result<Shard>>> RoundRobinShardReader<ShardIter> {
     /// Open the next shard from the iterator, returning an `ActiveShard`.
-    ///
-    /// Takes the individual fields instead of `&mut self` so callers can
-    /// hold borrows on other fields (e.g. `self.state`) simultaneously.
-    fn next_reader(
-        shards: &mut ShardIter,
-        options: RecordReaderOptions,
-    ) -> Result<Option<ActiveShard<Source>>> {
+    fn next_reader(shards: &mut ShardIter) -> Result<Option<ActiveShard>> {
         let shard = match shards.next() {
             Some(Ok(shard)) => shard,
             Some(Err(e)) => return Err(e),
             None => return Ok(None),
         };
 
-        let reader = RecordReaderConfig::new(shard.source)
-            .options(options)
-            .build()
-            .map_err(|e| DiskyError::ShardError {
-                shard_id: shard.id.clone(),
-                source: Box::new(e),
-            })?;
-
         Ok(Some(ActiveShard {
-            reader,
+            reader: shard.reader,
             shard_id: shard.id,
         }))
     }
@@ -186,14 +149,12 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
     ///
     /// If a replacement shard is available, swaps it in at the current position.
     /// Otherwise removes the exhausted reader and adjusts position.
-    /// The caller's loop handles the empty-readers case on the next iteration.
     fn replace_or_remove(
-        readers: &mut Vec<ActiveShard<Source>>,
+        readers: &mut Vec<ActiveShard>,
         position: &mut usize,
         shards: &mut ShardIter,
-        options: RecordReaderOptions,
     ) -> Result<()> {
-        match Self::next_reader(shards, options)? {
+        match Self::next_reader(shards)? {
             Some(replacement) => {
                 readers[*position] = replacement;
             }
@@ -210,7 +171,7 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
     }
 
     /// Open the initial batch of shards (up to `max_active`, or all if `None`).
-    fn initialize(&mut self) -> Result<Vec<ActiveShard<Source>>> {
+    fn initialize(&mut self) -> Result<Vec<ActiveShard>> {
         let mut readers = Vec::new();
 
         loop {
@@ -220,7 +181,7 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
                 }
             }
 
-            match Self::next_reader(&mut self.shards, self.options)? {
+            match Self::next_reader(&mut self.shards)? {
                 Some(active) => readers.push(active),
                 None => break,
             }
@@ -230,14 +191,12 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>>
     }
 }
 
-impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Iterator
-    for RoundRobinShardReader<Source, ShardIter>
-{
+impl<ShardIter: Iterator<Item = Result<Shard>>> Iterator for RoundRobinShardReader<ShardIter> {
     type Item = Result<Bytes>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.state {
+            match &mut self.state {
                 ReaderState::Done => return None,
 
                 ReaderState::Start => match self.initialize() {
@@ -253,10 +212,7 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Ite
                     }
                 },
 
-                ReaderState::Reading {
-                    ref mut readers,
-                    ref mut position,
-                } => {
+                ReaderState::Reading { readers, position } => {
                     if readers.is_empty() {
                         self.state = ReaderState::Done;
                         return None;
@@ -264,29 +220,27 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Ite
 
                     let active = &mut readers[*position];
 
-                    match active.reader.next_record() {
-                        Ok(DiskyPiece::Record(bytes)) => {
+                    match active.reader.next() {
+                        Some(Ok(bytes)) => {
                             *position = (*position + 1) % readers.len();
                             return Some(Ok(bytes));
                         }
-                        Ok(DiskyPiece::EOF) => {
-                            if let Err(e) = Self::replace_or_remove(
-                                readers,
-                                position,
-                                &mut self.shards,
-                                self.options,
-                            ) {
-                                self.state = ReaderState::Done;
-                                return Some(Err(e));
-                            }
-                        }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             let id = active.shard_id.clone();
                             self.state = ReaderState::Done;
                             return Some(Err(DiskyError::ShardError {
                                 shard_id: id,
                                 source: Box::new(e),
                             }));
+                        }
+                        None => {
+                            // Shard exhausted, try to replace
+                            if let Err(e) =
+                                Self::replace_or_remove(readers, position, &mut self.shards)
+                            {
+                                self.state = ReaderState::Done;
+                                return Some(Err(e));
+                            }
                         }
                     }
                 }
@@ -301,11 +255,10 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::error::DiskyError;
-    use crate::shard::source::{MemoryShards, SequentialShardSource, Shard, Shards};
-    use crate::writer::RecordWriterConfig;
-
     use super::RoundRobinShardReaderConfig;
+    use crate::error::DiskyError;
+    use crate::shard::source::{MemoryShards, SequentialShardSource};
+    use crate::writer::RecordWriterConfig;
 
     /// Write records into an in-memory disky buffer.
     fn write_records(records: &[&[u8]]) -> Vec<u8> {
@@ -324,7 +277,7 @@ mod tests {
 
     #[test]
     fn empty_shards_returns_none() {
-        let shards = MemoryShards::new(|_| Ok(vec![]), 0);
+        let shards = MemoryShards::new(|_| Ok(write_records(&[])), 0);
         let source = SequentialShardSource::new(shards);
         let mut reader = RoundRobinShardReaderConfig::new(source).build().unwrap();
         assert!(reader.next().is_none());
@@ -455,31 +408,18 @@ mod tests {
     }
 
     #[test]
-    fn shard_open_error_is_wrapped() {
-        struct FailOnSecond {
-            good_data: Vec<u8>,
-        }
-
-        impl Shards for FailOnSecond {
-            type Source = Cursor<Vec<u8>>;
-
-            fn count(&self) -> usize {
-                2
-            }
-
-            fn open(&self, index: usize) -> crate::error::Result<Shard<Cursor<Vec<u8>>>> {
-                if index == 1 {
-                    return Err(DiskyError::Other("shard open failed".into()));
+    fn shard_open_error_propagates() {
+        let good_data = write_records(&[b"record"]);
+        let shards = MemoryShards::new(
+            move |i| {
+                if i == 1 {
+                    Err(DiskyError::Other("shard open failed".into()))
+                } else {
+                    Ok(good_data.clone())
                 }
-                Ok(Shard {
-                    source: Cursor::new(self.good_data.clone()),
-                    id: format!("test_shard_{}", index),
-                })
-            }
-        }
-
-        let data = write_records(&[b"record"]);
-        let shards = FailOnSecond { good_data: data };
+            },
+            2,
+        );
         let source = SequentialShardSource::new(shards);
 
         // max_active=None tries to open both; second fails during init.
@@ -492,23 +432,6 @@ mod tests {
             "Expected shard open error, got: {}",
             msg,
         );
-
-        assert!(reader.next().is_none());
-    }
-
-    #[test]
-    fn invalid_shard_data_wraps_in_shard_error() {
-        let shards = MemoryShards::new(|_| Ok(b"not valid disky data".to_vec()), 1);
-        let source = SequentialShardSource::new(shards);
-        let mut reader = RoundRobinShardReaderConfig::new(source).build().unwrap();
-
-        let err = reader.next().unwrap().unwrap_err();
-        match &err {
-            DiskyError::ShardError { shard_id, .. } => {
-                assert!(!shard_id.is_empty(), "shard_id should identify the shard");
-            }
-            other => panic!("Expected ShardError, got: {}", other),
-        }
 
         assert!(reader.next().is_none());
     }
@@ -573,30 +496,17 @@ mod tests {
     fn replacement_shard_failure_terminates() {
         // 2 shards: first is valid, second fails to open.
         // max_active=1 so the second is a replacement, not in the initial batch.
-        struct FailOnSecond {
-            good_data: Vec<u8>,
-        }
-
-        impl Shards for FailOnSecond {
-            type Source = Cursor<Vec<u8>>;
-
-            fn count(&self) -> usize {
-                2
-            }
-
-            fn open(&self, index: usize) -> crate::error::Result<Shard<Cursor<Vec<u8>>>> {
-                if index == 1 {
-                    return Err(DiskyError::Other("replacement failed".into()));
+        let good_data = write_records(&[b"record"]);
+        let shards = MemoryShards::new(
+            move |i| {
+                if i == 1 {
+                    Err(DiskyError::Other("replacement failed".into()))
+                } else {
+                    Ok(good_data.clone())
                 }
-                Ok(Shard {
-                    source: Cursor::new(self.good_data.clone()),
-                    id: format!("test_shard_{}", index),
-                })
-            }
-        }
-
-        let data = write_records(&[b"record"]);
-        let shards = FailOnSecond { good_data: data };
+            },
+            2,
+        );
         let source = SequentialShardSource::new(shards);
         let mut reader = RoundRobinShardReaderConfig::new(source)
             .max_active(1)

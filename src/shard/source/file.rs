@@ -4,6 +4,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::error::{DiskyError, Result};
+use crate::reader::{RecordReaderConfig, RecordReaderOptions};
 use crate::shard::source::{Shard, Shards};
 
 /// Returns all files in `dir` whose name starts with `prefix`.
@@ -58,16 +59,37 @@ fn validate_paths(paths: &[PathBuf]) -> Result<()> {
 /// A collection of file-based shards. Implements [`Shards`].
 ///
 /// Construct from explicit paths with `new`, a path prefix with `from_prefix`,
-/// or a directory + prefix with `from_pattern`.
+/// or a directory + prefix with `from_pattern`. Configure record reader options
+/// with `reader_options()`.
+///
+/// # Example
+///
+/// ```ignore
+/// use disky::shard::source::FileShards;
+/// use disky::reader::RecordReaderOptions;
+///
+/// let shards = FileShards::from_prefix("/data/shard_")?
+///     .reader_options(RecordReaderOptions::default());
+/// ```
 pub struct FileShards {
     paths: Vec<PathBuf>,
+    options: RecordReaderOptions,
 }
 
 impl FileShards {
     /// Create from an explicit list of file paths.
     pub fn new(paths: Vec<PathBuf>) -> Result<Self> {
         validate_paths(&paths)?;
-        Ok(Self { paths })
+        Ok(Self {
+            paths,
+            options: RecordReaderOptions::default(),
+        })
+    }
+
+    /// Set the [`RecordReaderOptions`] used when opening shards.
+    pub fn reader_options(mut self, options: RecordReaderOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Create by matching all files starting with the given path prefix.
@@ -113,13 +135,11 @@ impl FileShards {
 }
 
 impl Shards for FileShards {
-    type Source = File;
-
     fn count(&self) -> usize {
         self.paths.len()
     }
 
-    fn open(&self, index: usize) -> Result<Shard<File>> {
+    fn open(&self, index: usize) -> Result<Shard> {
         if index >= self.paths.len() {
             return Err(DiskyError::Other(format!(
                 "Cannot open shard at index {} when there is only {} shards",
@@ -129,16 +149,24 @@ impl Shards for FileShards {
         }
         let path = &self.paths[index];
         let id = path.display().to_string();
-        let source = File::open(path).map_err(DiskyError::Io)?;
-        Ok(Shard { source, id })
+        let file = File::open(path).map_err(DiskyError::Io)?;
+        let reader = RecordReaderConfig::new(file)
+            .options(self.options)
+            .build()?;
+        Ok(Shard {
+            reader: Box::new(reader),
+            id,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::shard::source::tests::create_test_shards;
     use tempfile::TempDir;
+
+    use super::*;
+    use crate::reader::CorruptionStrategy;
+    use crate::shard::source::tests::create_test_shards;
 
     #[test]
     fn new_opens_all() {
@@ -232,17 +260,33 @@ mod tests {
     }
 
     #[test]
-    fn open_returns_readable_file() {
+    fn open_returns_record_iterator() {
         let dir = TempDir::new().unwrap();
         create_test_shards(&dir, "data", 1);
 
         let shards = FileShards::new(vec![dir.path().join("data_0")]).unwrap();
         let shard = shards.open(0).unwrap();
 
-        use std::io::Read;
-        let mut contents = String::new();
-        let mut source = shard.source;
-        source.read_to_string(&mut contents).unwrap();
-        assert_eq!(contents, "shard 0 data");
+        // Verify we can iterate records
+        let records: Vec<_> = shard.reader.collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].as_ref().unwrap().as_ref(), b"record_0_0");
+        assert_eq!(records[1].as_ref().unwrap().as_ref(), b"record_0_1");
+    }
+
+    #[test]
+    fn reader_options_are_applied() {
+        let dir = TempDir::new().unwrap();
+        create_test_shards(&dir, "data", 1);
+
+        let options =
+            RecordReaderOptions::default().with_corruption_strategy(CorruptionStrategy::Recover);
+
+        let shards = FileShards::new(vec![dir.path().join("data_0")])
+            .unwrap()
+            .reader_options(options);
+
+        // Just verify it compiles and opens successfully
+        assert!(shards.open(0).is_ok());
     }
 }

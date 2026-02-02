@@ -3,7 +3,6 @@
 //! This module provides a parallel reader for Disky records, designed to improve
 //! performance by reading from multiple sharded files.
 
-use std::io::{Read, Seek};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -14,8 +13,8 @@ use crate::parallel::byte_queue::ByteQueue;
 use crate::parallel::promise::Promise;
 use crate::parallel::resource_pool::ResourcePool;
 use crate::parallel::task_queue::TaskQueue;
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig, RecordReaderOptions};
-use crate::shard::Shard;
+use crate::shard::source::Shard;
+use crate::tree::reader::Reader;
 
 /// Result of reading a record from the parallel reader
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,9 +74,9 @@ impl Clone for Task {
 }
 
 /// Resource containing an initialized reader
-pub struct ReaderResource<Source: Read + Seek + Send + 'static> {
-    /// The record reader, boxed to signify exclusive ownership
-    pub reader: Box<RecordReader<Source>>,
+pub struct ReaderResource {
+    /// The record reader (boxed iterator)
+    pub reader: Reader,
 
     /// Identifier for the shard (e.g., file path, ordinal index).
     /// Used in error messages to identify which shard failed.
@@ -87,24 +86,21 @@ pub struct ReaderResource<Source: Read + Seek + Send + 'static> {
 /// Sharding configuration for the parallel reader.
 ///
 /// Controls how shards are located and loaded in the parallel reader.
-pub struct ShardingConfig<Source: Read + Seek + Send + 'static> {
+pub struct ShardingConfig {
     /// The shard source iterator, wrapped in Mutex for thread-safe access.
-    pub source: Mutex<Box<dyn Iterator<Item = Result<Shard<Source>>> + Send>>,
+    pub source: Mutex<Box<dyn Iterator<Item = Result<Shard>> + Send>>,
 
     /// Number of shards to keep active at once.
     pub shards: usize,
 }
 
-impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
+impl ShardingConfig {
     /// Create a new ShardingConfig.
     ///
     /// # Arguments
     /// * `source` - Iterator producing shards
     /// * `shards` - Maximum number of shards to keep active at once
-    pub fn new(
-        source: Box<dyn Iterator<Item = Result<Shard<Source>>> + Send>,
-        shards: usize,
-    ) -> Self {
+    pub fn new(source: Box<dyn Iterator<Item = Result<Shard>> + Send>, shards: usize) -> Self {
         Self {
             source: Mutex::new(source),
             shards: std::cmp::max(shards, 1),
@@ -113,24 +109,13 @@ impl<Source: Read + Seek + Send + 'static> ShardingConfig<Source> {
 }
 
 /// Configuration for the parallel reader
-#[derive(Debug, Clone, Copy)]
-pub struct ParallelReaderConfig {
-    /// Options for the underlying record readers
-    pub reader_options: RecordReaderOptions,
-}
-
-impl Default for ParallelReaderConfig {
-    fn default() -> Self {
-        Self {
-            reader_options: RecordReaderOptions::default(),
-        }
-    }
-}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParallelReaderConfig {}
 
 impl ParallelReaderConfig {
-    /// Creates a new configuration with the specified reader options
-    pub fn new(reader_options: RecordReaderOptions) -> Self {
-        Self { reader_options }
+    /// Creates a new configuration
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
@@ -138,25 +123,22 @@ impl ParallelReaderConfig {
 ///
 /// The ParallelReader allows efficient reading from multiple sharded files
 /// by distributing read operations across multiple reader instances.
-pub struct ParallelReader<Source: Read + Seek + Send + 'static> {
+pub struct ParallelReader {
     /// Queue of tasks to be processed
     task_queue: Arc<TaskQueue<Task>>,
 
     /// Pool of reader resources
-    reader_pool: Arc<ResourcePool<ReaderResource<Source>>>,
-
-    /// Configuration for the parallel reader
-    config: ParallelReaderConfig,
+    reader_pool: Arc<ResourcePool<ReaderResource>>,
 
     /// Sharding configuration for the reader
-    sharding_config: ShardingConfig<Source>,
+    sharding_config: ShardingConfig,
 }
 
-impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
+impl ParallelReader {
     /// Gets a new shard and adds it to the resource pool
     ///
-    /// This method gets a new source using the shard locator, wraps it in a RecordReader,
-    /// and adds it to the resource pool.
+    /// This method gets a new shard from the iterator and adds its reader
+    /// to the resource pool.
     ///
     /// # Returns
     /// Returns `Ok(true)` if a shard was added, `Ok(false)` if the source
@@ -171,11 +153,8 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
 
         match next {
             Some(Ok(shard)) => {
-                let reader = RecordReaderConfig::new(shard.source)
-                    .options(self.config.reader_options)
-                    .build()?;
                 self.reader_pool.add_resource(ReaderResource {
-                    reader: Box::new(reader),
+                    reader: shard.reader,
                     shard_id: shard.id,
                 })?;
                 Ok(true)
@@ -191,21 +170,17 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     ///
     /// # Arguments
     /// * `sharding_config` - Configuration for creating and managing shards
-    /// * `config` - Configuration for the parallel reader
+    /// * `_config` - Configuration for the parallel reader (currently unused)
     ///
     /// # Returns
     /// A new ParallelReader instance
-    pub fn new(
-        sharding_config: ShardingConfig<Source>,
-        config: ParallelReaderConfig,
-    ) -> Result<Self> {
+    pub fn new(sharding_config: ShardingConfig, _config: ParallelReaderConfig) -> Result<Self> {
         let task_queue = Arc::new(TaskQueue::new());
         let reader_pool = Arc::new(ResourcePool::new());
 
         let reader = Self {
             task_queue,
             reader_pool,
-            config,
             sharding_config,
         };
 
@@ -330,12 +305,16 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
         match self.reader_pool.get_resource() {
             Ok(mut resource) => {
                 // Try to read a record
-                match resource.reader.next_record() {
-                    Ok(DiskyPiece::Record(bytes)) => {
+                match resource.reader.next() {
+                    Some(Ok(bytes)) => {
                         // Successfully read a record
                         Ok(DiskyParallelPiece::Record(bytes))
                     }
-                    Ok(DiskyPiece::EOF) => {
+                    Some(Err(e)) => Err(DiskyError::ShardError {
+                        shard_id: resource.shard_id.clone(),
+                        source: Box::new(e),
+                    }),
+                    None => {
                         // This reader reached EOF, remove it from the pool
                         resource.forget();
 
@@ -343,10 +322,6 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                         self.get_new_shard()?;
                         Ok(DiskyParallelPiece::ShardFinished)
                     }
-                    Err(e) => Err(DiskyError::ShardError {
-                        shard_id: resource.shard_id.clone(),
-                        source: Box::new(e),
-                    }),
                 }
             }
             Err(DiskyError::PoolExhausted) => {
@@ -469,12 +444,18 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
             Ok(mut resource) => {
                 // Drain all records from this resource
                 loop {
-                    match resource.reader.next_record() {
-                        Ok(DiskyPiece::Record(bytes)) => {
+                    match resource.reader.next() {
+                        Some(Ok(bytes)) => {
                             // Successfully read a record, add to the queue
                             byte_queue.push_back(DiskyParallelPiece::Record(bytes))?;
                         }
-                        Ok(DiskyPiece::EOF) => {
+                        Some(Err(e)) => {
+                            return Err(DiskyError::ShardError {
+                                shard_id: resource.shard_id.clone(),
+                                source: Box::new(e),
+                            });
+                        }
+                        None => {
                             // This reader reached EOF, remove it from the pool
                             resource.forget();
 
@@ -482,12 +463,6 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
                             self.get_new_shard()?;
                             byte_queue.push_back(DiskyParallelPiece::ShardFinished)?;
                             return Ok(());
-                        }
-                        Err(e) => {
-                            return Err(DiskyError::ShardError {
-                                shard_id: resource.shard_id.clone(),
-                                source: Box::new(e),
-                            });
                         }
                     }
                 }
@@ -530,7 +505,7 @@ impl<Source: Read + Seek + Send + 'static> ParallelReader<Source> {
     }
 }
 
-impl<Source: Read + Seek + Send + 'static> Drop for ParallelReader<Source> {
+impl Drop for ParallelReader {
     fn drop(&mut self) {
         // Close resources directly, ignoring any errors during drop
         let _ = self.reader_pool.close();

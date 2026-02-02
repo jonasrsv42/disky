@@ -8,22 +8,22 @@ use crate::shard::source::{Shard, Shards};
 /// Iterates over shards in order, 0..count. Finite.
 ///
 /// Implements `ExactSizeIterator` so consumers can query remaining count.
-pub struct SequentialShardSource<ShardsType: Shards> {
-    shards: ShardsType,
+pub struct SequentialShardSource {
+    shards: Box<dyn Shards>,
     next_index: usize,
 }
 
-impl<ShardsType: Shards> SequentialShardSource<ShardsType> {
-    pub fn new(shards: ShardsType) -> Self {
+impl SequentialShardSource {
+    pub fn new(shards: impl Shards + 'static) -> Self {
         Self {
-            shards,
+            shards: Box::new(shards),
             next_index: 0,
         }
     }
 }
 
-impl<ShardsType: Shards> Iterator for SequentialShardSource<ShardsType> {
-    type Item = Result<Shard<ShardsType::Source>>;
+impl Iterator for SequentialShardSource {
+    type Item = Result<Shard>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next_index >= self.shards.count() {
@@ -37,9 +37,9 @@ impl<ShardsType: Shards> Iterator for SequentialShardSource<ShardsType> {
     }
 }
 
-impl<ShardsType: Shards> FusedIterator for SequentialShardSource<ShardsType> {}
+impl FusedIterator for SequentialShardSource {}
 
-impl<ShardsType: Shards> ExactSizeIterator for SequentialShardSource<ShardsType> {
+impl ExactSizeIterator for SequentialShardSource {
     fn len(&self) -> usize {
         self.shards.count() - self.next_index
     }
@@ -47,14 +47,11 @@ impl<ShardsType: Shards> ExactSizeIterator for SequentialShardSource<ShardsType>
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
-
     use tempfile::TempDir;
 
+    use super::*;
     use crate::shard::source::FileShards;
     use crate::shard::source::tests::create_test_shards;
-
-    use super::*;
 
     #[test]
     fn iterates_all_in_order() {
@@ -103,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn shards_are_readable() {
+    fn shards_return_records() {
         let dir = TempDir::new().unwrap();
         create_test_shards(&dir, "shard", 1);
 
@@ -111,9 +108,9 @@ mod tests {
         let mut source = SequentialShardSource::new(shards);
 
         let shard = source.next().unwrap().unwrap();
-        let mut contents = String::new();
-        let mut file = shard.source;
-        file.read_to_string(&mut contents).unwrap();
-        assert_eq!(contents, "shard 0 data");
+        let records: Vec<_> = shard.reader.map(|r| r.unwrap()).collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].as_ref(), b"record_0_0");
+        assert_eq!(records[1].as_ref(), b"record_0_1");
     }
 }

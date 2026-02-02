@@ -130,10 +130,13 @@ fn read_tree_reader(dir: &TempDir) -> Result<(usize, usize)> {
     let source = SequentialShardSource::new(file_shards);
 
     // Build tree nodes - one RecordReaderConfig per file
+    // Open each shard to get its path, then create a RecordReaderConfig from the file
     let nodes: Vec<Box<dyn Node>> = source
         .map(|shard_result| {
             let shard = shard_result.unwrap();
-            Box::new(RecordReaderConfig::new(shard.source)) as Box<dyn Node>
+            // Open the file from the shard id (which contains the path)
+            let file = File::open(&shard.id).unwrap();
+            Box::new(RecordReaderConfig::new(file)) as Box<dyn Node>
         })
         .collect();
 

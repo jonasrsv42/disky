@@ -1,21 +1,15 @@
-use std::io::{Read, Seek};
+//! Sequential shard reader.
 
 use bytes::Bytes;
 
 use crate::error::{DiskyError, Result};
-use crate::reader::{DiskyPiece, RecordReader, RecordReaderConfig, RecordReaderOptions};
 use crate::shard::source::Shard;
 use crate::tree::reader::{Node, Reader};
 
 /// Builder for [`SequentialShardReader`].
 ///
-/// Takes a shard source (any `Iterator<Item = Result<Shard<Source>>>`) and optional
-/// configuration. Call [`build()`](Self::build) to create the reader, or use as a
-/// [`Node`] in a reader tree.
-///
-/// The shard source determines the order shards are visited. Use:
-/// - [`SequentialShardSource`](crate::shard::source::SequentialShardSource) for in-order
-/// - [`RandomRepeatingShardSource`](crate::shard::source::RandomRepeatingShardSource) for shuffled/infinite
+/// Takes a shard source (any `Iterator<Item = Result<Shard>>`) and builds a reader
+/// that drains each shard fully before moving to the next.
 ///
 /// # Examples
 ///
@@ -37,58 +31,42 @@ use crate::tree::reader::{Node, Reader};
 /// ```
 pub struct SequentialShardReaderConfig<ShardSource> {
     source: ShardSource,
-    reader_options: RecordReaderOptions,
 }
 
 impl<ShardSource> SequentialShardReaderConfig<ShardSource> {
     /// Create a config with the given shard source iterator.
     pub fn new(source: ShardSource) -> Self {
-        Self {
-            source,
-            reader_options: RecordReaderOptions::default(),
-        }
-    }
-
-    /// Set the [`RecordReaderOptions`] used for each shard's reader.
-    pub fn reader_options(mut self, options: RecordReaderOptions) -> Self {
-        self.reader_options = options;
-        self
+        Self { source }
     }
 }
 
-impl<Source, ShardSource> SequentialShardReaderConfig<ShardSource>
+impl<ShardSource> SequentialShardReaderConfig<ShardSource>
 where
-    Source: Read + Seek,
-    ShardSource: Iterator<Item = Result<Shard<Source>>>,
+    ShardSource: Iterator<Item = Result<Shard>>,
 {
     /// Build the [`SequentialShardReader`].
-    pub fn build(self) -> SequentialShardReader<Source, ShardSource> {
+    pub fn build(self) -> SequentialShardReader<ShardSource> {
         SequentialShardReader {
             shards: self.source,
-            options: self.reader_options,
             state: ReaderState::Start,
         }
     }
 }
 
-impl<Source, ShardSource> Node for SequentialShardReaderConfig<ShardSource>
+impl<ShardSource> Node for SequentialShardReaderConfig<ShardSource>
 where
-    Source: Read + Seek + Send + Sync + 'static,
-    ShardSource: Iterator<Item = Result<Shard<Source>>> + Send + Sync + 'static,
+    ShardSource: Iterator<Item = Result<Shard>> + Send + Sync + 'static,
 {
     fn make(self: Box<Self>) -> Result<Reader> {
         Ok(Box::new(self.build()))
     }
 }
 
-enum ReaderState<Source: Read + Seek> {
+enum ReaderState {
     /// Ready to open the next shard.
     Start,
     /// Actively reading records from a shard.
-    Reading {
-        reader: RecordReader<Source>,
-        shard_id: String,
-    },
+    Reading { reader: Reader, shard_id: String },
     /// Terminal — iterator exhausted or hit an error.
     Done,
 }
@@ -99,33 +77,27 @@ enum ReaderState<Source: Read + Seek> {
 /// Implements `Iterator<Item = Result<Bytes>>` so it composes with other
 /// tree-based reader nodes.
 ///
-/// The shard iteration order is determined by the `ShardIter` passed at
+/// The shard iteration order is determined by the shard source passed at
 /// construction — use [`SequentialShardSource`] for in-order,
 /// [`RandomRepeatingShardSource`] for shuffled/infinite, or any other
-/// `Iterator<Item = Result<Shard<Source>>>`.
+/// `Iterator<Item = Result<Shard>>`.
 ///
 /// Errors from individual shards are wrapped in [`DiskyError::ShardError`]
 /// with the shard's id for traceability.
 ///
 /// [`SequentialShardSource`]: crate::shard::source::SequentialShardSource
 /// [`RandomRepeatingShardSource`]: crate::shard::source::RandomRepeatingShardSource
-pub struct SequentialShardReader<
-    Source: Read + Seek,
-    ShardIter: Iterator<Item = Result<Shard<Source>>>,
-> {
+pub struct SequentialShardReader<ShardIter: Iterator<Item = Result<Shard>>> {
     shards: ShardIter,
-    options: RecordReaderOptions,
-    state: ReaderState<Source>,
+    state: ReaderState,
 }
 
-impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Iterator
-    for SequentialShardReader<Source, ShardIter>
-{
+impl<ShardIter: Iterator<Item = Result<Shard>>> Iterator for SequentialShardReader<ShardIter> {
     type Item = Result<Bytes>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.state {
+            match &mut self.state {
                 ReaderState::Done => return None,
 
                 ReaderState::Start => match self.shards.next() {
@@ -137,41 +109,27 @@ impl<Source: Read + Seek, ShardIter: Iterator<Item = Result<Shard<Source>>>> Ite
                         self.state = ReaderState::Done;
                         return Some(Err(e));
                     }
-                    Some(Ok(shard)) => match RecordReaderConfig::new(shard.source)
-                        .options(self.options)
-                        .build()
-                    {
-                        Ok(reader) => {
-                            self.state = ReaderState::Reading {
-                                reader,
-                                shard_id: shard.id,
-                            };
-                        }
-                        Err(e) => {
-                            self.state = ReaderState::Done;
-                            return Some(Err(DiskyError::ShardError {
-                                shard_id: shard.id,
-                                source: Box::new(e),
-                            }));
-                        }
-                    },
+                    Some(Ok(shard)) => {
+                        self.state = ReaderState::Reading {
+                            reader: shard.reader,
+                            shard_id: shard.id,
+                        };
+                    }
                 },
 
-                ReaderState::Reading {
-                    ref mut reader,
-                    ref shard_id,
-                } => match reader.next_record() {
-                    Ok(DiskyPiece::Record(bytes)) => return Some(Ok(bytes)),
-                    Ok(DiskyPiece::EOF) => {
-                        self.state = ReaderState::Start;
-                    }
-                    Err(e) => {
+                ReaderState::Reading { reader, shard_id } => match reader.next() {
+                    Some(Ok(bytes)) => return Some(Ok(bytes)),
+                    Some(Err(e)) => {
                         let id = shard_id.clone();
                         self.state = ReaderState::Done;
                         return Some(Err(DiskyError::ShardError {
                             shard_id: id,
                             source: Box::new(e),
                         }));
+                    }
+                    None => {
+                        // Shard exhausted, move to next
+                        self.state = ReaderState::Start;
                     }
                 },
             }
@@ -185,11 +143,10 @@ mod tests {
 
     use bytes::Bytes;
 
-    use crate::error::DiskyError;
-    use crate::shard::source::{MemoryShards, SequentialShardSource, Shard, Shards};
-    use crate::writer::RecordWriterConfig;
-
     use super::SequentialShardReaderConfig;
+    use crate::error::DiskyError;
+    use crate::shard::source::{MemoryShards, SequentialShardSource};
+    use crate::writer::RecordWriterConfig;
 
     /// Write records into an in-memory disky buffer.
     fn write_records(records: &[&[u8]]) -> Vec<u8> {
@@ -208,7 +165,7 @@ mod tests {
 
     #[test]
     fn empty_shards_returns_none() {
-        let shards = MemoryShards::new(|_| Ok(vec![]), 0);
+        let shards = MemoryShards::new(|_| Ok(write_records(&[])), 0);
         let mut reader =
             SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
         assert!(reader.next().is_none());
@@ -280,39 +237,26 @@ mod tests {
     }
 
     #[test]
-    fn shard_open_error_is_wrapped() {
-        struct FailOnSecond {
-            good_data: Vec<u8>,
-        }
-
-        impl Shards for FailOnSecond {
-            type Source = Cursor<Vec<u8>>;
-
-            fn count(&self) -> usize {
-                2
-            }
-
-            fn open(&self, index: usize) -> crate::error::Result<Shard<Cursor<Vec<u8>>>> {
-                if index == 1 {
-                    return Err(DiskyError::Other("shard open failed".into()));
+    fn shard_open_error_propagates() {
+        let good_data = write_records(&[b"record"]);
+        let shards = MemoryShards::new(
+            move |i| {
+                if i == 1 {
+                    Err(DiskyError::Other("shard open failed".into()))
+                } else {
+                    Ok(good_data.clone())
                 }
-                Ok(Shard {
-                    source: Cursor::new(self.good_data.clone()),
-                    id: format!("test_shard_{}", index),
-                })
-            }
-        }
-
-        let data = write_records(&[b"record"]);
-        let shards = FailOnSecond { good_data: data };
+            },
+            2,
+        );
         let mut reader =
             SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
 
-        // First shard succeeds.
+        // First shard succeeds
         let first = reader.next().unwrap().unwrap();
         assert_eq!(&first[..], b"record");
 
-        // Second shard fails to open — error passes through from the source.
+        // Second shard fails to open
         let err = reader.next().unwrap().unwrap_err();
         let msg = format!("{}", err);
         assert!(
@@ -321,17 +265,16 @@ mod tests {
             msg
         );
 
-        // Iterator is done after error.
+        // Iterator is done after error
         assert!(reader.next().is_none());
     }
 
     #[test]
     fn error_terminates_iterator() {
-        // If errors didn't transition to Done, this test would spin forever.
         let shards = MemoryShards::new(|_| Err(DiskyError::Other("always fails".into())), 1);
         let reader = SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
 
-        // Must produce exactly one error then stop.
+        // Must produce exactly one error then stop
         let results: Vec<_> = reader.take(10).collect();
         assert_eq!(results.len(), 1);
         assert!(results[0].is_err());
@@ -348,24 +291,5 @@ mod tests {
         for _ in 0..5 {
             assert!(reader.next().is_none());
         }
-    }
-
-    #[test]
-    fn invalid_shard_data_wraps_in_shard_error() {
-        // Source returns Ok(shard) but the data isn't valid disky —
-        // RecordReader::with_config fails and the error is wrapped in ShardError.
-        let shards = MemoryShards::new(|_| Ok(b"not valid disky data".to_vec()), 1);
-        let mut reader =
-            SequentialShardReaderConfig::new(SequentialShardSource::new(shards)).build();
-
-        let err = reader.next().unwrap().unwrap_err();
-        match &err {
-            DiskyError::ShardError { shard_id, .. } => {
-                assert!(!shard_id.is_empty(), "shard_id should identify the shard");
-            }
-            other => panic!("Expected ShardError, got: {}", other),
-        }
-
-        assert!(reader.next().is_none());
     }
 }

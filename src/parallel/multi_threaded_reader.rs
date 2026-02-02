@@ -3,7 +3,6 @@
 // This module implements a reader that manages its own thread pool for parallel processing
 // of Disky records, utilizing the underlying ParallelReader for resource management.
 
-use std::io::{Read, Seek};
 use std::mem::ManuallyDrop;
 use std::sync::{
     Arc,
@@ -108,14 +107,14 @@ impl MultiThreadedReaderOptions {
 ///     // ...
 /// }
 /// ```
-pub struct MultiThreadedReaderConfig<Source: Read + Seek + Send + 'static> {
-    sharding_config: ShardingConfig<Source>,
+pub struct MultiThreadedReaderConfig {
+    sharding_config: ShardingConfig,
     options: MultiThreadedReaderOptions,
 }
 
-impl<Source: Read + Seek + Send + 'static> MultiThreadedReaderConfig<Source> {
+impl MultiThreadedReaderConfig {
     /// Creates a new builder with the given sharding config.
-    pub fn new(sharding_config: ShardingConfig<Source>) -> Self {
+    pub fn new(sharding_config: ShardingConfig) -> Self {
         Self {
             sharding_config,
             options: MultiThreadedReaderOptions::default(),
@@ -153,12 +152,12 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReaderConfig<Source> {
     }
 
     /// Builds the [`MultiThreadedReader`].
-    pub fn build(self) -> Result<MultiThreadedReader<Source>> {
+    pub fn build(self) -> Result<MultiThreadedReader> {
         MultiThreadedReader::from_config(self.sharding_config, self.options)
     }
 }
 
-impl<Source: Read + Seek + Send + 'static> Node for MultiThreadedReaderConfig<Source> {
+impl Node for MultiThreadedReaderConfig {
     fn make(self: Box<Self>) -> Result<Reader> {
         Ok(Box::new(self.build()?))
     }
@@ -178,9 +177,9 @@ struct Worker {
 /// This reader manages its own thread pool to process read operations in parallel.
 /// It leverages the ParallelReader for resource management and the ByteQueue for
 /// transferring data between worker threads and the consumer.
-pub struct MultiThreadedReader<Source: Read + Seek + Send + 'static> {
+pub struct MultiThreadedReader {
     /// The underlying parallel reader
-    reader: Arc<ParallelReader<Source>>,
+    reader: Arc<ParallelReader>,
 
     /// Queue for passing records between threads
     byte_queue: Arc<ByteQueue>,
@@ -192,10 +191,10 @@ pub struct MultiThreadedReader<Source: Read + Seek + Send + 'static> {
     closed: AtomicBool,
 }
 
-impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
+impl MultiThreadedReader {
     /// Creates a new multi-threaded reader from config.
     fn from_config(
-        sharding_config: ShardingConfig<Source>,
+        sharding_config: ShardingConfig,
         config: MultiThreadedReaderOptions,
     ) -> Result<Self> {
         // Create the underlying parallel reader
@@ -256,7 +255,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
     /// Each worker will fully drain a resource before moving to the next.
     fn drain_loop(
         id: usize,
-        reader: Arc<ParallelReader<Source>>,
+        reader: Arc<ParallelReader>,
         byte_queue: Arc<ByteQueue>,
         running: Arc<AtomicBool>,
         active_workers: Arc<AtomicUsize>,
@@ -315,7 +314,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
     /// before moving to the next.
     fn round_robin_loop(
         id: usize,
-        reader: Arc<ParallelReader<Source>>,
+        reader: Arc<ParallelReader>,
         byte_queue: Arc<ByteQueue>,
         running: Arc<AtomicBool>,
         active_workers: Arc<AtomicUsize>,
@@ -479,7 +478,7 @@ impl<Source: Read + Seek + Send + 'static> MultiThreadedReader<Source> {
 }
 
 /// Iterator implementation for MultiThreadedReader
-impl<Source: Read + Seek + Send + 'static> Iterator for MultiThreadedReader<Source> {
+impl Iterator for MultiThreadedReader {
     type Item = Result<Bytes>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -492,7 +491,7 @@ impl<Source: Read + Seek + Send + 'static> Iterator for MultiThreadedReader<Sour
     }
 }
 
-impl<Source: Read + Seek + Send + 'static> Drop for MultiThreadedReader<Source> {
+impl Drop for MultiThreadedReader {
     fn drop(&mut self) {
         // First, close the reader to signal shutdown
         let _ = self.close();

@@ -10,22 +10,22 @@ use crate::shard::source::{Shard, Shards};
 
 /// Iterates over shards in random order, reshuffling after each full pass.
 /// Never returns None - infinite iterator.
-pub struct RandomRepeatingShardSource<ShardsType: Shards> {
-    shards: ShardsType,
+pub struct RandomRepeatingShardSource {
+    shards: Box<dyn Shards>,
     indices: Vec<usize>,
     position: usize,
     rng: StdRng,
 }
 
-impl<ShardsType: Shards> RandomRepeatingShardSource<ShardsType> {
+impl RandomRepeatingShardSource {
     /// Create with a random seed.
-    pub fn new(shards: ShardsType) -> Self {
+    pub fn new(shards: impl Shards + 'static) -> Self {
         let mut rng = StdRng::from_entropy();
         let mut indices: Vec<usize> = (0..shards.count()).collect();
         indices.shuffle(&mut rng);
 
         Self {
-            shards,
+            shards: Box::new(shards),
             indices,
             position: 0,
             rng,
@@ -33,13 +33,13 @@ impl<ShardsType: Shards> RandomRepeatingShardSource<ShardsType> {
     }
 
     /// Create with a specific seed for reproducible ordering.
-    pub fn with_seed(shards: ShardsType, seed: u64) -> Self {
+    pub fn with_seed(shards: impl Shards + 'static, seed: u64) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut indices: Vec<usize> = (0..shards.count()).collect();
         indices.shuffle(&mut rng);
 
         Self {
-            shards,
+            shards: Box::new(shards),
             indices,
             position: 0,
             rng,
@@ -47,8 +47,8 @@ impl<ShardsType: Shards> RandomRepeatingShardSource<ShardsType> {
     }
 }
 
-impl<ShardsType: Shards> Iterator for RandomRepeatingShardSource<ShardsType> {
-    type Item = Result<Shard<ShardsType::Source>>;
+impl Iterator for RandomRepeatingShardSource {
+    type Item = Result<Shard>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.position >= self.indices.len() {
@@ -63,7 +63,7 @@ impl<ShardsType: Shards> Iterator for RandomRepeatingShardSource<ShardsType> {
     }
 }
 
-impl<ShardsType: Shards> FusedIterator for RandomRepeatingShardSource<ShardsType> {}
+impl FusedIterator for RandomRepeatingShardSource {}
 
 #[cfg(test)]
 mod tests {

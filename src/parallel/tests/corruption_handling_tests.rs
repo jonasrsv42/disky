@@ -13,27 +13,43 @@ use crate::blocks::writer::BlockWriterConfig;
 use crate::error::Result;
 use crate::parallel::multi_threaded_reader::MultiThreadedReaderConfig;
 use crate::parallel::reader::{DiskyParallelPiece, ParallelReaderConfig, ShardingConfig};
-use crate::reader::{CorruptionStrategy, RecordReaderOptions};
-use crate::shard::source::SequentialShardSource;
-use crate::shard::source::{Shard, Shards};
+use crate::reader::{CorruptionStrategy, RecordReaderConfig, RecordReaderOptions};
+use crate::shard::source::{SequentialShardSource, Shard, Shards};
+use crate::tree::reader::Reader;
 use crate::writer::{RecordWriterConfig, RecordWriterOptions};
 
 /// A simple test shard collection that provides in-memory Cursors from a predefined list.
 struct TestShards {
     sources: Vec<Vec<u8>>,
+    reader_options: RecordReaderOptions,
+}
+
+impl TestShards {
+    fn new(sources: Vec<Vec<u8>>) -> Self {
+        Self {
+            sources,
+            reader_options: RecordReaderOptions::default(),
+        }
+    }
+
+    fn with_reader_options(mut self, options: RecordReaderOptions) -> Self {
+        self.reader_options = options;
+        self
+    }
 }
 
 impl Shards for TestShards {
-    type Source = Cursor<Vec<u8>>;
-
     fn count(&self) -> usize {
         self.sources.len()
     }
 
-    fn open(&self, index: usize) -> Result<Shard<Cursor<Vec<u8>>>> {
+    fn open(&self, index: usize) -> Result<Shard> {
         let data = self.sources[index].clone();
+        let reader = RecordReaderConfig::new(Cursor::new(data))
+            .options(self.reader_options)
+            .build()?;
         Ok(Shard {
-            source: Cursor::new(data),
+            reader: Box::new(reader) as Reader,
             id: format!("test_shard_{}", index),
         })
     }
@@ -85,8 +101,11 @@ fn corrupt_file(mut buffer: Vec<u8>, position: usize) -> Vec<u8> {
     buffer
 }
 
-fn make_sharding_config(sources: Vec<Vec<u8>>) -> ShardingConfig<Cursor<Vec<u8>>> {
-    let shards = TestShards { sources };
+fn make_sharding_config(
+    sources: Vec<Vec<u8>>,
+    reader_options: RecordReaderOptions,
+) -> ShardingConfig {
+    let shards = TestShards::new(sources).with_reader_options(reader_options);
     let source = SequentialShardSource::new(shards);
     ShardingConfig::new(Box::new(source), 1)
 }
@@ -118,16 +137,14 @@ fn test_multithreaded_reader_corruption_recovery() {
 
         // Try to read with default error strategy - should fail at some point
         {
-            let sharding_config = make_sharding_config(vec![corrupted.clone()]);
-
             // Use same small block size as the writer (128 bytes)
-            let reader_config =
-                ParallelReaderConfig::new(RecordReaderOptions::with_block_size(128).unwrap());
+            let reader_options = RecordReaderOptions::with_block_size(128).unwrap();
+            let sharding_config = make_sharding_config(vec![corrupted.clone()], reader_options);
 
             // Configure a minimal multi-threaded reader (1-2 threads)
             // Create reader with default (Error) corruption strategy
             let reader = MultiThreadedReaderConfig::new(sharding_config)
-                .with_reader_config(reader_config)
+                .with_reader_config(ParallelReaderConfig::new())
                 .with_worker_threads(1)
                 .with_queue_size_bytes(1024)
                 .build()
@@ -179,19 +196,16 @@ fn test_multithreaded_reader_corruption_recovery() {
 
         // Try with recovery strategy
         {
-            let sharding_config = make_sharding_config(vec![corrupted.clone()]);
-
             // Use same small block size as the writer (128 bytes) but with recovery enabled
             let reader_options = RecordReaderOptions::with_block_size(128)
                 .unwrap()
                 .with_corruption_strategy(CorruptionStrategy::Recover);
-
-            let parallel_config = ParallelReaderConfig::new(reader_options);
+            let sharding_config = make_sharding_config(vec![corrupted.clone()], reader_options);
 
             // Configure a minimal multi-threaded reader (1-2 threads)
             // Create reader with recovery corruption strategy
             let reader = MultiThreadedReaderConfig::new(sharding_config)
-                .with_reader_config(parallel_config)
+                .with_reader_config(ParallelReaderConfig::new())
                 .with_worker_threads(1)
                 .with_queue_size_bytes(1024)
                 .build()
@@ -285,19 +299,16 @@ fn test_multithreaded_reader_multiple_corruptions() {
 
     // Try with recovery enabled in multi-threaded context
     {
-        let sharding_config = make_sharding_config(vec![corrupted]);
-
         // Use same block size as the writer but with recovery enabled
         let reader_options = RecordReaderOptions::with_block_size(block_size)
             .unwrap()
             .with_corruption_strategy(CorruptionStrategy::Recover);
-
-        let parallel_config = ParallelReaderConfig::new(reader_options);
+        let sharding_config = make_sharding_config(vec![corrupted], reader_options);
 
         // Configure a minimal multi-threaded reader (1-2 threads)
         // Create reader with recovery corruption strategy
         let reader = MultiThreadedReaderConfig::new(sharding_config)
-            .with_reader_config(parallel_config)
+            .with_reader_config(ParallelReaderConfig::new())
             .with_worker_threads(1)
             .with_queue_size_bytes(1024)
             .build()

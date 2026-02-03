@@ -38,7 +38,3 @@ mod tests;
 
 // Re-export Disky Bytes
 pub use bytes::Bytes;
-
-// Re-exports for a cleaner API
-//pub use reader::RecordReader;
-//pub use writer::RecordWriter;

@@ -5,7 +5,7 @@ use std::iter::FusedIterator;
 use rand::rngs::StdRng;
 use rand::{SeedableRng, seq::SliceRandom};
 
-use crate::error::Result;
+use crate::error::{DiskyError, Result};
 use crate::shard::source::{Shard, Shards};
 
 /// Iterates over shards in random order, reshuffling after each full pass.
@@ -19,17 +19,19 @@ pub struct RandomRepeatingShardSource {
 
 impl RandomRepeatingShardSource {
     /// Create with a random seed.
-    pub fn new(shards: impl Shards + 'static) -> Self {
-        let mut rng = StdRng::from_entropy();
+    pub fn new(shards: impl Shards + 'static) -> Result<Self> {
+        let mut rng = StdRng::try_from_rng(&mut rand::rngs::SysRng).map_err(|e| {
+            DiskyError::Other(format!("Failed to initialize RNG from OS entropy: {}", e))
+        })?;
         let mut indices: Vec<usize> = (0..shards.count()).collect();
         indices.shuffle(&mut rng);
 
-        Self {
+        Ok(Self {
             shards: Box::new(shards),
             indices,
             position: 0,
             rng,
-        }
+        })
     }
 
     /// Create with a specific seed for reproducible ordering.

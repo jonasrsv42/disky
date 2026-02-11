@@ -6,9 +6,8 @@
 //! stream, providing better randomization for ML training workloads.
 
 use bytes::Bytes;
-use rand::Rng;
 use rand::seq::SliceRandom;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 use crate::error::{DiskyError, Result};
 use crate::tree::reader::{Node, Reader};
@@ -124,7 +123,9 @@ impl ReservoirShuffleConfig {
 
         let rng = match self.options.seed {
             Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_entropy(),
+            None => StdRng::try_from_rng(&mut rand::rngs::SysRng).map_err(|e| {
+                DiskyError::Other(format!("Failed to initialize RNG from OS entropy: {}", e))
+            })?,
         };
 
         Ok(ReservoirShuffle {
@@ -261,7 +262,7 @@ impl Iterator for ReservoirShuffle {
                 State::Streaming => match self.inner.next() {
                     Some(Ok(item)) => {
                         // Swap with random buffer position, output displaced item
-                        let idx = self.rng.gen_range(0..self.buffer.len());
+                        let idx = self.rng.random_range(0..self.buffer.len());
                         let displaced = std::mem::replace(&mut self.buffer[idx], item);
                         return Some(Ok(displaced));
                     }

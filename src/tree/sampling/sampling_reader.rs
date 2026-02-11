@@ -7,7 +7,7 @@
 use bytes::Bytes;
 use log::debug;
 use rand::SeedableRng;
-use rand::distributions::WeightedIndex;
+use rand::distr::weighted::WeightedIndex;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
 
@@ -128,7 +128,9 @@ impl SamplingReaderConfig {
         // Initialize random number generator
         let rng = match self.options.seed {
             Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_entropy(),
+            None => StdRng::try_from_rng(&mut rand::rngs::SysRng).map_err(|e| {
+                DiskyError::Other(format!("Failed to initialize RNG from OS entropy: {}", e))
+            })?,
         };
 
         Ok(SamplingReader {
